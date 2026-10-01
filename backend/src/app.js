@@ -385,6 +385,7 @@ const {
   setReady,
   isReady,
   isShutdownInProgress,
+  markShutdownStarted,
   drainWorkers,
   notifySSEClients,
   closeQueues,
@@ -397,6 +398,7 @@ async function shutdown(signal) {
     return;
   }
 
+  markShutdownStarted();
   logger.info(`Received ${signal} signal — starting graceful shutdown`);
 
   setReady(false);
@@ -404,7 +406,11 @@ async function shutdown(signal) {
   const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 30_000;
 
   const forceExitTimer = setTimeout(() => {
-    logger.error(`Forced exit after ${SHUTDOWN_TIMEOUT_MS}ms shutdown timeout`);
+    logger.error('Forced exit after shutdown timeout', {
+      reason: 'shutdown_timeout',
+      timeoutMs: SHUTDOWN_TIMEOUT_MS,
+      signal,
+    });
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   forceExitTimer.unref();

@@ -5,6 +5,7 @@
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+process.env.JWT_SECRET = 'test-secret-that-is-at-least-32-characters-long';
 
 const http = require('http');
 
@@ -90,13 +91,24 @@ jest.mock('../backend/src/services/bullMQRetryService', () => ({
   shutdownQueue: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../backend/src/services/outboxDispatcher', () => ({
+  startOutboxDispatcher: jest.fn(),
+  stopOutboxDispatcher: jest.fn(),
+}));
+
+jest.mock('../backend/src/services/reportQueueService', () => ({
+  startWorker: jest.fn(),
+  stopWorker: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../backend/src/services/reportCacheInvalidator', () => ({
+  invalidate: jest.fn(),
+  close: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('../backend/src/services/sseService', () => ({
   close: jest.fn().mockResolvedValue(undefined),
   closeAll: jest.fn().mockResolvedValue(undefined),
-}));
-
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 100 }),
 }));
 
 jest.mock('../backend/src/services/currencyConversionService', () => ({
@@ -264,6 +276,31 @@ describe('shutdownManager', () => {
     expect(retrySelector.stop).toHaveBeenCalled();
     expect(leaderElection.stop).toHaveBeenCalled();
   });
+
+  // ── markShutdownStarted / duplicate-signal dedup ──────────────────────────
+
+  it('markShutdownStarted is exported and flips isShutdownInProgress to true', () => {
+    const dm = require('../backend/src/services/shutdownManager');
+
+    expect(typeof dm.markShutdownStarted).toBe('function');
+    expect(dm.isShutdownInProgress()).toBe(false);
+
+    dm.markShutdownStarted();
+
+    expect(dm.isShutdownInProgress()).toBe(true);
+  });
+
+  it('isReady returns false after markShutdownStarted, regardless of the ready flag', () => {
+    const dm = require('../backend/src/services/shutdownManager');
+
+    // Start fully ready
+    dm.setReady(true);
+    expect(dm.isReady()).toBe(true);
+
+    // Beginning shutdown must flip isReady to false even without setReady(false)
+    dm.markShutdownStarted();
+    expect(dm.isReady()).toBe(false);
+  });
 });
 
 describe('healthController readiness', () => {
@@ -294,5 +331,38 @@ describe('healthController readiness', () => {
     );
 
     shutdownManager.setReady(true);
+  });
+});
+
+describe('stopAcceptingNewWork — always-start services', () => {
+  // These services run on every instance regardless of leader election.
+  // They must be stopped during shutdown so no new jobs enter the queues
+  // while drainWorkers() is waiting for in-flight work to finish.
+
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('stops txQueueWorker, outboxDispatcher, and reportQueueWorker', async () => {
+    const dm = require('../backend/src/services/shutdownManager');
+
+    const txQueueService = require('../backend/src/services/transactionQueueService');
+    const outboxDispatcher = require('../backend/src/services/outboxDispatcher');
+    const reportQueueService = require('../backend/src/services/reportQueueService');
+
+    await dm.stopAcceptingNewWork();
+
+    expect(txQueueService.stopWorker).toHaveBeenCalled();
+    expect(outboxDispatcher.stopOutboxDispatcher).toHaveBeenCalled();
+    expect(reportQueueService.stopWorker).toHaveBeenCalled();
+  });
+
+  it('closes reportCacheInvalidator Redis connections', async () => {
+    const dm = require('../backend/src/services/shutdownManager');
+    const reportCacheInvalidator = require('../backend/src/services/reportCacheInvalidator');
+
+    await dm.stopAcceptingNewWork();
+
+    expect(reportCacheInvalidator.close).toHaveBeenCalled();
   });
 });
