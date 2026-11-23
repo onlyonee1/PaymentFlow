@@ -5,9 +5,18 @@ const paymentEvents = require('../events/paymentEvents');
 const logger = require('../utils/logger').child('OutboxDispatcher');
 
 const BATCH_SIZE = 100;
-const MAX_RETRIES = parseInt(process.env.OUTBOX_MAX_RETRIES, 10) || 3;
+const MAX_RETRIES = parseInt(process.env.OUTBOX_MAX_RETRIES, 10) || 5;
 const DISPATCH_INTERVAL_MS = parseInt(process.env.OUTBOX_DISPATCH_INTERVAL_MS, 10) || 5000;
 let _dispatchTimer = null;
+
+// Exponential back-off delays in milliseconds: 1s, 2s, 4s, 8s, then 8s for
+// all subsequent attempts (capped). Index is (attemptNumber - 1).
+const BACKOFF_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+
+function getOutboxBackoffMs(attemptNumber) {
+  const idx = Math.max(0, attemptNumber - 1);
+  return BACKOFF_DELAYS_MS[Math.min(idx, BACKOFF_DELAYS_MS.length - 1)];
+}
 
 async function deadLetterOutboxEvent(event, retryCount, errorMessage) {
   logger.error('Outbox event exceeded max retries', {
@@ -29,7 +38,12 @@ async function deadLetterOutboxEvent(event, retryCount, errorMessage) {
 
 async function dispatchOutboxEvents() {
   try {
-    const batch = await Outbox.find({ processed: false, deadLettered: { $ne: true } }).limit(BATCH_SIZE).sort({ createdAt: 1 });
+    const now = new Date();
+    const batch = await Outbox.find({
+      processed: false,
+      deadLettered: { $ne: true },
+      $or: [{ nextRetryAt: { $exists: false } }, { nextRetryAt: null }, { nextRetryAt: { $lte: now } }],
+    }).limit(BATCH_SIZE).sort({ createdAt: 1 });
 
     for (const event of batch) {
       try {
@@ -59,9 +73,11 @@ async function dispatchOutboxEvents() {
         if (retryCount >= MAX_RETRIES) {
           await deadLetterOutboxEvent(event, retryCount, err.message);
         } else {
+          const nextRetryAt = new Date(Date.now() + getOutboxBackoffMs(retryCount));
           await Outbox.findByIdAndUpdate(event._id, {
             retryCount,
             lastError: err.message,
+            nextRetryAt,
           });
         }
       }
@@ -106,4 +122,5 @@ module.exports = {
   dispatchOutboxEvents,
   startOutboxDispatcher,
   stopOutboxDispatcher,
+  getOutboxBackoffMs,
 };
