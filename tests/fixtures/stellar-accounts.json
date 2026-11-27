@@ -1,0 +1,8 @@
+{
+  "startingBalance": "1000",
+  "defaultPoolSize": 2,
+  "suiteIndexes": {
+    "integration": 0,
+    "paymentPipeline": 100
+  }
+}

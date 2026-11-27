@@ -42,3 +42,6 @@ test_results.txt
 test_results*.txt
 test_output*.txt
 schema-drift-reports/
+
+# Storybook build output
+/frontend/storybook-static/

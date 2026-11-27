@@ -21,7 +21,7 @@
 
 const config = require('../config');
 const logger = require('../utils/logger').child('NotificationService');
-const { generateUnsubscribeToken } = require('../utils/unsubscribeToken');
+const { emailUnsubscribeUrl } = require('../utils/unsubscribeToken');
 const { renderEmailTemplate } = require('../utils/templateRenderer');
 const { t } = require('./i18n');
 const email = require('./email');
@@ -103,9 +103,7 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
  * @returns {Promise<{sent: boolean, messageId?: string, preview?: string, suppressed?: boolean}>}
  */
 async function sendFeeReminder(opts) {
-  const token = generateUnsubscribeToken(opts.studentId, opts.schoolId || 'unknown', config.JWT_SECRET);
-  const baseUrl = config.APP_URL || 'http://localhost:5000';
-  const unsubscribeUrl = `${baseUrl}/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`;
+  const unsubscribeUrl = emailUnsubscribeUrl(opts.studentId, opts.schoolId, 'payment_reminder', config);
 
   let school = null;
   if (opts.schoolId) {

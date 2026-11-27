@@ -1,29 +1,26 @@
 'use strict';
 
+const { paginateList } = require('../utils/listCursor');
+
 const WebhookRetry = require('../models/webhookRetryModel');
 const logger = require('../utils/logger');
 const { logAudit } = require('../services/auditService');
 
 /**
  * GET /api/admin/webhooks/dlq
- * Lists exhausted webhook deliveries (status: failed). Supports ?page and ?limit.
+ * Lists exhausted webhook deliveries (status: failed). Supports ?cursor and ?limit.
  */
 async function listDLQ(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip = (page - 1) * limit;
-
-    const [items, total] = await Promise.all([
-      WebhookRetry.find({ status: 'failed' })
-        .sort({ updatedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      WebhookRetry.countDocuments({ status: 'failed' }),
-    ]);
-
-    res.json({ total, page, limit, items });
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const { items, pagination } = await paginateList({
+      find: (query) => WebhookRetry.find(query).lean(),
+      scope: 'webhook-dlq',
+      filter: { status: 'failed' },
+      cursor: req.query.cursor,
+      limit,
+    });
+    res.json({ items, ...pagination });
   } catch (err) {
     next(err);
   }

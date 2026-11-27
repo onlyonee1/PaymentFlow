@@ -6,11 +6,12 @@
  * Verifies that:
  *  1. MAX_BODY_SIZE is exported from config with the correct default.
  *  2. app.js applies express.json({ limit: config.MAX_BODY_SIZE }) globally.
- *  3. The bulk import route applies a 1mb override before the handler.
+ *  3. The bulk import route applies a separate multipart CSV parser.
  *  4. MAX_BODY_SIZE is documented in .env.example.
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
+process.env.JWT_SECRET ||= 'test-only-body-size-secret-32-characters';
 
 const fs = require('fs');
 const path = require('path');
@@ -31,14 +32,14 @@ const ENV_EXAMPLE = fs.readFileSync(
 );
 
 describe('Body size limit — configuration', () => {
-  it('config exports MAX_BODY_SIZE with default 10kb', () => {
+  it('config exports MAX_BODY_SIZE with default 100kb', () => {
     // Temporarily clear any override so we get the default
     const saved = process.env.MAX_BODY_SIZE;
     delete process.env.MAX_BODY_SIZE;
     // Re-require with a fresh module registry to pick up the cleared env var
     jest.resetModules();
     const config = require('../backend/src/config');
-    expect(config.MAX_BODY_SIZE).toBe('10kb');
+    expect(config.MAX_BODY_SIZE).toBe('100kb');
     // Restore
     if (saved !== undefined) process.env.MAX_BODY_SIZE = saved;
     jest.resetModules();
@@ -61,27 +62,20 @@ describe('Body size limit — app.js middleware', () => {
     expect(APP_SRC).toMatch(/express\.json\(\s*\{[\s\S]*?limit\s*:\s*config\.MAX_BODY_SIZE/);
   });
 
+  it('uses the same configured limit for URL-encoded requests', () => {
+    expect(APP_SRC).toMatch(/express\.urlencoded\(\s*\{\s*limit:\s*config\.MAX_BODY_SIZE/);
+  });
+
   it('does not use express.json() without a limit option globally', () => {
     // The bare express.json() call (no options) must not appear
     expect(APP_SRC).not.toMatch(/express\.json\(\s*\)/);
   });
 });
 
-describe('Body size limit — bulk import route override', () => {
-  it('bulk import route applies a 1mb express.json override', () => {
-    expect(STUDENT_ROUTES_SRC).toMatch(/express\.json\(\s*\{\s*limit\s*:\s*['"]1mb['"]\s*\}\s*\)/);
-  });
-
-  it('bulk import route places the json override before the handler', () => {
-    const bulkLine = STUDENT_ROUTES_SRC
-      .split('\n')
-      .find((line) => line.includes("'/bulk'") || line.includes('"/bulk"'));
-    expect(bulkLine).toBeDefined();
-    // The 1mb override must appear before bulkImportStudents in the same route definition
-    const overrideIdx = bulkLine.indexOf('1mb');
-    const handlerIdx = bulkLine.indexOf('bulkImportStudents');
-    expect(overrideIdx).toBeGreaterThan(-1);
-    expect(handlerIdx).toBeGreaterThan(overrideIdx);
+describe('Body size limit — bulk import', () => {
+  it('uses a separate multipart CSV parser before the handler', () => {
+    const bulkLine = STUDENT_ROUTES_SRC.split('\n').find((line) => line.includes("'/bulk'"));
+    expect(bulkLine).toMatch(/streamingCsvUpload.*bulkImportStudents/);
   });
 });
 

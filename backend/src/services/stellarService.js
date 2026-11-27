@@ -93,7 +93,7 @@ function transactionMemo(tx) {
  *   - MEMO_NONE: No memo provided (MISSING_MEMO)
  *   - MEMO_ID, MEMO_HASH, MEMO_RETURN: Unsupported types (UNSUPPORTED_MEMO_TYPE)
  */
-async function extractValidPayment(tx, walletAddress) {
+async function extractValidPayment(tx, walletAddress, schoolId) {
   // #840 — A transaction can be included in a ledger yet have
   // `successful === false` (e.g. a failed operation). Such transactions must
   // NEVER be credited. Require an explicit success flag rather than merely
@@ -102,6 +102,27 @@ async function extractValidPayment(tx, walletAddress) {
 
   // Unwrap fee-bump transaction to get the inner transaction
   const innerTx = tx.inner_transaction || tx;
+
+  let inboundOperations;
+  if (schoolId) {
+    const { recordRejectedPayment } = require("./rejectedStellarPaymentService");
+    const operations = await withStellarRetry(
+      () => (typeof innerTx.operations === "function" ? innerTx : tx).operations(),
+      { label: "extractValidPayment.operations", context: `Transaction ${tx.hash} operations` },
+    );
+    inboundOperations = [];
+    for (const [index, op] of operations.records.entries()) {
+      if (!["payment", "path_payment_strict_send", "path_payment_strict_receive"].includes(op.type) || op.to !== walletAddress) continue;
+      if (detectAsset(op)) {
+        inboundOperations.push(op);
+        continue;
+      }
+      const reason = op.asset_type === "credit_alphanum4" && op.asset_code === "USDC"
+        ? "INVALID_ISSUER"
+        : "UNSUPPORTED_ASSET";
+      await recordRejectedPayment(schoolId, tx, op, reason, String(op.id || op.paging_token || index));
+    }
+  }
 
   // Check memo type and handle accordingly
   const { memoType, memoValue } = transactionMemo(tx);
@@ -131,7 +152,7 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
 
-  const ops = await withStellarRetry(() => typeof innerTx.operations === "function" ? innerTx.operations() : tx.operations(), {
+  const ops = inboundOperations ? { records: inboundOperations } : await withStellarRetry(() => innerTx.operations(), {
     label: "extractValidPayment.operations",
     context: `Transaction ${tx.hash} operations`,
   });
@@ -514,10 +535,10 @@ async function detectAbnormalPatterns(
  *   UNSUPPORTED_ASSET (400)   — asset not accepted
  *   AMOUNT_TOO_LOW/HIGH (400) — outside configured limits
  */
-async function verifyTransaction(txHash, walletAddress, schoolId = null) {
+async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOptions = {}) {
   const tx = await withStellarRetry(
     () => server.transactions().transaction(txHash).call(),
-    { label: "verifyTransaction", context: `Transaction ${txHash}` },
+    { ...retryOptions, label: "verifyTransaction", context: `Transaction ${txHash}` },
   );
 
   // 1. Validate transaction success
@@ -533,7 +554,8 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
   const innerTx = tx.inner_transaction || tx;
 
   // 2. Find matching payment operation first (destination + asset checks before memo)
-  const ops = await withStellarRetry(() => typeof innerTx.operations === "function" ? innerTx.operations() : tx.operations(), {
+  const ops = await withStellarRetry(() => innerTx.operations(), {
+    ...retryOptions,
     label: "verifyTransaction.operations",
     context: `Transaction ${txHash} operations`,
   });
@@ -617,9 +639,13 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
 
   // 6. Look up student to validate fee. School-scope when schoolId is provided so
   //    the same studentId string used across two schools resolves to the correct one.
-  const studentQuery = schoolId ? { schoolId, studentId: memo } : { studentId: memo };
+  const intent = schoolId && /^[A-F0-9]{8}$/.test(memo)
+    ? await PaymentIntent.findOne({ schoolId, memo })
+    : null;
+  const studentId = intent?.studentId || memo;
+  const studentQuery = schoolId ? { schoolId, studentId } : { studentId };
   const student = await Student.findOne(studentQuery);
-  const feeAmount = student ? student.feeAmount : null;
+  const feeAmount = student ? (intent?.amount ?? student.feeAmount) : null;
 
   const feeValidation =
     feeAmount != null
@@ -637,7 +663,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
     hash: tx.inner_transaction?.hash || tx.hash,
     ...(tx.inner_transaction?.hash ? { feeBumpTxHash: tx.hash } : {}),
     memo: memo,
-    studentId: memo,
+    studentId,
     amount: amount,
     assetCode: asset.assetCode,
     assetType: asset.assetType,
@@ -699,8 +725,13 @@ async function syncPaymentsForSchool(school) {
 
       summary.new++;
 
-      const valid = await extractValidPayment(tx, stellarAddress);
+      const valid = await extractValidPayment(tx, stellarAddress, schoolId);
       if (!valid) {
+        const { captureUnmatchedPayments } = require("./orphanedPaymentIngestion");
+        if (await captureUnmatchedPayments(tx, schoolId, stellarAddress)) {
+          summary.unmatched++;
+          continue;
+        }
         // Log if the tx was skipped due to wrong destination
         if (tx.successful) {
           const ops = await withStellarRetry(
@@ -771,7 +802,12 @@ async function syncPaymentsForSchool(school) {
           });
         }
       }
-      if (!student) { summary.unmatched++; continue; }
+      if (!student) {
+        const { captureUnmatchedPayments } = require("./orphanedPaymentIngestion");
+        await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+        summary.unmatched++;
+        continue;
+      }
 
       summary.matched++;
 

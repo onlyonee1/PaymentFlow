@@ -6,6 +6,7 @@
  * comprehensive monitoring, and idempotency guarantees.
  */
 
+const { captureTraceContext, runTracedJob } = require('../tracing/spans');
 const { Queue, Worker, QueueEvents } = require('bullmq');
 const { getRedisClient, getRedisStatus } = require('../config/redisClient');
 
@@ -502,7 +503,11 @@ function createRetryWorker() {
     
     retryWorker = new Worker(
       QUEUE_NAMES.TRANSACTION_RETRY,
-      async (job) => await processTransactionRetryJob(job),
+      (job) => runTracedJob(
+        'queue.transaction-retry',
+        { schoolId: job.data.metadata?.schoolId, traceContext: job.data.traceContext },
+        () => processTransactionRetryJob(job),
+      ),
       {
         connection: initializeRedisConnection(),
         concurrency: config.worker.concurrency,
@@ -629,7 +634,9 @@ async function addTransactionToRetryQueue(transactionHash, studentId = null, met
     }
     
     // Add job to queue with custom backoff
+    const traceContext = captureTraceContext();
     const job = await queue.add('transaction-retry', {
+      ...(traceContext && { traceContext }),
       transactionHash,
       studentId,
       metadata,

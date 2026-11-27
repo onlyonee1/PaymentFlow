@@ -3,6 +3,8 @@
 const mongoose = require('mongoose');
 const School = require('../models/schoolModel');
 const Payment = require('../models/paymentModel');
+const PaymentIntent = require('../models/paymentIntentModel');
+const { parentPaymentMemoPattern } = require('../utils/parentPaymentMemo');
 const Student = require('../models/studentModel');
 const { server } = require('../config/stellarConfig');
 const { extractValidPayment, detectMemoCollision, detectCrossSchoolMemoCollision, detectAbnormalPatterns, determineConfirmationState } = require('./stellarService');
@@ -104,12 +106,22 @@ async function processTransaction(tx, school, fencingToken) {
   _incFunnel('received', schoolId);
 
   // Extract and validate payment
-  const valid = await extractValidPayment(tx, stellarAddress);
+  const valid = await extractValidPayment(tx, stellarAddress, schoolId);
   if (!valid) {
-    return { processed: false, reason: 'invalid_payment' };
+    const { captureUnmatchedPayments } = require('./orphanedPaymentIngestion');
+    const captured = await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+    return { processed: false, reason: captured ? 'orphaned_payment' : 'invalid_payment' };
   }
 
   const { payOp, memo, asset } = valid;
+  // Find student by memo (studentId)
+  const student = await Student.findOne({ schoolId, studentId: memo });
+  if (!student) {
+    const { captureUnmatchedPayments } = require('./orphanedPaymentIngestion');
+    await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+    return { processed: false, reason: 'student_not_found' };
+  }
+
   // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
   const paymentAmount = normalizeToNumber(payOp.amount);
 
@@ -132,13 +144,6 @@ async function processTransaction(tx, school, fencingToken) {
   // Funnel: payment passed amount/memo validation
   _incFunnel('validated', schoolId);
 
-  // Find student by memo (studentId)
-  const student = await Student.findOne({ schoolId, studentId: memo });
-  if (!student) {
-    logger.warn('Student not found for memo', { txHash: tx.hash, correlationId, schoolId, memo });
-    return { processed: false, reason: 'student_not_found' };
-  }
-
   // Funnel: student matched by memo
   _incFunnel('matched', schoolId);
 
@@ -155,7 +160,6 @@ async function processTransaction(tx, school, fencingToken) {
   }
 
   const senderAddress = payOp.from || null;
-  const txDate = new Date(tx.created_at);
   const txLedger = tx.ledger_attr || tx.ledger || null;
 
   // Check for suspicious activity
@@ -184,7 +188,7 @@ async function processTransaction(tx, school, fencingToken) {
 
   // Calculate cumulative totals
   const previousPayments = await Payment.aggregate([
-    { $match: { schoolId, studentId: memo, confirmationStatus: 'confirmed', isSuspicious: false, deletedAt: null } },
+    { $match: { schoolId, studentId, confirmationStatus: 'confirmed', isSuspicious: false, deletedAt: null } },
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
   const previousTotal = previousPayments.length ? previousPayments[0].total : 0;
@@ -209,10 +213,9 @@ async function processTransaction(tx, school, fencingToken) {
   // Record payment
   const paymentData = {
     schoolId,
-    studentId: memo,
-    txHash: canonicalHash,
-    transactionHash: canonicalHash,
-    feeBumpTxHash: tx.inner_transaction?.hash ? tx.hash : undefined,
+    studentId,
+    txHash: tx.hash,
+    transactionHash: tx.hash,
     correlationId,
     amount: paymentAmount,
     feeAmount: student.feeAmount,
@@ -220,6 +223,7 @@ async function processTransaction(tx, school, fencingToken) {
     excessAmount,
     status: isSuspicious ? 'FAILED' : (isConfirmed ? 'SUCCESS' : 'PENDING'),
     memo,
+    ...(intent ? { assetCode: asset?.code || 'XLM', assetType: payOp.asset_type } : {}),
     senderAddress,
     isSuspicious,
     suspicionReason,
@@ -240,11 +244,14 @@ async function processTransaction(tx, school, fencingToken) {
   try {
     await session.withTransaction(async () => {
       await Payment.create([paymentData], { session });
+      if (intent?.status === 'pending') {
+        await PaymentIntent.updateOne({ schoolId, _id: intent._id }, { $set: { status: 'completed' } }, { session });
+      }
 
       // Atomically update student balance if confirmed and not suspicious
       if (isConfirmed && !isSuspicious) {
         await Student.findOneAndUpdate(
-          { schoolId, studentId: memo },
+          { schoolId, studentId },
           {
             totalPaid: cumulativeTotal,
             remainingBalance: Math.max(0, remaining),
@@ -258,7 +265,7 @@ async function processTransaction(tx, school, fencingToken) {
     sseEmit(schoolId, 'payment', {
       txHash: tx.hash,
       correlationId,
-      studentId: memo,
+      studentId,
       amount: paymentAmount,
       feeValidationStatus: cumulativeStatus,
       status: paymentData.status,
@@ -269,7 +276,7 @@ async function processTransaction(tx, school, fencingToken) {
       txHash: tx.hash,
       correlationId,
       schoolId,
-      studentId: memo,
+      studentId,
       amount: paymentAmount,
       feeValidationStatus: cumulativeStatus,
       isSuspicious,

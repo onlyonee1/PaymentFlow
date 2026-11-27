@@ -1,5 +1,7 @@
 'use strict';
 
+const { setTraceAttributes } = require('../tracing/spans');
+
 /**
  * paymentController — core payment flow: instructions, intent, submit, verify.
  * req.school and req.schoolId are injected by resolveSchool middleware.
@@ -12,7 +14,6 @@ const Student = require('../models/studentModel');
 const StellarSdk = require('@stellar/stellar-sdk');
 
 const {
-  verifyTransaction,
   recordPayment,
   validatePaymentWithDynamicFee,
   determineConfirmationState,
@@ -26,12 +27,12 @@ const { validateTransactionHash } = require('../utils/hashValidator');
 const { getPaymentLimits, validatePaymentAmount } = require('../utils/paymentLimits');
 const { SUPPORTED_MEMO_TYPES, decodeMemoToCanonical } = require('../utils/stellarMemo');
 const { convertToLocalCurrency } = require('../services/currencyConversionService');
-const { finishSubmission, submissionLockKey, SUBMISSION_LEASE_MS } = require('../services/paymentFeeBumpService');
-const { normalizeToNumber } = require('../utils/stellarAmount');
+const { getProvider } = require('../services/providers/registry');
 const { makePaymentAuditLogger } = require('../utils/paymentAuditLogger');
 const lock = require('../services/distributedLock');
 const logger = require('../utils/logger');
 const { toMoney, decimalFromMongo, classifyFeePayment } = require('../utils/money');
+const { simulateTransaction, buildSimulationXdr } = require('../soroban/simulationService');
 
 // TTL for the per-school distributed verify lock.  Verify is a fast Horizon
 // round-trip; 30 s is more than enough while still auto-expiring on crash.
@@ -159,7 +160,8 @@ async function createPaymentIntent(req, res, next) {
     if (!limitValidation.valid) return res.status(400).json({ error: limitValidation.error, code: limitValidation.code });
 
     const memo = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const ttlMs = parseInt(process.env.PAYMENT_INTENT_TTL_MS, 10) || 24 * 60 * 60 * 1000;
+    const ttlMs = Number(process.env.PAYMENT_INTENT_TTL_MS)
+      || Number(process.env.PAYMENT_INTENT_TTL_SECONDS) * 1000 || 900_000;
 
     const intent = await PaymentIntent.create({
       schoolId,
@@ -172,6 +174,42 @@ async function createPaymentIntent(req, res, next) {
       startedAt: new Date(),
     });
 
+    // Issue #634: Run a Soroban simulation dry-run before returning the intent
+    // so the frontend can show the exact fee breakdown rather than an estimate.
+    // A simulation failure returns 422 with simulation_error — the intent is
+    // NOT persisted in that case because we cannot guarantee the transaction
+    // will succeed on-chain (e.g. insufficient balance).
+    let simulation = null;
+    if (req.school.stellarAddress && feeAmount) {
+      // Build a placeholder XDR for the fee estimation — no sequence number
+      // is consumed because simulateTransaction is a read-only RPC call.
+      const xdr = buildSimulationXdr({
+        sourceAccount: req.school.stellarAddress,
+        destination: req.school.stellarAddress,
+        amount: String(feeAmount),
+        memo,
+      });
+
+      if (xdr) {
+        const simResult = await simulateTransaction(xdr);
+        if (!simResult.success) {
+          // Roll back the persisted intent before returning the error
+          await PaymentIntent.findByIdAndDelete(intent._id).catch(() => {});
+          return res.status(422).json({
+            error: 'Transaction simulation failed — cannot guarantee fee accuracy',
+            code: 'SIMULATION_FAILED',
+            simulation_error: simResult.simulation_error,
+          });
+        }
+        simulation = {
+          fee_stroops: simResult.fee_stroops,
+          resource_fee: simResult.resource_fee,
+          instruction_count: simResult.instruction_count,
+          cached: simResult.cached || false,
+        };
+      }
+    }
+
     const intentObj = intent.toObject();
     res.status(201).json({
       ...intentObj,
@@ -179,6 +217,8 @@ async function createPaymentIntent(req, res, next) {
       // to ensure the submission is matched to the correct PENDING record
       intentId: intent._id.toString(),
       categoryInfo,
+      // Issue #634: Exact fee breakdown from Soroban simulation dry-run
+      simulation,
     });
   } catch (err) {
     if (err.code === 11000) {
@@ -218,11 +258,77 @@ async function submitTransaction(req, res, next) {
     const { xdr, paymentIntentId } = req.body;
     if (!xdr) return res.status(400).json({ error: 'Missing xdr parameter', code: 'MISSING_XDR' });
 
-    let tx;
+    const provider = getProvider(undefined, req.school);
+    const tx = new StellarSdk.Transaction(xdr, require('../config/stellarConfig').networkPassphrase);
+    const transactionHash = tx.hash().toString('hex');
+
+    const hashValidation = validateTransactionHash(transactionHash);
+    if (!hashValidation.valid) {
+      const err = new Error(hashValidation.error);
+      err.code = hashValidation.code;
+      return next(err);
+    }
+
+    const normalizedHash = hashValidation.normalized;
+    const memo = tx.memo.value ? tx.memo.value.toString() : null;
+    if (!memo) return res.status(400).json({ error: 'Transaction must include the student ID as a memo', code: 'MISSING_MEMO' });
+
+    // Issue #1035: Match the specific PENDING record via paymentIntentId when provided
+    // to avoid misattribution if multiple PENDING records exist for the same memo.
+    // When paymentIntentId is not provided, fall back to matching by memo (backward compatibility).
+    let paymentRecord;
+    if (paymentIntentId) {
+      const intent = await PaymentIntent.findById(paymentIntentId);
+      if (!intent) {
+        return res.status(404).json({ error: 'Payment intent not found', code: 'INTENT_NOT_FOUND' });
+      }
+      if (intent.schoolId !== req.schoolId) {
+        return res.status(403).json({ error: 'Payment intent does not belong to this school', code: 'INTENT_MISMATCH' });
+      }
+      if (intent.status !== 'pending') {
+        return res.status(400).json({ error: `Payment intent is not in pending status (status: ${intent.status})`, code: 'INTENT_NOT_PENDING' });
+      }
+
+      // Look for a PENDING payment record that corresponds to this intent
+      paymentRecord = await Payment.findOne({
+        schoolId: req.schoolId,
+        studentId: intent.studentId,
+        memo: intent.memo,
+        status: 'PENDING',
+      });
+    } else {
+      // Backward compatibility: match by memo alone (highest risk path)
+      paymentRecord = await Payment.findOne({ schoolId: req.schoolId, memo, status: 'PENDING' }).sort({ createdAt: -1 });
+    }
+
+    if (!paymentRecord) {
+      const studentObj = await Student.findOne({ schoolId: req.schoolId, studentId: memo });
+      if (!studentObj) return res.status(404).json({ error: 'Associated student not found in the database. Cannot process transaction.', code: 'STUDENT_NOT_FOUND' });
+      paymentRecord = new Payment({ schoolId: req.schoolId, studentId: studentObj.studentId || memo, memo, amount: 0 });
+    }
+
+    const transitionActor = req.user?.username || req.user?.id || 'payment-controller';
+    setTraceAttributes({ schoolId: req.schoolId, paymentId: paymentRecord._id });
+    paymentRecord = (await transitionPayment(paymentRecord, 'SUBMITTED', {
+      performedBy: transitionActor,
+      schoolId: req.schoolId,
+      updates: { txHash: normalizedHash, transactionHash: normalizedHash, submittedAt: new Date() },
+      initialUpdates: { txHash: normalizedHash, transactionHash: normalizedHash },
+    })).payment;
+
+    // Submit the XDR to Horizon. A submission error (network/SDK) means the tx
+    // was never broadcast — fail immediately without polling.
+    let txResponse;
     try {
-      tx = new StellarSdk.Transaction(xdr, require('../config/stellarConfig').networkPassphrase);
-    } catch {
-      return res.status(400).json({ error: 'Invalid transaction XDR', code: 'INVALID_XDR' });
+      txResponse = await provider.submitPayment(tx);
+    } catch (err) {
+      paymentRecord = (await transitionPayment(paymentRecord, 'FAILED', {
+        performedBy: transitionActor,
+        schoolId: req.schoolId,
+        updates: { suspicionReason: err.response?.data?.extras?.result_codes?.transaction ?? err.message },
+      })).payment;
+      logger.warn('[PaymentController] submitTransaction on-chain failure', { txHash: normalizedHash, suspicionReason: paymentRecord.suspicionReason });
+      return res.status(400).json({ error: 'Transaction submission failed', code: 'TX_SUBMISSION_FAILED' });
     }
 
     const txHash = tx.hash().toString('hex');
@@ -346,6 +452,7 @@ async function verifyPayment(req, res, next) {
       schoolId, $or: [{ txHash: normalizedHash }, { feeBumpTxHash: normalizedHash }],
     });
     if (existing) {
+      setTraceAttributes({ schoolId, paymentId: existing._id });
       await audit.success({ txHash: normalizedHash, cached: true, studentId: existing.studentId, amount: existing.amount });
 
       const targetCurrency = req.school.localCurrency || 'USD';
@@ -385,6 +492,7 @@ async function verifyPayment(req, res, next) {
     // though the unique index on Payment { schoolId, txHash } is the ultimate
     // dedup guard.  The lock is keyed per (school, txHash) so only identical
     // concurrent verify calls contend — different hashes proceed in parallel.
+    const provider = getProvider(undefined, req.school);
     const verifyLockKey = `sync:lock:${schoolId}:verify:${normalizedHash}`;
     // acquire() returns { token, fencingToken } (or null); release() needs the
     // raw token string, so destructure it — otherwise the lock never releases.
@@ -398,7 +506,7 @@ async function verifyPayment(req, res, next) {
       let result;
       try {
         // Pass schoolId so verifyTransaction scopes the student lookup to this school (#845).
-        result = await verifyTransaction(normalizedHash, req.school.stellarAddress, schoolId);
+        result = await provider.queryStatus(normalizedHash, req.school.stellarAddress, schoolId);
       } catch (stellarErr) {
         if (PERMANENT_FAIL_CODES.includes(stellarErr.code)) {
           await audit.failure(stellarErr.message, { txHash: normalizedHash, errorCode: stellarErr.code });

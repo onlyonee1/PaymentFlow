@@ -8,12 +8,14 @@
  *   - Tampered cursors are rejected with INVALID_CURSOR
  *   - Expired cursors are rejected with INVALID_CURSOR
  *   - Cursors from a different filter set are rejected
- *   - Offset pagination (page/limit) still works when no cursor is provided
+ *   - Navigation is tenant-scoped and works in both directions
  *
  * All tests run without a live server or database (AuditLog is fully mocked).
  */
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
+
+process.env.JWT_SECRET ||= 'test-only-cursor-secret-32-characters';
 
 let mockFind;
 let mockCount;
@@ -37,7 +39,7 @@ const { getAuditLogs, _signCursor, _verifyCursor, CURSOR_TTL_MS } =
 
 function makeLogs(n, offsetMs = 0) {
   return Array.from({ length: n }, (_, i) => ({
-    _id:       String(1000 + i),
+    _id:       (1000 + i).toString(16).padStart(24, '0'),
     schoolId:  'SCH-1',
     action:    'student_create',
     result:    'success',
@@ -69,17 +71,17 @@ beforeEach(() => {
 
 describe('_signCursor and _verifyCursor', () => {
   test('round-trips a valid cursor', () => {
-    const entry   = { _id: 'abc123', createdAt: new Date('2026-01-01T00:00:00Z') };
+    const entry   = { _id: '000000000000000000abc123', createdAt: new Date('2026-01-01T00:00:00Z') };
     const filters = { ...BASE_FILTERS };
     const token   = _signCursor(entry, filters);
     expect(typeof token).toBe('string');
     const payload = _verifyCursor(token, filters);
-    expect(payload._id).toBe('abc123');
+    expect(payload._id).toBe('000000000000000000abc123');
     expect(payload.createdAt).toBe('2026-01-01T00:00:00.000Z');
   });
 
   test('rejects a token with a flipped bit (tampered signature)', () => {
-    const entry   = { _id: 'abc123', createdAt: new Date() };
+    const entry   = { _id: '000000000000000000abc123', createdAt: new Date() };
     const filters = { ...BASE_FILTERS };
     const token   = _signCursor(entry, filters);
     // Flip the last character of the base64url token
@@ -97,7 +99,7 @@ describe('_signCursor and _verifyCursor', () => {
 
   test('rejects an expired cursor', () => {
     jest.useFakeTimers();
-    const entry   = { _id: 'abc123', createdAt: new Date() };
+    const entry   = { _id: '000000000000000000abc123', createdAt: new Date() };
     const filters = { ...BASE_FILTERS };
     const token   = _signCursor(entry, filters);
 
@@ -111,7 +113,7 @@ describe('_signCursor and _verifyCursor', () => {
   });
 
   test('rejects a cursor when filters differ from original', () => {
-    const entry         = { _id: 'abc123', createdAt: new Date() };
+    const entry         = { _id: '000000000000000000abc123', createdAt: new Date() };
     const originalFilters = { ...BASE_FILTERS };
     const changedFilters  = { ...BASE_FILTERS, action: 'fee_create' };
     const token = _signCursor(entry, originalFilters);
@@ -122,7 +124,7 @@ describe('_signCursor and _verifyCursor', () => {
 
   test('accepts a cursor just before expiry', () => {
     jest.useFakeTimers();
-    const entry   = { _id: 'abc123', createdAt: new Date() };
+    const entry   = { _id: '000000000000000000abc123', createdAt: new Date() };
     const filters = { ...BASE_FILTERS };
     const token   = _signCursor(entry, filters);
 
@@ -137,8 +139,8 @@ describe('_signCursor and _verifyCursor', () => {
 // ── getAuditLogs — cursor mode ────────────────────────────────────────────────
 
 describe('getAuditLogs — cursor mode', () => {
-  test('returns nextCursor when a full page is returned', async () => {
-    const logs = makeLogs(50);
+  test('returns nextCursor when another page exists', async () => {
+    const logs = makeLogs(51);
     mockFind  = jest.fn(() => makeChain(logs));
     mockCount = jest.fn().mockResolvedValue(200);
 
@@ -158,7 +160,7 @@ describe('getAuditLogs — cursor mode', () => {
   });
 
   test('uses keyset query when a valid cursor is supplied', async () => {
-    const firstLogs = makeLogs(50);
+    const firstLogs = makeLogs(51);
     mockFind  = jest.fn(() => makeChain(firstLogs));
     mockCount = jest.fn().mockResolvedValue(200);
 
@@ -175,12 +177,12 @@ describe('getAuditLogs — cursor mode', () => {
 
     // The find call should include a keyset $or condition, not a skip
     const findArg = mockFind.mock.calls[0][0];
-    expect(findArg).toHaveProperty('$or');
+    expect(findArg).toMatchObject({ schoolId: 'SCH-1', $and: [{ $or: expect.any(Array) }] });
     expect(page2.logs).toHaveLength(50);
   });
 
   test('keyset query does NOT use skip (stable under inserts)', async () => {
-    const firstLogs = makeLogs(10);
+    const firstLogs = makeLogs(11);
     mockFind  = jest.fn(() => makeChain(firstLogs));
     mockCount = jest.fn().mockResolvedValue(100);
 
@@ -197,12 +199,12 @@ describe('getAuditLogs — cursor mode', () => {
   });
 
   test('throws INVALID_CURSOR for a tampered cursor', async () => {
-    const logs = makeLogs(10);
+    const logs = makeLogs(11);
     mockFind  = jest.fn(() => makeChain(logs));
     mockCount = jest.fn().mockResolvedValue(100);
     const page1 = await getAuditLogs({ schoolId: 'SCH-1', limit: 10 });
 
-    const tampered = page1.nextCursor.slice(0, -1) + 'X';
+    const tampered = page1.nextCursor.slice(0, -1) + (page1.nextCursor.endsWith('A') ? 'B' : 'A');
 
     await expect(
       getAuditLogs({ schoolId: 'SCH-1', limit: 10, cursor: tampered }),
@@ -218,7 +220,7 @@ describe('getAuditLogs — cursor mode', () => {
   test('throws INVALID_CURSOR for an expired cursor', async () => {
     jest.useFakeTimers();
 
-    const logs = makeLogs(10);
+    const logs = makeLogs(11);
     mockFind  = jest.fn(() => makeChain(logs));
     mockCount = jest.fn().mockResolvedValue(100);
 
@@ -233,7 +235,7 @@ describe('getAuditLogs — cursor mode', () => {
   });
 
   test('throws INVALID_CURSOR when filter changes between pages', async () => {
-    const logs = makeLogs(10);
+    const logs = makeLogs(11);
     mockFind  = jest.fn(() => makeChain(logs));
     mockCount = jest.fn().mockResolvedValue(100);
 
@@ -247,55 +249,36 @@ describe('getAuditLogs — cursor mode', () => {
   });
 });
 
-// ── getAuditLogs — offset mode (backwards-compatible) ────────────────────────
+test('rejects a valid cursor from another tenant before querying', async () => {
+  const page = await getAuditLogs({ schoolId: 'SCH-1', limit: 2 });
+  mockFind.mockClear();
 
-describe('getAuditLogs — offset mode', () => {
-  test('returns logs, total, page, limit, pages', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1', page: 1, limit: 2 });
-    expect(result).toHaveProperty('logs');
-    expect(result).toHaveProperty('total');
-    expect(result).toHaveProperty('page', 1);
-    expect(result).toHaveProperty('limit', 2);
-    expect(result).toHaveProperty('pages');
-  });
+  await expect(getAuditLogs({ schoolId: 'SCH-2', limit: 2, cursor: page.nextCursor }))
+    .rejects.toMatchObject({ code: 'INVALID_CURSOR', status: 400 });
+  expect(mockFind).not.toHaveBeenCalled();
+});
 
-  test('computes skip = (page - 1) * limit', async () => {
-    await getAuditLogs({ schoolId: 'SCH-1', page: 3, limit: 10 });
-    const chain = mockFind.mock.results[0].value;
-    expect(chain.skip).toHaveBeenCalledWith(20);
-  });
+test('queries earlier rows in ascending order and reverses the returned page', async () => {
+  const first = makeLogs(3);
+  mockFind.mockImplementationOnce(() => makeChain(first));
+  const page1 = await getAuditLogs({ schoolId: 'SCH-1', limit: 2 });
+  mockFind.mockImplementationOnce(() => makeChain(makeLogs(2, 2000)));
+  const page2 = await getAuditLogs({ schoolId: 'SCH-1', limit: 2, cursor: page1.nextCursor });
+  const reverseQuery = makeChain([first[1], first[0]]);
+  mockFind.mockReturnValueOnce(reverseQuery);
+  const previous = await getAuditLogs({ schoolId: 'SCH-1', limit: 2, cursor: page2.prevCursor });
 
-  test('caps limit at 200', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1', limit: 999 });
-    expect(result.limit).toBe(200);
-  });
-
-  test('defaults page to 1 and limit to 50', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1' });
-    expect(result.page).toBe(1);
-    expect(result.limit).toBe(50);
-  });
-
-  test('returns pages=1 when total is 0', async () => {
-    mockFind  = jest.fn(() => makeChain([]));
-    mockCount = jest.fn().mockResolvedValue(0);
-    const result = await getAuditLogs({ schoolId: 'SCH-1' });
-    expect(result.pages).toBe(1);
-    expect(result.total).toBe(0);
-  });
-
-  test('totalPages is ceil(total / limit)', async () => {
-    mockCount.mockResolvedValue(125);
-    const result = await getAuditLogs({ schoolId: 'SCH-1', limit: 50 });
-    expect(result.pages).toBe(3);
-  });
+  expect(reverseQuery.sort).toHaveBeenCalledWith({ createdAt: 1, _id: 1 });
+  expect(previous.logs).toEqual(first.slice(0, 2));
+  expect(previous.prevCursor).toBeNull();
+  expect(previous.hasMore).toBe(true);
 });
 
 // ── Response shape ────────────────────────────────────────────────────────────
 
 describe('response shape', () => {
   test('cursorExpiry is an ISO string when nextCursor is present', async () => {
-    const logs = makeLogs(50);
+    const logs = makeLogs(51);
     mockFind  = jest.fn(() => makeChain(logs));
     mockCount = jest.fn().mockResolvedValue(200);
 

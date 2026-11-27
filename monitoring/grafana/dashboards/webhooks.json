@@ -66,8 +66,8 @@
       "gridPos": { "x": 12, "y": 8, "w": 12, "h": 6 },
       "targets": [
         {
-          "expr": "topk(10, sum by (event, schoolId) (increase(webhook_deliveries_total{outcome=\"failure\"}[1h])))",
-          "legendFormat": "{{schoolId}} / {{event}}",
+          "expr": "topk(10, sum by (event, school) (increase(webhook_deliveries_total{outcome=\"failure\"}[1h])))",
+          "legendFormat": "{{school}} / {{event}}",
           "instant": true
         }
       ],
@@ -161,6 +161,24 @@
           { "matcher": { "id": "byName", "options": "permanent_error" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
         ]
       }
+    },
+    {
+      "id": 9,
+      "title": "Webhook Delivery Success Rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 28, "w": 16, "h": 7 },
+      "targets": [{
+        "expr": "1 - (sum by (school) (rate(webhook_deliveries_total{status=\"failure\"}[5m])) or 0 * sum by (school) (rate(webhook_deliveries_total[5m]))) / sum by (school) (rate(webhook_deliveries_total[5m]))",
+        "legendFormat": "{{school}}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "title": "Webhook Retry Queue Depth",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 28, "w": 8, "h": 7 },
+      "targets": [{ "expr": "max(webhook_queue_depth)", "legendFormat": "Pending and processing" }]
     }
   ]
 }

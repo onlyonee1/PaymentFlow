@@ -5,7 +5,6 @@ import VerifyPayment from "../components/VerifyPayment";
 import SseDegradedBanner from "../components/SseDegradedBanner";
 import NetworkStatusBanner from "../components/NetworkStatusBanner";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
-import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 import { useTranslation } from "react-i18next";
@@ -25,9 +24,6 @@ export default function PayFees() {
 
   // SSE-level degraded/reconnecting/failed banner (Issues #1054, #1078).
   const { degraded, connectionStatus } = usePaymentEvents();
-  // Track network connectivity to disable mutation actions while offline (Issue #269).
-  const { isOnline } = useOnlineStatus();
-
   // Browser-level network connectivity (Issue #21).
   const { isOnline, wasOffline } = useNetworkStatus();
 
@@ -69,7 +65,7 @@ export default function PayFees() {
 
         {/* Main content grid */}
         <div className="payfees-grid">
-          <PaymentForm disabled={!isOnline} />
+          <PaymentForm disabled={!isOnline} tokenExp={tokenExp} />
           <div ref={verifyPaymentRef}>
             <VerifyPayment disabled={!isOnline} />
           </div>
