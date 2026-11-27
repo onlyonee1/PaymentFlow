@@ -13,8 +13,9 @@
 
 const Student = require('../models/studentModel');
 const { processReminders } = require('../services/reminderService');
-const { generateUnsubscribeToken, verifyUnsubscribeToken } = require('../utils/unsubscribeToken');
+const { verifyUnsubscribeToken, verifyEmailUnsubscribeToken, emailPreferenceField } = require('../utils/unsubscribeToken');
 const config = require('../config');
+const { del, KEYS } = require('../cache');
 const logger = require('../utils/logger').child('ReminderController');
 
 const { REMINDER_COOLDOWN_HOURS, REMINDER_MAX_COUNT, JWT_SECRET } = config;
@@ -157,27 +158,35 @@ async function setOptOut(req, res, next) {
  */
 async function unsubscribeViaToken(req, res, next) {
   try {
-    const { token } = req.query;
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    const { token, type } = req.query;
+    const legacy = req.baseUrl === '/api/reminders';
 
     if (!token) {
       return res.status(400).json({ error: 'token query parameter is required', code: 'VALIDATION_ERROR' });
     }
 
-    const verification = verifyUnsubscribeToken(token, JWT_SECRET);
-    if (!verification.valid) {
-      return res.status(400).json({ error: verification.error, code: 'INVALID_TOKEN' });
+    const verification = legacy && type === undefined
+      ? verifyUnsubscribeToken(token, JWT_SECRET)
+      : verifyEmailUnsubscribeToken(token, type, config.EMAIL_UNSUBSCRIBE_SECRET || JWT_SECRET);
+    if (!verification || verification.valid === false) {
+      return res.status(400).json({ error: 'Invalid unsubscribe token', code: 'INVALID_TOKEN' });
     }
+    const field = emailPreferenceField(type || 'payment_reminder');
 
     const { studentId, schoolId } = verification;
     const student = await Student.findOneAndUpdate(
       { schoolId, studentId },
-      { $set: { reminderOptOut: true } },
+      { $set: { [field]: true } },
       { new: true }
-    ).select('studentId name reminderOptOut');
+    ).select('studentId name');
 
     if (!student) {
       return res.status(404).json({ error: 'Student not found', code: 'NOT_FOUND' });
     }
+
+    del(KEYS.student(studentId));
+    if (KEYS.studentsAll) del(KEYS.studentsAll());
 
     // Return HTML confirmation page — escape all user-controlled values to
     // prevent stored XSS.  student.name is fully attacker-controllable (set via
@@ -186,17 +195,15 @@ async function unsubscribeViaToken(req, res, next) {
     const safeStudentId = escapeHtml(student.studentId);
     const html = `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Unsubscribed</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 40px; }
-          .success { color: green; }
-        </style>
       </head>
       <body>
-        <h1 class="success">&#x2713; Unsubscribed</h1>
-        <p>You have been unsubscribed from fee reminders for student <strong>${safeName}</strong> (ID: ${safeStudentId}).</p>
+        <h1>Unsubscribed</h1>
+        <p>You have been unsubscribed from these email updates for student <strong>${safeName}</strong> (ID: ${safeStudentId}).</p>
         <p>You can resubscribe at any time by contacting your school administrator.</p>
       </body>
       </html>

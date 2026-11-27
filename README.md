@@ -251,9 +251,11 @@ StellarEduPay is a three-tier application:
 
 ## Getting Started
 
+> **New to the project?** Follow the [Developer Quick Start guide](docs/quickstart.md) to be up and running in under 15 minutes — it covers exact versions, environment setup, a first payment walkthrough, devcontainer support, and a troubleshooting FAQ.
+
 ### Prerequisites
 
-- **Node.js** ≥ 20 ([download](https://nodejs.org/))
+- **Node.js** 20.11.0 ([download](https://nodejs.org/) or use `nvm use` with the included `.nvmrc`)
 - **MongoDB 7** running as a **replica set** (required for multi-document transactions)
 - **Redis 7** (required for BullMQ; the service degrades gracefully without it but Redis is recommended for production)
 - **Git**
@@ -388,36 +390,7 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 
 ## Environment Variables
 
-### Required
-
-| Variable | Description |
-|----------|-------------|
-| `MONGO_URI` | MongoDB connection string (must include replica set) |
-| `SCHOOL_WALLET_ADDRESS` | School's Stellar public key (`G...`) |
-| `STELLAR_NETWORK` | `testnet` or `mainnet` |
-| `JWT_SECRET` | Secret for signing JWTs (min 32 chars, keep private) |
-
-### Stellar
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STELLAR_HORIZON_URL` | Auto from network | Override Horizon API URL |
-| `USDC_ISSUER` | Auto from network | USDC issuer address |
-
-### Payments
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MIN_PAYMENT_AMOUNT` | `0.01` | Minimum payment in XLM/USDC |
-| `MAX_PAYMENT_AMOUNT` | `100000` | Maximum payment in XLM/USDC |
-
-### Background Jobs
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POLL_INTERVAL_MS` | `30000` | Blockchain sync interval |
-| `RETRY_INTERVAL_MS` | `60000` | Failed-verification retry interval |
-| `RETRY_MAX_ATTEMPTS` | `10` | Max retry attempts before giving up |
+See the [environment variable reference](docs/environment-reference.md) for the complete source-of-truth matrix covering defaults, sensitivity, rotation ownership, environment scope, and missing-variable behavior. `MONGO_URI` and `JWT_SECRET` are required at backend startup; `SCHOOL_WALLET_ADDRESS` is optional at startup and is used by selected migration and seed flows.
 
 ### Redis / BullMQ
 
@@ -620,7 +593,8 @@ Common error codes: `NOT_FOUND`, `VALIDATION_ERROR`, `DUPLICATE_TX`, `TX_FAILED`
 - **Proxy trust**: Configurable `TRUSTED_PROXY_HOPS` prevents IP spoofing via `X-Forwarded-For`.
 - **Body size limit**: Configurable `MAX_BODY_SIZE` to prevent request flood attacks.
 
-See [`docs/security.md`](docs/security.md) for a full threat model.
+See [`SECURITY.md`](SECURITY.md) for vulnerability reporting and coordinated
+disclosure, and [`docs/security.md`](docs/security.md) for the full threat model.
 
 ---
 
@@ -863,14 +837,25 @@ PaymentFlow/
 
 | Document | Description |
 |----------|-------------|
+| [`docs/quick-start.md`](docs/quick-start.md) | **Contributor quick-start guide** — clone to running tests in 15 min |
 | [`docs/architecture.md`](docs/architecture.md) | System design and data flow |
+| [`docs/architecture/stellar-integration.md`](docs/architecture/stellar-integration.md) | Stellar/Soroban integration architecture with sequence diagrams |
 | [`docs/api-spec.md`](docs/api-spec.md) | Full API reference |
 | [`docs/stellar-integration.md`](docs/stellar-integration.md) | Stellar-specific details |
+| [`docs/stellar-finality-policy.md`](docs/stellar-finality-policy.md) | SUBMITTED status, ledger finality polling, P50/P99 latency, FINALITY_TIMEOUT runbook |
 | [`docs/payment-limits.md`](docs/payment-limits.md) | Payment limits configuration |
 | [`docs/security.md`](docs/security.md) | Security model and threat analysis |
+| [`docs/key-rotation.md`](docs/key-rotation.md) | Signer key rotation runbook |
+| [`docs/architecture/payment-state-machine.md`](docs/architecture/payment-state-machine.md) | Canonical payment status transitions |
 | [`docs/WEBHOOK_INTEGRATION.md`](docs/WEBHOOK_INTEGRATION.md) | Webhook setup and HMAC verification |
 | [`docs/idempotency-payment-verification.md`](docs/idempotency-payment-verification.md) | Idempotency key design |
 | [`docs/QUICK_START_DOCKER.md`](docs/QUICK_START_DOCKER.md) | Docker quick start |
+| [`docs/docker-troubleshooting.md`](docs/docker-troubleshooting.md) | Local Docker Compose troubleshooting — top issues, diagnostics, reset procedures |
+| [`docs/migrations.md`](docs/migrations.md) | Database migration authoring standards, rollback policy, and safe backfill patterns |
+| [`docs/api-pagination-filtering.md`](docs/api-pagination-filtering.md) | Cursor pagination and filtering guide with JS/Python examples and anti-patterns |
+| [`docs/runbooks/incident-response.md`](docs/runbooks/incident-response.md) | Incident response runbook — severity framework, SLAs, escalation, communication templates |
+| [`docs/payment-lifecycle.md`](docs/payment-lifecycle.md) | Payment status, confirmation, retry, and reconciliation lifecycle |
+| [`docs/environment-reference.md`](docs/environment-reference.md) | Complete environment-variable ownership and secret-sensitivity reference |
 
 ---
 
@@ -894,6 +879,8 @@ See [`CHANGELOG.md`](CHANGELOG.md) for a complete history of changes, breaking c
 ---
 
 ## Contributing
+
+**New here?** Start with the [**Contributor Quick-Start Guide →**](docs/quick-start.md) — it walks you through cloning, environment setup, running tests, and opening your first PR in under 15 minutes.
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`

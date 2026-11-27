@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTraceContext, runTracedJob } = require('../tracing/spans');
+
 /**
  * Transaction Processing Queue
  *
@@ -82,7 +84,7 @@ if (!connection) {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
         removeOnComplete: { age: 3600, count: 500 },
-        removeOnFail: false,
+        removeOnFail: { age: 7 * 24 * 60 * 60, count: 10000 },
       },
     });
   } catch (err) {
@@ -109,6 +111,7 @@ async function persistJob(txHash, context = {}) {
         txHash,
         schoolId,
         studentId: context.studentId || null,
+        ...(context.traceContext && { traceContext: context.traceContext }),
         correlationId: resolveCorrelationId(context.correlationId, txHash),
         status: 'pending',
         attempts: 0,
@@ -182,8 +185,9 @@ async function markInterrupted(txHash, reason) {
  * @returns {Promise<Job|null>}
  */
 async function enqueueTransaction(txHash, context = {}) {
-  const correlationId = resolveCorrelationId(context.correlationId, txHash);
-  const enrichedContext = { ...context, correlationId };
+  const correlationId = resolveCorrelationId(context.correlationId || context.requestId, txHash);
+  const traceContext = captureTraceContext();
+  const enrichedContext = { ...context, correlationId, requestId: correlationId, ...(traceContext && { traceContext }) };
 
   // 1. Persist to MongoDB (durable, idempotent)
   await persistJob(txHash, enrichedContext);
@@ -249,7 +253,7 @@ async function recoverPendingJobs() {
 
       await transactionQueue.add(
         'verify-transaction',
-        { txHash: doc.txHash, schoolId: doc.schoolId, studentId: doc.studentId, correlationId },
+        { txHash: doc.txHash, schoolId: doc.schoolId, studentId: doc.studentId, correlationId, ...(doc.traceContext?.traceparent && { traceContext: doc.traceContext }) },
         { jobId: doc.txHash }
       );
       recovered++;
@@ -384,7 +388,8 @@ function startTransactionWorker(processor) {
      return null;
    }
 
-   worker = new Worker(QUEUE_NAME, processor, {
+   worker = new Worker(QUEUE_NAME, (job) =>
+     runTracedJob('queue.verify-transaction', job.data, () => processor(job)), {
      connection,
      concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
    });
@@ -407,6 +412,8 @@ function startTransactionWorker(processor) {
       error: err.message,
     });
     transactionQueueFailedTotal.inc();
+    require('./deadLetterQueue').moveExhaustedJob(QUEUE_NAME, job, err)
+      .catch((dlqError) => logger.error('[TransactionQueue] Failed to move exhausted job to DLQ', { jobId: job?.id, error: dlqError.message }));
     if (job?.processedOn && job?.finishedOn) {
       transactionQueueProcessingDurationSeconds.observe((job.finishedOn - job.processedOn) / 1000);
     }

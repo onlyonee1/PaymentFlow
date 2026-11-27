@@ -1,13 +1,33 @@
 import axios from "axios";
 import { createRefreshHandler } from "./authRefresh";
+import { getEnvVar } from '../config/envValidation';
+import { isRetryable } from '../utils/retryClassification';
 
-const TIMEOUT_MS = parseInt(process.env.NEXT_PUBLIC_REQUEST_TIMEOUT_MS || "15000", 10);
+const TIMEOUT_MS = parseInt(getEnvVar('NEXT_PUBLIC_REQUEST_TIMEOUT_MS', '15000'), 10);
+
+const API_BASE_URL = getEnvVar('NEXT_PUBLIC_API_URL', 'http://localhost:5000/api');
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api",
+  baseURL: API_BASE_URL,
   timeout: TIMEOUT_MS,
   withCredentials: true,
 });
+
+// Start a W3C trace at the API boundary when the caller has no parent.
+function attachTraceContext(config) {
+  if (typeof window === 'undefined' || !window.crypto?.getRandomValues) return;
+  const backend = new URL(API_BASE_URL, window.location.href);
+  const base = new URL(config.baseURL || API_BASE_URL, window.location.href);
+  const target = new URL(config.url || '', base);
+  if (target.origin !== backend.origin) return;
+  if (Object.keys(config.headers || {}).some((name) => name.toLowerCase() === 'traceparent')) return;
+
+  const randomHex = (length) => {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(length));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  };
+  config.headers = { ...config.headers, traceparent: `00-${randomHex(16)}-${randomHex(8)}-00` };
+}
 
 // Attach the school context header to every request unless one is already set.
 // Derives school ID from authenticated user session (stored in localStorage after login).
@@ -23,6 +43,7 @@ api.interceptors.request.use((config) => {
       config.headers = { ...config.headers, "X-School-ID": schoolId };
     }
   }
+  attachTraceContext(config);
   return config;
 });
 
@@ -47,6 +68,15 @@ function redirectToLogin() {
     // hard redirect below still ends the session from the app's perspective.
   }
 
+  // Issue #5 — give in-page listeners one tick to persist safe form-draft
+  // state to sessionStorage before we navigate away.  The event name is
+  // chosen to be explicit and un-guessable from external scripts.
+  try {
+    window.dispatchEvent(new Event("session:expired"));
+  } catch {
+    // dispatchEvent unavailable (SSR / test env) — safe to ignore.
+  }
+
   const returnTo = encodeURIComponent(`${pathname}${search}`);
   window.location.href = `/login?returnTo=${returnTo}`;
 }
@@ -59,6 +89,26 @@ const onResponseRejected = createRefreshHandler({
 });
 
 api.interceptors.response.use((response) => response, onResponseRejected);
+
+api.interceptors.response.use(undefined, async (error) => {
+  const config = error.config;
+  if (
+    !config ||
+    config.method?.toLowerCase() !== 'get' ||
+    config.signal?.aborted ||
+    !isRetryable(error)
+  ) {
+    throw error;
+  }
+
+  const attempts = config.__readAttempts || 1;
+  if (attempts >= 3) throw error;
+
+  config.__readAttempts = attempts + 1;
+  await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** (attempts - 1))));
+  if (config.signal?.aborted) throw error;
+  return api.request(config);
+});
 
 // Export the bare axios instance as the default so callers that need ad-hoc
 // requests (e.g. login.jsx) can use api.post('/auth/login', data) without
@@ -78,15 +128,26 @@ export const getStudents = (page = 1, limit = 20, { search, status, className } 
   });
 export const getStudent = (studentId, { signal } = {}) => api.get(`/students/${studentId}`, { signal });
 export const registerStudent = (data) => api.post("/students", data);
-export const updateStudent = (studentId, data) => api.patch(`/students/${studentId}`, data);
-export const getPaymentSummary = () => api.get("/payments/summary");
+export const updateStudent = (studentId, data) => api.put(`/students/${studentId}`, data);
+// Payment endpoints — also available as a typed client via ./paymentApiClient
+export const getPaymentSummary = ({ signal } = {}) => api.get("/payments/summary", { signal });
+export const createPaymentIntent = (studentId, { signal } = {}) =>
+  api.post("/payments/intent", { studentId }, {
+    signal,
+    headers: { "Idempotency-Key": globalThis.crypto.randomUUID() },
+  });
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
 export const getStudentPayments = (studentId, { signal } = {}) => api.get(`/payments/${studentId}`, { signal });
 export const getStudentBalance  = (studentId, { signal } = {}) => api.get(`/payments/balance/${studentId}`, { signal });
-export const verifyPayment = (txHash) => api.post("/payments/verify", { txHash });
+export const verifyPayment = (txHash, idempotencyKey) =>
+  api.post(
+    "/payments/verify",
+    { txHash },
+    idempotencyKey ? { headers: { "X-Idempotency-Key": idempotencyKey } } : {}
+  );
 export const syncPayments = () => api.post("/payments/sync");
-export const getSyncStatus = () => api.get("/payments/sync/status");
-export const getFeeStructures = () => api.get("/fees");
+export const getSyncStatus = ({ signal } = {}) => api.get("/payments/sync/status", { signal });
+export const getFeeStructures = ({ signal } = {}) => api.get("/fees", { signal });
 export const createFeeStructure = (data) => api.post("/fees", data);
 export const getFeeByClass = (className) => api.get(`/fees/${className}`);
 export const deleteFeeStructure = (className) => api.delete(`/fees/${encodeURIComponent(className)}`);
@@ -102,28 +163,35 @@ export const getReportCsvUrl = (params = {}) => {
 // Currency conversion
 export const getConversionRates = () => api.get("/payments/rates");
 
+// FX rates endpoint (issue #662) — alias that hits the dedicated fx route
+export const getFxRates = () => api.get("/fx/rates");
+
 // Disputes
 export const flagDispute = (data) => api.post("/disputes", data);
-export const getDisputes = (params = {}) => api.get("/disputes", { params });
+export const getDisputes = (params = {}, { signal } = {}) => api.get("/disputes", { params, signal });
 export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
+export const uploadDisputeAttachment = (id, formData) =>
+  api.post(`/disputes/${id}/attachments`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 
 // Refunds
 export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
 export const approveRefund = (refundId, data) => api.post(`/payments/refunds/${refundId}/approve`, data);
 export const getPaymentRefunds = (txHash) => api.get(`/payments/${txHash}/refunds`);
-export const getSchoolRefunds = (params = {}) => api.get("/payments/refunds/school/list", { params });
+export const getSchoolRefunds = (params = {}, { signal } = {}) => api.get("/payments/refunds/school/list", { params, signal });
 
 // Audit logs
 export const getRecentAuditLogs = (limit = 10) =>
   api.get("/audit-logs/recent", { params: { limit } });
-export const getAuditLogs = (params = {}) =>
-  api.get("/audit-logs", { params });
+export const getAuditLogs = (params = {}, { signal } = {}) =>
+  api.get("/audit-logs", { params, signal });
 
 // Fee adjustment rules
-export const getFeeAdjustmentRules = (schoolId) =>
-  api.get("/fee-adjustments", { headers: { "X-School-ID": schoolId } });
+export const getFeeAdjustmentRules = (schoolId, { signal } = {}) =>
+  api.get("/fee-adjustments", { headers: { "X-School-ID": schoolId }, signal });
 export const createFeeAdjustmentRule = (data, schoolId) =>
   api.post("/fee-adjustments", data, { headers: { "X-School-ID": schoolId } });
 export const updateFeeAdjustmentRule = (id, data, schoolId) =>
@@ -138,9 +206,47 @@ export const updateSchool = (slug, data) => api.patch(`/schools/${slug}`, data);
 // Payment plans
 export const createPaymentPlan = (studentId, data) =>
   api.post(`/payment-plans/${studentId}`, data);
-export const getPaymentPlan = (studentId) =>
-  api.get(`/payment-plans/${studentId}`);
+export const getPaymentPlan = (studentId, { signal } = {}) =>
+  api.get(`/payment-plans/${studentId}`, { signal });
 export const updateInstallment = (studentId, installmentIndex, data) =>
   api.patch(`/payment-plans/${studentId}/installment/${installmentIndex}`, data);
 export const cancelPaymentPlan = (studentId) =>
   api.delete(`/payment-plans/${studentId}`);
+
+// MFA
+export const setupUserMfa        = ()       => api.post("/auth/mfa/setup");
+export const verifyUserMfa       = (data)   => api.post("/auth/mfa/verify", data);
+export const disableUserMfa      = ()       => api.post("/auth/mfa/disable");
+export const getMfaBackupCodes   = ()       => api.get("/auth/mfa/backup-codes");
+export const regenerateBackupCodes = ()     => api.post("/auth/mfa/backup-codes/regenerate");
+
+// Source validation rules (trusted-sender allowlist)
+export const getSourceValidationRules = (schoolId, { signal } = {}) =>
+  api.get("/source-validation-rules", { headers: { "X-School-ID": schoolId }, signal });
+export const createSourceValidationRule = (data, schoolId) =>
+  api.post("/source-validation-rules", data, { headers: { "X-School-ID": schoolId } });
+export const deleteSourceValidationRule = (id, schoolId) =>
+  api.delete(`/source-validation-rules/${id}`, { headers: { "X-School-ID": schoolId } });
+
+// Fee adjustment helpers
+export const getFeeAdjustmentAffectedCount = (ruleId, schoolId) =>
+  api.get(`/fee-adjustments/${ruleId}/affected-count`, { headers: { "X-School-ID": schoolId } });
+
+// Student fee history (archived records)
+export const getFeeHistory = (studentId, params = {}) =>
+  api.get(`/students/${studentId}/fee-history`, { params });
+
+// Receipts — Issue #604
+// Returns the URL for streaming a PDF receipt from the backend.
+// Using a plain URL (rather than api.get) so callers can pass it to fetch()
+// or an <a href> and get the binary PDF stream directly.
+export const getReceiptDownloadUrl = (txHash) => {
+  const base =
+    typeof window !== "undefined"
+      ? (process.env.NEXT_PUBLIC_API_URL || "/api")
+      : "/api";
+  return `${base}/receipts/${txHash}?format=pdf`;
+};
+
+// Returns JSON receipt data (studentName, amount, signature, etc.)
+export const getReceiptData = (txHash) => api.get(`/receipts/${txHash}`);
