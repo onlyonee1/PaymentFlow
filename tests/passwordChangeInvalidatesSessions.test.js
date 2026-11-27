@@ -49,11 +49,11 @@ jest.spyOn(bcrypt, 'hash');
 
 // ── User model mock ───────────────────────────────────────────────────────────
 const mockFindById          = jest.fn();
-const mockFindByIdAndUpdate = jest.fn();
+const mockFindOneAndUpdate = jest.fn();
 
 jest.mock('../backend/src/models/userModel', () => ({
   findById:          (...a) => mockFindById(...a),
-  findByIdAndUpdate: (...a) => mockFindByIdAndUpdate(...a),
+  findOneAndUpdate: (...a) => mockFindOneAndUpdate(...a),
 }));
 
 // ── Load controller (once, after all mocks are set up) ────────────────────────
@@ -181,7 +181,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
   describe('successful password change', () => {
     beforeEach(() => {
       mockFindById.mockResolvedValue({ _id: 'user-123', passwordHash: VALID_HASH });
-      mockFindByIdAndUpdate.mockResolvedValue({});
+      mockFindOneAndUpdate.mockResolvedValue({});
       bcrypt.compare.mockResolvedValue(true);
     });
 
@@ -190,9 +190,9 @@ describe('POST /api/auth/change-password (#1360)', () => {
       await authController.handleChangePassword(
         makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
       );
-      expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-        'user-123',
-        { $set: { passwordHash: expect.any(String) } },
+      expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'user-123', passwordHash: VALID_HASH },
+        { $set: { passwordHash: expect.any(String), passwordChangedAt: expect.any(Date) } },
       );
     });
 
@@ -233,7 +233,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
   describe('session revocation — store-level verification (#1360)', () => {
     it('operation succeeds with zero active sessions', async () => {
       mockFindById.mockResolvedValue({ _id: 'user-xyz', passwordHash: VALID_HASH });
-      mockFindByIdAndUpdate.mockResolvedValue({});
+      mockFindOneAndUpdate.mockResolvedValue({});
       bcrypt.compare.mockResolvedValue(true);
 
       const res = makeRes();
@@ -254,7 +254,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('revokes existing session families after password change', async () => {
       const userId = 'user-with-sessions';
       mockFindById.mockResolvedValue({ _id: userId, passwordHash: VALID_HASH });
-      mockFindByIdAndUpdate.mockResolvedValue({});
+      mockFindOneAndUpdate.mockResolvedValue({});
       bcrypt.compare.mockResolvedValue(true);
 
       // Seed an active session in the in-memory store by directly calling
