@@ -212,6 +212,17 @@ export default function PaymentForm({ initialStudentId = "", disabled = false, t
     setPaymentsLoading(true);
     try {
       const signal = controller.signal;
+      if (schoolSlug) {
+        const config = { signal, headers: { "X-School-Slug": schoolSlug } };
+        const [studentResponse, instructionResponse] = await Promise.all([
+          getPublicStudent(id, config),
+          getPaymentInstructions(id, config),
+        ]);
+        setStudent({ ...studentResponse.data, studentId: id });
+        setInstructions(instructionResponse.data);
+        return;
+      }
+
       const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
         getStudent(id, { signal }),
         getPaymentInstructions(id, { signal }),
@@ -275,7 +286,7 @@ export default function PaymentForm({ initialStudentId = "", disabled = false, t
         setPaymentsLoading(false);
       }
     }
-  }, [t]);
+  }, [t, schoolSlug]);
 
   // #1344 — a bookmarked/shared /pay/:studentId URL pre-fills the lookup so a
   // parent doesn't have to retype the student ID on every visit.
@@ -284,7 +295,10 @@ export default function PaymentForm({ initialStudentId = "", disabled = false, t
   }, [initialStudentId, lookupStudent]);
 
   function sharePaymentUrl(id) {
-    return `${window.location.origin}/pay/${encodeURIComponent(id)}`;
+    const base = `${window.location.origin}/pay/`;
+    return schoolSlug
+      ? `${base}${encodeURIComponent(schoolSlug)}?student=${encodeURIComponent(id)}`
+      : `${base}${encodeURIComponent(id)}`;
   }
 
   async function copyShareLink() {

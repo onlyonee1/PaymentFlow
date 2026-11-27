@@ -209,6 +209,17 @@ const { auditContext } = require('../middleware/auditContext');
 router.get('/',                 getAllSchools);
 router.get('/:schoolSlug',        getSchool);
 
+// Only expose the fields used by public school pages and the sitemap.
+router.get('/public/directory', async (req, res, next) => {
+  try {
+    const School = require('../models/schoolModel');
+    const schools = await School.find({ isActive: true }, 'name slug -_id').sort({ slug: 1 }).lean();
+    res.json(schools);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Admin-only write endpoints — require JWT auth
 router.post('/',                requireAdminAuth, auditContext, createSchool);
 router.patch('/:schoolId',      requireAdminAuth, auditContext, requireVersion, updateSchool);

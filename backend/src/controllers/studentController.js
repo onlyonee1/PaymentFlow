@@ -472,11 +472,11 @@ async function getStudent(req, res, next) {
 async function getPublicStudentInfo(req, res, next) {
   try {
     const { studentId } = req.params;
-    const cacheKey = `public_student_${studentId}`;
+    const cacheKey = `public_student_${req.schoolId}_${studentId}`;
     const cached = get(cacheKey);
     if (cached !== undefined) return res.json(cached);
 
-    const student = await Student.findOne({ schoolId: req.schoolId, studentId }, {
+    const student = await Student.findOne({ schoolId: req.schoolId, studentId, deletedAt: null }, {
       name: 1,
       class: 1,
       feePaid: 1,

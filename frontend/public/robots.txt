@@ -1,5 +1,8 @@
 # Disallow indexing of sensitive and internal pages
 User-agent: *
+Disallow: /admin
+Disallow: /api
+Disallow: /auth
 Disallow: /dashboard
 Disallow: /audit-logs
 Disallow: /reports
@@ -8,9 +11,22 @@ Disallow: /fee-adjustments
 Disallow: /disputes
 Disallow: /fees
 
+Disallow: /analytics
+Disallow: /dead-letter
+Disallow: /login
+Disallow: /mfa-setup
+Disallow: /payment/
+Disallow: /refunds
+Disallow: /retention
+Disallow: /security-headers
+Disallow: /source-validation-rules
+Disallow: /webhooks
+
 # Allow public pages
 Allow: /
+Allow: /pay
 Allow: /pay-fees
+Allow: /schools
 
 # Sitemap location
 Sitemap: https://stellaredupay.example.com/sitemap.xml

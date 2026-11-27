@@ -75,9 +75,13 @@ const ROUTE_SECTION_NAMES = {
   "/mfa-setup": "Multi-factor authentication",
 };
 
+const PUBLIC_ROUTES = new Set(["/", "/pay-fees"]);
+
 export default function MyApp({ Component, pageProps }) {
   const router = useRouter();
   const { pathname } = router;
+  const canonicalPath = PUBLIC_ROUTES.has(pathname) ? pathname : pageProps.canonicalPath;
+  const robots = canonicalPath ? "index,follow" : "noindex,nofollow";
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
@@ -130,6 +134,8 @@ export default function MyApp({ Component, pageProps }) {
         <TableDensityProvider>
           <ReportExportProvider>
             <Head>
+              <meta name="robots" content={robots} key="robots" />
+              {canonicalPath && <link rel="canonical" href={new URL(canonicalPath, SITE_ORIGIN).href} key="canonical" />}
               <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
             </Head>
             <Navbar />
@@ -157,13 +163,9 @@ MyApp.getInitialProps = async ({ Component, ctx }) => {
     ? Component.getInitialProps(ctx)
     : {});
 
-  // #1385 — robots.txt only asks crawlers not to fetch these URLs; a page
-  // that's still linked from somewhere else can get indexed anyway without
-  // an explicit noindex signal. APP_LAYOUT_ROUTES is exactly the set of
-  // authenticated admin pages (dashboard, audit logs, fee adjustments,
-  // disputes, etc.), so it doubles as the noindex route list.
-  if (ctx.res && APP_LAYOUT_ROUTES.includes(ctx.pathname)) {
-    ctx.res.setHeader("X-Robots-Tag", "noindex");
+  if (ctx.res && !PUBLIC_ROUTES.has(ctx.pathname) &&
+      !["/pay/[studentId]", "/schools/[slug]"].includes(ctx.pathname)) {
+    ctx.res.setHeader("X-Robots-Tag", "noindex,nofollow");
   }
 
   const acceptLang = ctx.req?.headers?.["accept-language"] || "";

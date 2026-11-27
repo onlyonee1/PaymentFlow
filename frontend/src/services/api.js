@@ -127,6 +127,8 @@ export const getStudents = (cursor = null, limit = 20, { search, status, classNa
     signal,
   });
 export const getStudent = (studentId, { signal } = {}) => api.get(`/students/${studentId}`, { signal });
+export const getPublicStudent = (studentId, config) =>
+  api.get(`/students/public/${encodeURIComponent(studentId)}`, config);
 export const registerStudent = (data) => api.post("/students", data);
 export const updateStudent = (studentId, data) => api.put(`/students/${studentId}`, data);
 // Payment endpoints — also available as a typed client via ./paymentApiClient
@@ -139,11 +141,14 @@ export const createPaymentIntent = (studentId, { signal } = {}) =>
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
 export const getStudentPayments = (studentId, { signal } = {}) => api.get(`/payments/${studentId}`, { signal });
 export const getStudentBalance  = (studentId, { signal } = {}) => api.get(`/payments/balance/${studentId}`, { signal });
-export const verifyPayment = (txHash, idempotencyKey) =>
+export const verifyPayment = (txHash, idempotencyKey, schoolSlug) =>
   api.post(
     "/payments/verify",
     { txHash },
-    idempotencyKey ? { headers: { "X-Idempotency-Key": idempotencyKey } } : {}
+    idempotencyKey || schoolSlug ? { headers: {
+      ...(idempotencyKey && { "X-Idempotency-Key": idempotencyKey }),
+      ...(schoolSlug && { "X-School-Slug": schoolSlug }),
+    } } : {}
   );
 export const syncPayments = () => api.post("/payments/sync");
 export const getSyncStatus = ({ signal } = {}) => api.get("/payments/sync/status", { signal });
