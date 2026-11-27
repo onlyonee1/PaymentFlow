@@ -62,12 +62,12 @@ describe('metricsModel — TTL index on dailymetrics.createdAt', () => {
     jest.resetModules();
   });
 
-  test('daily schema has a TTL index on createdAt with default 400 days', () => {
+  test('daily schema has a TTL index on createdAt with default three years', () => {
     delete process.env.DAILY_METRICS_TTL_SECONDS;
     const { DailyMetrics } = jest.requireActual('../backend/src/models/metricsModel');
     const ttlIndex = findTtlIndex(DailyMetrics.schema);
     expect(ttlIndex).toBeDefined();
-    expect(ttlIndex[1].expireAfterSeconds).toBe(DEFAULT_TTL_SECONDS);
+    expect(ttlIndex[1].expireAfterSeconds).toBe(3 * 365 * 86400);
   });
 
   test('TTL value is read from DAILY_METRICS_TTL_SECONDS env var', () => {
@@ -83,6 +83,13 @@ describe('metricsModel — TTL index on dailymetrics.createdAt', () => {
     const unique = DailyMetrics.schema.indexes().filter(([, opts]) => opts && opts.unique);
     expect(unique).toHaveLength(1);
     expect(unique[0][0]).toEqual({ schoolId: 1, period: 1 });
+  });
+
+  test('hourly expiry waits for a durable daily rollup', () => {
+    const { HourlyMetrics } = jest.requireActual('../backend/src/models/metricsModel');
+    const index = findTtlIndex(HourlyMetrics.schema);
+    expect(index[1].expireAfterSeconds).toBe(7776000);
+    expect(index[1].partialFilterExpression).toEqual({ archived: true });
   });
 
   test('monthly schema has NO TTL index — all-time totals are summed from it', () => {
