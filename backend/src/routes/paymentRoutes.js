@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 
 const {
@@ -57,7 +59,6 @@ const {
   validateCreatePaymentIntent,
   validateVerifyPayment,
   validateSubmitTransaction,
-  validatePagination,
 } = require('../middleware/validate');
 const { createBatchPaymentIntent, confirmBatchPayment } = require('../controllers/batchPaymentController');
 const { resolveSchool } = require('../middleware/schoolContext');
@@ -250,7 +251,7 @@ router.get(
 );
 router.get("/receipt/:txHash", generateReceipt);
 router.get("/queue/:txHash", requireSchoolAuth(), getQueueJobStatus);
-router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(), getStudentPayments);
+router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(), validateQuery(queries.pagination), getStudentPayments);
 
 router.post("/:paymentId/lock", requireSchoolAuth(), contractPaused, lockPaymentForUpdate);
 router.post("/:paymentId/unlock", requireSchoolAuth(), unlockPayment);
@@ -265,11 +266,11 @@ router.patch("/:txHash/correct-placeholder", requireAdminAuth, auditContext, con
 router.post("/:txHash/refund", requireAdminAuth, auditContext, contractPaused, initiatePaymentRefund);
 router.post("/refunds/:refundId/approve", requireAdminAuth, auditContext, contractPaused, approvePaymentRefund);
 router.get("/:txHash/refunds", getPaymentRefunds);
-router.get("/refunds/school/list", requireAdminAuth, getSchoolRefunds);
+router.get("/refunds/school/list", requireAdminAuth, validateQuery(queries.refundList), getSchoolRefunds);
 
 router.get("/verify/:receiptId", verifyReceipt);
 
-router.get("/reconciliation/reports", requireAdminAuth, getReconciliationReports);
+router.get("/reconciliation/reports", requireAdminAuth, validateQuery(queries.limitOnly), getReconciliationReports);
 router.post("/reconciliation/report", requireAdminAuth, auditContext, contractPaused, generateSchoolReconciliationReport);
 
 module.exports = router;

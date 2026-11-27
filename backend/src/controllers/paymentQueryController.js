@@ -112,23 +112,15 @@ async function getAllPayments(req, res, next) {
       }
     }
 
-    if (minAmount || maxAmount) {
+    if (minAmount !== undefined || maxAmount !== undefined) {
       filter.amount = {};
-      if (minAmount) {
-        const min = Number(minAmount);
-        if (!Number.isFinite(min)) return res.status(400).json({ error: 'Invalid minAmount', code: 'VALIDATION_ERROR' });
-        filter.amount.$gte = min;
-      }
-      if (maxAmount) {
-        const max = Number(maxAmount);
-        if (!Number.isFinite(max)) return res.status(400).json({ error: 'Invalid maxAmount', code: 'VALIDATION_ERROR' });
-        filter.amount.$lte = max;
-      }
+      if (minAmount !== undefined) filter.amount.$gte = minAmount;
+      if (maxAmount !== undefined) filter.amount.$lte = maxAmount;
     }
 
     if (status) filter.status = status.toUpperCase();
     if (studentId) filter.studentId = studentId;
-    if (isSuspicious !== undefined) filter.isSuspicious = isSuspicious === 'true';
+    if (isSuspicious !== undefined) filter.isSuspicious = isSuspicious;
 
     const { items: payments, pagination } = await paginateList({
       find: (query) => Payment.find(query).lean(),

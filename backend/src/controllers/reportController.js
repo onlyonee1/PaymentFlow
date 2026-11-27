@@ -16,6 +16,10 @@ const { ReportJob, REPORT_STATUSES } = require('../models/reportJobModel');
 const School = require('../models/schoolModel');
 const { createReportDownloadUrl, SIGNED_URL_TTL_SECONDS } = require('../services/reportArtifactStorage');
 
+const { validateQuery } = require('../middleware/validateQuery');
+const { reportQuerySchema } = require('../middleware/schemas/reportSchemas');
+const validateReportQuery = validateQuery(reportQuerySchema, { includeDetails: true });
+
 const LARGE_REPORT_THRESHOLD_DAYS = parseInt(process.env.LARGE_REPORT_THRESHOLD_DAYS || '30', 10);
 
 function getDaysBetween(startDate, endDate) {
@@ -25,7 +29,11 @@ function getDaysBetween(startDate, endDate) {
   return Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-async function getReport(req, res, next) {
+function getReport(req, res, next) {
+  return validateReportQuery(req, res, () => generateRequestedReport(req, res, next));
+}
+
+async function generateRequestedReport(req, res, next) {
   try {
     const { startDate, endDate, format = 'json', schema_version, groupBy } = req.query;
     const isAsync = req.query.async === true || req.query.async === 'true';

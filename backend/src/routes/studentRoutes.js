@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const router = express.Router();
 const { requireVersion } = require('../middleware/optimisticLock');
 const {
@@ -24,7 +26,7 @@ const {
 } = require('../controllers/studentController');
 const { resubscribeReminders } = require('../controllers/reminderController');
 const { getImportJobStatus } = require('../controllers/importJobController');
-const { validateRegisterStudent, validateStudentIdParam, validatePagination, validateUpdateStudent } = require('../middleware/validate');
+const { validateRegisterStudent, validateStudentIdParam, validateUpdateStudent } = require('../middleware/validate');
 const { resolveSchool } = require('../middleware/schoolContext');
 const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
@@ -268,7 +270,7 @@ router.get('/import/:jobId', requireAdminAuth, getImportJobStatus);
 
 // Authentication-required routes (Issue #1040: all student financial data requires auth)
 router.get('/summary', requireSchoolAuth(), getPaymentSummary);
-router.get('/overdue', requireSchoolAuth(), getOverdueStudents);
+router.get('/overdue', requireSchoolAuth(), validateQuery(queries.pagination), getOverdueStudents);
 
 // Public routes
 router.get('/public/:studentId', validateStudentIdParam, getPublicStudentInfo);
@@ -281,7 +283,7 @@ router.get('/:studentId/payments/audit', requireAdminAuth, validateStudentIdPara
 router.post('/:studentId/reset-payment', requireAdminAuth, auditContext, validateStudentIdParam, resetPayment);
 router.post('/:studentId/reconcile', requireAdminAuth, auditContext, validateStudentIdParam, reconcileStudent);
 router.post('/:studentId/reminders/resubscribe', requireAdminAuth, auditContext, validateStudentIdParam, resubscribeReminders);
-router.get('/:studentId/fee-history', requireAdminAuth, validateStudentIdParam, getFeeHistory);
+router.get('/:studentId/fee-history', requireAdminAuth, validateStudentIdParam, validateQuery(queries.pagination), getFeeHistory);
 router.post('/:studentId/credit-adjustments', requireAdminAuth, validateStudentIdParam, auditContext, contractPaused, adjustStudentCredit);
 router.delete('/:studentId/pii', requireAdminAuth, validateStudentIdParam, auditContext, eraseStudentPiiHandler);
 router.get('/:studentId/data-export', requireAdminAuth, validateStudentIdParam, exportStudentDataHandler);

@@ -136,7 +136,7 @@ async function createSchool(req, res, next) {
 // GET /api/schools
 async function getAllSchools(req, res, next) {
   try {
-    const includeInactive = req.query.includeInactive === 'true';
+    const includeInactive = req.query.includeInactive === true;
 
     // ?includeInactive=true is admin-only — verify JWT inline
     if (includeInactive) {

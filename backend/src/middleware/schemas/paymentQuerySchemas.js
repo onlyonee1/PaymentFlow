@@ -72,6 +72,7 @@ const getAllPaymentsSchema = Joi.object({
 const FEE_CATEGORY_RE = /^[A-Za-z0-9_-]+$/;
 
 const getPaymentInstructionsQuerySchema = Joi.object({
+  asset: Joi.string().max(200).allow('').optional(),
   feeCategory: Joi.string()
     .max(100)
     .pattern(FEE_CATEGORY_RE)

@@ -242,7 +242,7 @@ async function listDeliveries(req, res, next) {
     const filter = { schoolId };
     if (req.query.endpointId) filter.endpointId = req.query.endpointId;
     if (req.query.event) filter.event = req.query.event;
-    if (req.query.success !== undefined) filter.success = req.query.success === 'true';
+    if (req.query.success !== undefined) filter.success = req.query.success;
 
     const { items, pagination } = await paginateList({
       find: (query) => WebhookDelivery.find(query).lean(),

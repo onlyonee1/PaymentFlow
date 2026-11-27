@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const router = express.Router();
 const {
   getNotifications,
@@ -18,7 +20,7 @@ router.use(resolveSchool);
 router.use(requireAdminAuth);
 
 // GET /api/notifications — paginated list (accepts ?page, ?limit, ?unreadOnly)
-router.get('/', getNotifications);
+router.get('/', validateQuery(queries.notifications), getNotifications);
 
 // GET /api/notifications/unread-count — fast count for badge display
 // Registered before /:id patterns to avoid route shadowing

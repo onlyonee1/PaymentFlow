@@ -306,8 +306,8 @@ async function getDisputes(req, res, next) {
     const filter = { schoolId };
     if (status) filter.status = status;
     if (studentId) filter.studentId = studentId;
-    if (escalationLevel) filter.escalationLevel = parseInt(escalationLevel, 10);
-    if (slaBreached === 'true') filter.slaBreachedAt = { $ne: null };
+    if (escalationLevel !== undefined) filter.escalationLevel = escalationLevel;
+    if (slaBreached) filter.slaBreachedAt = { $ne: null };
 
     const sortOption = sort === 'sla' ? { slaDeadline: 1 } : { createdAt: -1 };
     const pageNum  = Math.max(1, parseInt(page, 10) || 1);

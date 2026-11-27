@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const router  = express.Router();
 
 const { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence, addAttachment } = require('../controllers/dispute.controller');
@@ -149,7 +151,7 @@ router.use(resolveSchool);
 // auditContext uses req.admin which may not be present for unauthenticated flagDispute;
 // the audit helper in the controller gracefully skips when req.auditContext is absent.
 router.post('/',        validateCreateDispute, auditContext, flagDispute);
-router.get('/',         validatePagination, getDisputes);
+router.get('/',         validateQuery(queries.disputeList, { includeDetails: true }), getDisputes);
 router.get('/:id',      getDisputeById);
 router.post(
   '/:id/attachments',

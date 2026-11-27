@@ -6,6 +6,8 @@
  */
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const {
   getStats,
   getHealth,
@@ -30,7 +32,7 @@ router.get('/health', getHealth);
 
 // Job management
 router.get('/jobs/:jobId', getJob);
-router.get('/jobs/state/:state', getJobs);
+router.get('/jobs/state/:state', validateQuery(queries.limitOnly), getJobs);
 router.post('/jobs/:jobId/retry', manualRetry);
 router.delete('/jobs/:jobId', deleteJob);
 

@@ -100,7 +100,7 @@ async function replayWebhook(req, res, next) {
     const entry = await WebhookRetry.findById(req.params.id);
     if (!entry) return res.status(404).json({ error: 'Webhook delivery not found' });
 
-    const resetAttempts = req.query.resetAttempts !== 'false'; // default: true
+    const resetAttempts = req.query.resetAttempts ?? true; // default: true
 
     const update = {
       $set: {

@@ -30,7 +30,7 @@ async function getNotificationsHandler(req, res, next) {
 
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
     const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const parsedUnreadOnly = unreadOnly === 'true';
+    const parsedUnreadOnly = unreadOnly ?? false;
 
     const [{ notifications, total }, unreadCount] = await Promise.all([
       getNotifications(schoolId, {

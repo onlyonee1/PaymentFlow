@@ -181,6 +181,7 @@ app.use((req, res, next) => {
 app.use(jsonDepthGuard);
 app.use(sanitizeBody);
 app.use(deduplicateQueryParams);
+app.use('/api', validateQuery(tenantQuery));
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({
   circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 30000, halfOpenSuccessThreshold: 2 },

@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const { validateQuery } = require('../middleware/validateQuery');
+const queries = require('../middleware/schemas/routeQuerySchemas');
 const router = express.Router();
 
 const { createRule, getRules, deleteRule } = require('../controllers/sourceValidationRuleController');
@@ -21,7 +23,7 @@ const { auditContext } = require('../middleware/auditContext');
 router.use(resolveSchool);
 
 router.post('/',      requireAdminAuth, auditContext, createRule);
-router.get('/',       requireAdminAuth, getRules);
+router.get('/',       requireAdminAuth, validateQuery(queries.sourceRules), getRules);
 router.delete('/:id', requireAdminAuth, auditContext, deleteRule);
 
 module.exports = router;

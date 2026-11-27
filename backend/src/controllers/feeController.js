@@ -53,7 +53,7 @@ async function createFeeStructure(req, res, next) {
 
 async function getAllFeeStructures(req, res, next) {
   try {
-    const includeDeleted = req.query.includeDeleted === 'true';
+    const includeDeleted = req.query.includeDeleted === true;
     const isAdmin = Boolean(req.admin);
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
@@ -97,7 +97,7 @@ async function deleteFeeStructure(req, res, next) {
     const Student = require('../models/studentModel');
     const affectedCount = await Student.countDocuments({ schoolId: req.schoolId, class: className, feePaid: false, deletedAt: null });
 
-    if (affectedCount > 0 && req.query.force !== 'true')
+    if (affectedCount > 0 && !req.query.force)
       return next(Object.assign(new Error(`${affectedCount} student(s) in class ${className} have unpaid fees. Use ?force=true to deactivate anyway.`), { code: 'CONFLICT', status: 409, details: { affectedCount } }));
 
     const fee = await FeeStructure.findOneAndUpdate({ schoolId: req.schoolId, className }, { isActive: false }, { new: true });

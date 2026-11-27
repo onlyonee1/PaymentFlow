@@ -112,7 +112,7 @@ async function getRules(req, res, next) {
     // Always scope by schoolId — tenant isolation
     const filter = { schoolId: req.schoolId };
     if (req.query.type) filter.type = req.query.type;
-    if (req.query.isActive !== undefined) filter.isActive = req.query.isActive === 'true';
+    if (req.query.isActive !== undefined) filter.isActive = req.query.isActive;
 
     const rules = await SourceValidationRule.find(filter).sort({ priority: 1, createdAt: 1 });
     res.json(rules);
