@@ -1,4 +1,3 @@
-import { useState, useEffect, useRef } from "react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -9,6 +8,7 @@ import { useTheme } from "../pages/_app";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 import { prefetchDashboardData } from "../hooks/useDashboardLoader";
 import { SUPPORTED_LOCALES, LOCALE_NAMES } from "../i18n";
+import { PriceTicker } from "./PriceFeedWidget";
 
 /**
  * Navigation link definitions — Issue #357: role-aware navigation.
@@ -508,26 +508,30 @@ export default function Navbar() {
               <NavLink
                 key={href}
                 href={href}
-                role="listitem"
-                className={`nav-link${pathname === href ? " active" : ""}`}
-                aria-current={pathname === href ? "page" : undefined}
-                onMouseEnter={href === "/dashboard" ? prefetchDashboardData : undefined}
-                onFocus={href === "/dashboard" ? prefetchDashboardData : undefined}
-              >
-                {t(i18nKey)}
-              </Link>
+                label={t(i18nKey)}
+                active={pathname === href}
+                locked={locked}
+                lockedTooltip={lockedTooltip}
+              />
             ))}
           </div>
 
           <div className="nav-right">
+            <PriceTicker />
             <select
               className="nav-lang"
-              value={i18n.resolvedLanguage || "en"}
-              onChange={(e) => i18n.changeLanguage(e.target.value)}
-              aria-label={t("nav.language")}
+              value={i18n.resolvedLanguage || i18n.language || "en"}
+              onChange={(e) => {
+                const lng = e.target.value;
+                i18n.changeLanguage(lng);
+                try {
+                  localStorage.setItem("locale", lng);
+                } catch {}
+              }}
+              aria-label={t("nav.language", "Language")}
             >
               {SUPPORTED_LOCALES.map((lng) => (
-                <option key={lng} value={lng}>{LOCALE_NAMES[lng]}</option>
+                <option key={lng} value={lng}>{LOCALE_NAMES[lng] || lng}</option>
               ))}
             </select>
             <button
@@ -538,6 +542,7 @@ export default function Navbar() {
               {dark ? <SunIcon /> : <MoonIcon />}
             </button>
             {isAdmin && <NotificationCenter />}
+            {isAdmin && <Link href="/account-settings" className="nav-pill">Account settings</Link>}
             {isAdmin
               ? <button className="nav-pill" onClick={logout}>{t("actions.signOut")}</button>
               : <Link href="/login" className="nav-pill nav-pill-accent">{t("nav.adminLogin")}</Link>
@@ -590,6 +595,7 @@ export default function Navbar() {
           )
         ))}
         <div className="nav-mobile-divider" />
+        {isAdmin && <Link href="/account-settings" onClick={closeMenu}>Account settings</Link>}
         {isAdmin
           ? <button className="nav-pill" onClick={() => { logout(); setOpen(false); }} style={{ marginTop: "0.25rem", width: "fit-content" }}>{t("actions.signOut")}</button>
           : <Link href="/login" className="nav-pill nav-pill-accent" style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>{t("nav.adminLogin")}</Link>
