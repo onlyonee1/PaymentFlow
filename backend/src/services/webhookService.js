@@ -116,6 +116,34 @@ function generateSignatureV2(timestamp, deliveryId, rawBody, secret) {
   return crypto.createHmac('sha256', secret).update(signingBase).digest('hex');
 }
 
+/**
+ * SDK helper for consumers to verify an inbound webhook delivery.
+ * Checks the timestamp tolerance (300 s) and the HMAC-SHA256 signature.
+ *
+ * @param {string|Buffer} payload  Raw request body (exact bytes received)
+ * @param {object} headers         Request headers (lowercase keys)
+ * @param {string} secret          HMAC secret
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+function verifyWebhookSignature(payload, headers, secret) {
+  const TOLERANCE_S = 300;
+  const ts = parseInt(headers['x-stellaredupay-timestamp'] || headers['X-StellarEduPay-Timestamp'], 10);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > TOLERANCE_S) {
+    return { valid: false, reason: 'timestamp out of tolerance' };
+  }
+  const sigHeader = headers['x-stellaredupay-signature'] || headers['X-StellarEduPay-Signature'] || '';
+  const [, provided] = sigHeader.split('sha256=');
+  if (!provided) return { valid: false, reason: 'missing signature' };
+  const body = typeof payload === 'string' ? payload : payload.toString();
+  const expected = crypto.createHmac('sha256', secret).update(body).digest('hex');
+  const expectedBuf = Buffer.from(expected, 'hex');
+  let providedBuf;
+  try { providedBuf = Buffer.from(provided, 'hex'); } catch { return { valid: false, reason: 'invalid signature format' }; }
+  if (expectedBuf.length !== providedBuf.length) return { valid: false, reason: 'signature length mismatch' };
+  if (!crypto.timingSafeEqual(expectedBuf, providedBuf)) return { valid: false, reason: 'signature mismatch' };
+  return { valid: true };
+}
+
 function verifySignature(payload, providedSignature, secret) {
   const expected = generateSignature(payload, secret);
   const expectedBuf = Buffer.from(expected, 'hex');
@@ -395,7 +423,8 @@ async function _sendToUrl({
     // #868: record success metric
     try {
       const { recordDeliverySuccess } = require('../metrics/webhookMetrics');
-      recordDeliverySuccess(event, durationMs, response.status);
+      if (schoolId) recordDeliverySuccess(event, durationMs, response.status, schoolId);
+      else recordDeliverySuccess(event, durationMs, response.status);
     } catch (_) {}
 
     if (endpointId) {
@@ -1104,6 +1133,7 @@ module.exports = {
   verifySignature,
   generateSignatureV2,
   verifySignatureV2,
+  verifyWebhookSignature,
   // Retry
   queueWebhookRetry,
   processPendingRetries,

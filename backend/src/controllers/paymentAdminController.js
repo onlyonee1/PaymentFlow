@@ -12,7 +12,7 @@ const { createReceipt, verifyReceiptSignature } = require('../services/receiptSe
 const { finalizeConfirmedPayments } = require('../services/stellarService');
 const { logAudit } = require('../services/auditService');
 const { syncDurationSeconds } = require('../metrics');
-const { syncPaymentsForSchool } = require('../services/stellarService');
+const { getProvider } = require('../services/providers/registry');
 const { initiateRefund, approveRefund, getRefundsByPayment, getRefundsBySchool } = require('../services/refundService');
 const { generateReconciliationReport } = require('../services/reconciliationService');
 const lock = require('../services/distributedLock');
@@ -50,7 +50,7 @@ async function syncAllPayments(req, res, next) {
 
   const stopSyncTimer = syncDurationSeconds.startTimer();
   try {
-    const summary = await syncPaymentsForSchool(req.school);
+    const summary = await getProvider(undefined, req.school).reconcile(req.school);
 
     if (req.auditContext) {
       await logAudit({
@@ -517,7 +517,7 @@ function streamPaymentEvents(req, res) {
   const { schoolId } = req;
 
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'private, no-store, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
@@ -615,8 +615,8 @@ async function getPaymentRefunds(req, res, next) {
     const { schoolId } = req;
     const { txHash } = req.params;
 
-    const refunds = await getRefundsByPayment(schoolId, txHash);
-    res.json({ refunds });
+    const { items: refunds, pagination } = await getRefundsByPayment(schoolId, txHash, req.query);
+    res.json({ refunds, pagination });
   } catch (err) {
     next(err);
   }
@@ -627,8 +627,8 @@ async function getSchoolRefunds(req, res, next) {
     const { schoolId } = req;
     const { status } = req.query;
 
-    const refunds = await getRefundsBySchool(schoolId, status);
-    res.json({ refunds, count: refunds.length });
+    const { items: refunds, pagination } = await getRefundsBySchool(schoolId, status, req.query);
+    res.json({ refunds, count: refunds.length, pagination });
   } catch (err) {
     next(err);
   }

@@ -35,9 +35,9 @@ function getReport(req, res, next) {
 
 async function generateRequestedReport(req, res, next) {
   try {
-    const { format, schema_version, async: isAsync } = req.query;
-    const startDate = req.query.startDate?.slice(0, 10);
-    const endDate = req.query.endDate?.slice(0, 10);
+    const { startDate, endDate, format = 'json', schema_version, groupBy } = req.query;
+    const isAsync = req.query.async === true || req.query.async === 'true';
+    const isSync = req.query.async === false || req.query.async === 'false';
     const isLargeReport = !startDate || !endDate || getDaysBetween(startDate, endDate) >= LARGE_REPORT_THRESHOLD_DAYS;
 
     // Audit report exports — exports can contain PII so they are a privileged read
@@ -61,7 +61,7 @@ async function generateRequestedReport(req, res, next) {
       });
     }
 
-    if (isAsync && isLargeReport) {
+    if (isAsync || (isLargeReport && !isSync)) {
       try {
         const job = await enqueueReportJob({
           schoolId: req.schoolId,
@@ -70,6 +70,7 @@ async function generateRequestedReport(req, res, next) {
           startDate,
           endDate,
           timezone: (await School.findOne({ schoolId: req.schoolId }).lean())?.timezone || 'UTC',
+          ...(groupBy ? { groupBy } : {}),
           schemaVersion: schema_version || (format === 'accounting_csv' ? ACCOUNTING_SCHEMA_VERSION : null),
         });
 
@@ -96,9 +97,8 @@ async function generateRequestedReport(req, res, next) {
 
     if (format === 'accounting_csv') {
       const dataVersion = await getDataVersion(req.schoolId);
-      const timezone = (await School.findOne({ schoolId: req.schoolId }).lean())?.timezone || 'UTC';
-      const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
-      let cached = get(cacheKey);
+      const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone) + ':accounting';
+      const cached = get(cacheKey);
       if (cached !== undefined) {
         const csv = cached.csv;
         const version = cached.schemaVersion;
@@ -110,7 +110,7 @@ async function generateRequestedReport(req, res, next) {
         else if (e) filename = `accounting-v${version || schema_version || ACCOUNTING_SCHEMA_VERSION}-to-${e}.csv`;
         else filename = `accounting-v${version || schema_version || ACCOUNTING_SCHEMA_VERSION}-all-time.csv`;
         res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
         res.setHeader('X-Export-Schema-Version', String(ACCOUNTING_SCHEMA_VERSION));
         return res.send(csv);
       }
@@ -126,19 +126,18 @@ async function generateRequestedReport(req, res, next) {
       else if (e) filename = `accounting-v${schemaVersion}-to-${e}.csv`;
       else filename = `accounting-v${schemaVersion}-all-time.csv`;
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
       res.setHeader('X-Export-Schema-Version', String(schemaVersion));
       return res.send(csv);
     }
 
-    const school = await School.findOne({ schoolId: req.schoolId }).lean();
-    const timezone = school?.timezone || 'UTC';
     const dataVersion = await getDataVersion(req.schoolId);
-    const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
-    let report = get(cacheKey);
+    const baseKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
+    const cacheKey = groupBy ? `${baseKey}:${groupBy}` : baseKey;
+    let report = groupBy === 'confirmedAt' ? undefined : get(cacheKey);
     if (report === undefined) {
-      report = await generateReport({ schoolId: req.schoolId, startDate, endDate, timezone });
-      set(cacheKey, report, TTL.REPORT);
+      report = await generateReport({ schoolId: req.schoolId, startDate, endDate, timezone, ...(groupBy ? { groupBy } : {}) });
+      if (groupBy !== 'confirmedAt') set(cacheKey, report, TTL.REPORT);
     }
 
     if (format === 'csv') {
@@ -150,7 +149,7 @@ async function generateRequestedReport(req, res, next) {
       else if (e) filename = `report-all-time-to-${e}.csv`;
       else filename = 'report-all-time.csv';
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
       return res.send(reportToCsv(report));
     }
 
@@ -174,7 +173,7 @@ async function getDashboard(req, res, next) {
 async function getReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });
@@ -200,7 +199,7 @@ async function getReportJob(req, res, next) {
 async function downloadReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });

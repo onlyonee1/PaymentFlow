@@ -101,6 +101,26 @@
           "unit": "short"
         }
       }
+    },
+    {
+      "id": 10,
+      "title": "Confirmed Payments per UTC Day",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 30, "w": 24, "h": 8 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "payment-rollups" },
+      "targets": [{
+        "refId": "A",
+        "type": "json",
+        "source": "url",
+        "parser": "backend",
+        "format": "timeseries",
+        "url": "/metrics/payment-history?from=${__from}&to=${__to}",
+        "url_options": { "method": "GET" },
+        "columns": [
+          { "selector": "time", "text": "Time", "type": "timestamp" },
+          { "selector": "paymentCount", "text": "Payments", "type": "number" }
+        ]
+      }]
     }
   ]
 }

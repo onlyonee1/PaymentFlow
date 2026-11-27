@@ -33,6 +33,7 @@ const refundSchema = new mongoose.Schema(
   }
 );
 
+refundSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 refundSchema.index({ schoolId: 1, originalTxHash: 1 });
 refundSchema.index({ schoolId: 1, studentId: 1 });
 refundSchema.index({ schoolId: 1, status: 1 });

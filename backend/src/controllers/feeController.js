@@ -1,8 +1,10 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const mongoose = require('mongoose');
 const FeeStructure = require('../models/feeStructureModel');
-const { get, set, del, KEYS, TTL } = require('../cache');
+const { del, KEYS } = require('../cache');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
 const { validateDecimalAmount, toDecimalString } = require('../utils/decimalPrecision');
@@ -83,13 +85,9 @@ async function getAllFeeStructures(req, res, next) {
 async function getFeeByClass(req, res, next) {
   try {
     const { className } = req.params;
-    const cached = get(KEYS.feeByClass(className));
-    if (cached !== undefined) return res.json(cached);
-
     const fee = await FeeStructure.findOne({ schoolId: req.schoolId, className, deletedAt: null, isActive: true });
     if (!fee) return next(Object.assign(new Error(`No fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-    set(KEYS.feeByClass(className), fee, TTL.FEES);
-    res.json(fee);
+    withVersion(res, fee).json(fee);
   } catch (err) { next(err); }
 }
 
@@ -129,11 +127,14 @@ async function updateFeeStructure(req, res, next) {
     if (academicYear   !== undefined) updateFields.academicYear   = academicYear;
     if (paymentDeadline !== undefined) updateFields.paymentDeadline = paymentDeadline;
 
-    const before = await FeeStructure.findOne({ schoolId: req.schoolId, className, isActive: true }).lean();
-    const fee = await FeeStructure.findOneAndUpdate({ schoolId: req.schoolId, className, isActive: true }, updateFields, { new: true, runValidators: true });
-    if (!fee) return next(Object.assign(new Error(`No active fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-
-    del(KEYS.feesAll(), KEYS.feeByClass(className));
+    const target = { schoolId: req.schoolId, className, isActive: true };
+    const before = await FeeStructure.findOne(target).lean();
+    const writeFee = (session) => FeeStructure.findOneAndUpdate(
+      { ...target, ...versionFilter(req.expectedVersion) },
+      { $set: updateFields, $inc: { __v: 1 } },
+      { new: true, runValidators: true, ...(session && { session }) },
+    );
+    let fee;
 
     let studentsUpdated = 0;
     if (cascadeToStudents === true) {
@@ -146,6 +147,8 @@ async function updateFeeStructure(req, res, next) {
       });
       try {
         await session.withTransaction(async () => {
+          fee = await writeFee(session);
+          if (!fee) return;
           const students = await Student.find({ schoolId: req.schoolId, class: className, deletedAt: null }).session(session);
 
           if (students.length > 0) {
@@ -166,8 +169,9 @@ async function updateFeeStructure(req, res, next) {
                 updateOne: {
                   filter: { _id: s._id, schoolId: req.schoolId },
                   update: {
+                    $inc: { __v: 1 },
                     $set: {
-                      feeAmount,
+                      feeAmount: normalisedFeeAmount,
                       totalPaid: amountPaid,
                       remainingBalance,
                       feePaid: amountPaid >= feeAmount,
@@ -198,9 +202,14 @@ async function updateFeeStructure(req, res, next) {
           }
         });
       } finally {
-        session.endSession();
+        await session.endSession();
       }
+    } else {
+      fee = await writeFee();
     }
+
+    if (!fee) return staleOrMissing(res, next, FeeStructure.findOne(target));
+    del(KEYS.feesAll(), KEYS.feeByClass(className));
 
     await audit(req, 'fee_update', className, {
       before: before ? { feeAmount: before.feeAmount, description: before.description, academicYear: before.academicYear, paymentDeadline: before.paymentDeadline } : null,
@@ -208,7 +217,7 @@ async function updateFeeStructure(req, res, next) {
       cascadeToStudents,
       studentsUpdated,
     });
-    res.json({ fee, studentsUpdated });
+    withVersion(res, fee).json({ fee, studentsUpdated });
   } catch (err) { next(err); }
 }
 

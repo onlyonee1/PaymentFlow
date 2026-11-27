@@ -93,7 +93,7 @@ function InfoRow({ label, children, mono }) {
   );
 }
 
-export default function VerifyPayment({ disabled = false }) {
+export default function VerifyPayment({ disabled = false, schoolSlug }) {
   const { t } = useTranslation();
   const [txHash, setTxHash]               = useState("");
   const [result, setResult]               = useState(null);
@@ -119,7 +119,7 @@ export default function VerifyPayment({ disabled = false }) {
     setResult(null);
     setLoading(true);
     try {
-      const res = await verifyPayment(txHash.trim(), idempotencyKeyRef.current);
+      const res = await verifyPayment(txHash.trim(), idempotencyKeyRef.current, ...(schoolSlug ? [schoolSlug] : []));
       setResult(res.data);
       // Confirmed success — clear the key so a subsequent submission (new
       // transaction hash) gets a fresh key rather than reusing the old one.

@@ -1,5 +1,7 @@
 'use strict';
 
+const { paginateList } = require('../utils/listCursor');
+
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const WebhookEndpoint = require('../models/webhookEndpointModel');
@@ -92,7 +94,13 @@ async function listEndpoints(req, res, next) {
     const schoolId = _callerSchoolId(req);
     if (!schoolId) return res.status(400).json({ error: 'schoolId required', code: 'MISSING_SCHOOL_ID' });
 
-    const endpoints = await WebhookEndpoint.find({ schoolId }).select('-secret').sort({ createdAt: -1 }).lean();
+    const { items: endpoints, pagination } = await paginateList({
+      find: (query) => WebhookEndpoint.find(query).select('-secret').lean(),
+      scope: 'webhook-endpoints',
+      filter: { schoolId },
+      cursor: req.query.cursor,
+      limit: Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20)),
+    });
     const endpointIds = endpoints.map((endpoint) => endpoint._id);
     const deliveryStats = endpointIds.length
       ? await WebhookDelivery.aggregate([
@@ -124,7 +132,7 @@ async function listEndpoints(req, res, next) {
         },
       };
     });
-    return res.json({ endpoints: withHealth });
+    return res.json({ endpoints: withHealth, ...pagination });
   } catch (err) {
     next(err);
   }
@@ -229,21 +237,21 @@ async function listDeliveries(req, res, next) {
     const schoolId = _callerSchoolId(req);
     if (!schoolId) return res.status(400).json({ error: 'schoolId required', code: 'MISSING_SCHOOL_ID' });
 
-    const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const skip  = (page - 1) * limit;
 
     const filter = { schoolId };
     if (req.query.endpointId) filter.endpointId = req.query.endpointId;
     if (req.query.event) filter.event = req.query.event;
     if (req.query.success !== undefined) filter.success = req.query.success;
 
-    const [items, total] = await Promise.all([
-      WebhookDelivery.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      WebhookDelivery.countDocuments(filter),
-    ]);
-
-    return res.json({ total, page, limit, items });
+    const { items, pagination } = await paginateList({
+      find: (query) => WebhookDelivery.find(query).lean(),
+      scope: 'webhook-deliveries',
+      filter,
+      cursor: req.query.cursor,
+      limit,
+    });
+    return res.json({ items, ...pagination });
   } catch (err) {
     next(err);
   }

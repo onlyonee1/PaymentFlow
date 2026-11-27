@@ -19,4 +19,6 @@ router.get('/jobs/:jobId', requireFinanceRole, getReportJob);
 router.get('/jobs/:jobId/download', requireFinanceRole, downloadReportJob);
 router.get('/', requireFinanceRole, getReport);
 
+router.post('/', requireFinanceRole, validate(reportQuerySchema), getReport);
+
 module.exports = router;

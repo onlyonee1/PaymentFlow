@@ -16,7 +16,7 @@
 
 import '@testing-library/jest-dom';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useDashboardLoader } from '../frontend/src/hooks/useDashboardLoader';
+import { useDashboardLoader, invalidateDashboardData } from '../frontend/src/hooks/useDashboardLoader';
 import * as api from '../frontend/src/services/api';
 
 jest.mock('../frontend/src/services/api');
@@ -30,13 +30,12 @@ const SUMMARY_DATA = {
 
 const STUDENTS_DATA = {
   students: [{ studentId: 'STU001', name: 'Alice', class: '5A' }],
-  pages: 2,
-  total: 21,
+  pagination: { nextCursor: 'page-two', prevCursor: null, hasMore: true },
 };
 
 function defaultParams(overrides = {}) {
   return {
-    page: 1,
+    cursor: null,
     search: '',
     statusFilter: 'all',
     classFilter: '',
@@ -47,6 +46,7 @@ function defaultParams(overrides = {}) {
 describe('Issue #18 — useDashboardLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    invalidateDashboardData();
     // Default: both requests succeed.
     api.getPaymentSummary.mockResolvedValue({ data: SUMMARY_DATA });
     api.getStudents.mockResolvedValue({ data: STUDENTS_DATA });
@@ -64,18 +64,17 @@ describe('Issue #18 — useDashboardLoader', () => {
 
     expect(result.current.summary).toEqual(SUMMARY_DATA);
     expect(result.current.students).toEqual(STUDENTS_DATA.students);
-    expect(result.current.pages).toBe(2);
-    expect(result.current.total).toBe(21);
+    expect(result.current.pagination).toEqual(STUDENTS_DATA.pagination);
   });
 
-  test('getStudents is called with correct page/page-size/filters', async () => {
+  test('getStudents is called with correct cursor/page-size/filters', async () => {
     renderHook(() =>
-      useDashboardLoader(defaultParams({ page: 2, search: 'alice', statusFilter: 'paid', classFilter: '5A' }))
+      useDashboardLoader(defaultParams({ cursor: 'page-two', search: 'alice', statusFilter: 'paid', classFilter: '5A' }))
     );
 
     await waitFor(() => {
       expect(api.getStudents).toHaveBeenCalledWith(
-        2, 20,
+        'page-two', 20,
         { search: 'alice', status: 'paid', className: '5A' },
         expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
@@ -222,6 +221,7 @@ describe('Issue #18 — useDashboardLoader', () => {
     const { result } = renderHook(() => useDashboardLoader(defaultParams()));
 
     jest.clearAllMocks();
+    invalidateDashboardData();
     api.getPaymentSummary.mockResolvedValue({ data: SUMMARY_DATA });
     api.getStudents.mockResolvedValue({ data: STUDENTS_DATA });
 
@@ -235,19 +235,19 @@ describe('Issue #18 — useDashboardLoader', () => {
 
   // ── Pagination/filter re-fetch ────────────────────────────────────────────
 
-  test('loadStudents is re-run when page parameter changes', async () => {
-    let page = 1;
+  test('loadStudents is re-run when the cursor changes', async () => {
+    let cursor = null;
     const { rerender } = renderHook(() =>
-      useDashboardLoader(defaultParams({ page }))
+      useDashboardLoader(defaultParams({ cursor }))
     );
 
     await waitFor(() => expect(api.getStudents).toHaveBeenCalledTimes(1));
 
-    page = 2;
+    cursor = 'page-two';
     rerender();
 
     await waitFor(() => expect(api.getStudents).toHaveBeenCalledTimes(2));
-    const [calledPage] = api.getStudents.mock.calls[1];
-    expect(calledPage).toBe(2);
+    const [calledCursor] = api.getStudents.mock.calls[1];
+    expect(calledCursor).toBe('page-two');
   });
 });

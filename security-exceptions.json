@@ -1,5 +1,5 @@
 {
-  "description": "Machine-readable record of (a) high/critical npm audit findings that are deferred rather than fixed (read by scripts/check-dependency-audit.js), (b) known-safe matches for the repo secret scanner (read by scripts/scan-repo-secrets.js), and (c) approved exceptions for container image CVEs found by Trivy. See docs/dependency-triage.md, docs/security.md, and docs/container-security.md for the respective processes.",
+  "description": "Machine-readable record of (a) high/critical npm audit findings that are deferred rather than fixed (read by scripts/check-dependency-audit.js), (b) known-safe matches for the repo secret scanner (read by scripts/scan-repo-secrets.js), and (c) approved exceptions for container image CVEs found by Trivy. Entries require security review and periodic removal. See SECURITY.md, docs/dependency-triage.md, docs/security.md, and docs/container-security.md for the respective processes.",
   "container_scan_exceptions": {
     "_comment": "Each entry in the 'entries' array represents an approved exception for a container image CVE found by Trivy. Required fields: cve_id (e.g. 'CVE-2024-12345'), image (e.g. 'paymentflow/backend' or 'paymentflow/frontend'), owner (name and email of the person who raised the exception), expires (ISO date, max 90 days from creation — set to 'EXAMPLE-REMOVE' on example entries), justification (why this cannot be fixed immediately and why the risk is acceptable), risk_accepted_by (name of the engineering lead or security officer who signed off). Expired exceptions are not honoured — the build will block again until renewed or the CVE is fixed. Also add the CVE to .trivyignore to prevent the workflow from failing while the exception is active.",
     "entries": [
@@ -55,6 +55,60 @@
       "file": "tests/scanRepoSecrets.test.js",
       "line": 59,
       "reason": "BIP-39 mnemonic test fixture (all real BIP-39 words) used to exercise the mnemonic detector in unit tests."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/src/middleware/rateLimiter.js",
+      "line": 151,
+      "reason": "Inline code comment describing rate-limiter keying fallback behaviour; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/api-spec.md",
+      "line": 442,
+      "reason": "API documentation prose describing the school wallet address field; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/k8s-resource-sizing.md",
+      "line": 119,
+      "reason": "Documentation prose describing cluster scheduling validation steps; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/load-simulation.md",
+      "line": 36,
+      "reason": "Documentation prose describing load-simulation model assumptions; not a mnemonic phrase."
+    },
+    {
+      "type": "stellar-secret",
+      "file": "docs/quick-start.md",
+      "line": 106,
+      "reason": "Placeholder SXXX... key in quick-start documentation — all X characters, not a valid or real Stellar secret key."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/runbooks/asset-whitelist-upgrade.md",
+      "line": 14,
+      "reason": "Runbook prose describing decimal precision rejection rules; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/audit-privileged-mutations.test.js",
+      "line": 121,
+      "reason": "Test comment explaining audit-mock verification strategy; not a mnemonic phrase."
+    },
+    {
+      "type": "stellar-secret",
+      "file": "tests/deadLetterHandling.test.js",
+      "line": 86,
+      "reason": "Synthetic test fixture used to exercise the Stellar secret key redaction logic in sanitizeJobPayload — structurally valid but non-existent keypair, committed intentionally to verify the redactor works."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/loadsim/horizonPollLoadModel.test.js",
+      "line": 12,
+      "reason": "Test description string in a test() call; not a mnemonic phrase."
     }
   ]
 }

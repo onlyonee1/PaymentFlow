@@ -77,38 +77,40 @@ HTTP 400
 
 ## Request Body Size Limits
 
-To protect against oversized payload attacks, the API enforces JSON body size limits:
+To protect against oversized payload attacks, the API enforces these request body limits:
 
 | Endpoint | Limit |
 |----------|-------|
-| JSON endpoints | `50kb` |
+| JSON and URL-encoded requests | `100kb` ceiling |
 | Multipart CSV imports | `5mb` per uploaded CSV file |
 
 Requests that exceed the applicable limit are rejected before reaching any handler:
 
 ```json
 HTTP 413
-{ "errors": [{ "field": "body", "message": "Request body must not exceed 50KB" }], "code": "PAYLOAD_TOO_LARGE" }
+{ "errors": [{ "field": "body", "message": "Request body exceeds the configured size limit" }], "code": "PAYLOAD_TOO_LARGE" }
 ```
 
-The JSON limit is fixed. Multipart imports use the streaming file-size limit and do not use the JSON parser.
+Set `MAX_BODY_SIZE` to lower the JSON and URL-encoded limit. Multipart CSV imports use a separate streaming file-size limit. The API strips harmless markup from parsed text fields and rejects disallowed markup with HTTP 400 before storage.
 
 ## Cursor Pagination
 
-`GET /api/payments`, `GET /api/students`, and `GET /api/audit-logs` use cursor pagination by default. The opaque `nextCursor` is bound to the active filters and expires after one hour. Pass it back as `cursor` to retrieve the next page. Cursor responses include `hasPreviousPage` and `hasNextPage`, and do not expose total row counts.
+The paginated payment, student, audit-log and webhook lists accept `limit` and `cursor`. Omit `cursor` for the first page. Send either `nextCursor` or `prevCursor` as `cursor` with the same filters to navigate. `hasMore` indicates another page in the forward direction. The lists omit total record counts.
+
+Payment and student lists return pagination metadata in `pagination`. Audit and webhook lists return the same fields alongside the records.
 
 ```json
 {
   "pagination": {
     "limit": 50,
-    "nextCursor": "eyJkYXRhIjoiLi4uIiwic2lnbmF0dXJlIjoiLi4uIn0",
-    "hasPreviousPage": false,
-    "hasNextPage": true
+    "nextCursor": "<opaque token>",
+    "prevCursor": null,
+    "hasMore": true
   }
 }
 ```
 
-Malformed, expired, or filter-mismatched cursors return HTTP 400 with code `INVALID_CURSOR`. During the deprecation period, explicitly supplying `page` selects the legacy offset response, which may include a total count and is unstable when records change.
+Cursors are signed with a key derived from `JWT_SECRET`, expire after one hour, and are scoped to the tenant, endpoint and filters. Malformed, expired, tampered and out-of-scope cursors return HTTP 400 with code `INVALID_CURSOR`. Numeric page and offset parameters no longer select a position.
 
 ---
 
@@ -264,7 +266,7 @@ X-School-ID: SCH-3F2A
 |---|---|---|---|
 | `page` | number | `1` | Page number |
 | `limit` | number | `50` | Results per page (max 200) |
-| `cursor` | string | — | Cursor from the previous response; omit `page` when using it |
+| `cursor` | string | — | Cursor from the previous response |
 | `class` | string | — | Filter by exact class name (e.g. `Grade 5A`) |
 | `status` | string | — | Filter by payment status: `paid`, `unpaid`, or `partial` |
 | `search` | string | — | Case-insensitive match on `name` or `studentId` |
@@ -606,7 +608,7 @@ Promotes `pending_confirmation` payments to `confirmed` once the ledger threshol
 GET /api/payments?limit=50
 X-School-ID: SCH-3F2A
 ```
-Use `cursor=<nextCursor>` from the preceding response to continue. **Response `200`** includes `payments` and cursor metadata without a total count. Explicit `page` selects legacy offset pagination during deprecation.
+Use `cursor=<nextCursor>` from the preceding response to continue. **Response `200`** includes `payments` and cursor metadata without a total count.
 
 ### Get payment summary
 ```
@@ -1654,3 +1656,16 @@ Authorization: Bearer <token>
 | `401` | `MISSING_AUTH_TOKEN` | No Bearer token provided |
 | `401` | `INVALID_AUTH_TOKEN` | Token is invalid or expired |
 | `403` | `INSUFFICIENT_ROLE` | Token does not carry `role: admin` |
+
+### Payment summary date grouping
+
+`GET /api/reports?groupBy=confirmedAt` groups successful payments by their
+confirmation date in the school timezone. Pending and successful payments
+without a confirmation timestamp are shown under **Pending Confirmation**
+(`bucket: "__unconfirmed"` in JSON). Date filters use the creation date for
+that bucket. Its amounts and counts are excluded from the collected totals.
+CSV exports use the same label in the daily breakdown.
+
+`groupBy=createdAt` groups successful payments by creation date. Omitting
+`groupBy` preserves the existing successful-payment report and its date
+filters. Both options work for JSON and summary CSV, including queued reports.

@@ -128,7 +128,7 @@ export default function SourceValidationRules() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit}>
+          <form id="source-rule-form" onSubmit={handleSubmit}>
             <div className="form-group">
               <label className="form-label">Stellar Public Key *</label>
               <input
