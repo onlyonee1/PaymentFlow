@@ -338,11 +338,17 @@ connectDatabase().then(async () => {
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
     startJobRecoveryScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').startSignerRotationWorker();
+    }
   };
 
   const stopLeaderSchedulers = () => {
     logger.info('[Leader] Stopping leader-only schedulers');
     stopConsistencyScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').stopSignerRotationWorker();
+    }
     stopReminderScheduler();
     stopSessionCleanupScheduler();
     stopReconciliationScheduler();
