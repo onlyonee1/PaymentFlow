@@ -80,7 +80,7 @@ function normalizeAmount(rawAmount) {
  *   - MEMO_NONE: No memo provided (MISSING_MEMO)
  *   - MEMO_ID, MEMO_HASH, MEMO_RETURN: Unsupported types (UNSUPPORTED_MEMO_TYPE)
  */
-async function extractValidPayment(tx, walletAddress) {
+async function extractValidPayment(tx, walletAddress, schoolId) {
   // #840 — A transaction can be included in a ledger yet have
   // `successful === false` (e.g. a failed operation). Such transactions must
   // NEVER be credited. Require an explicit success flag rather than merely
@@ -89,6 +89,27 @@ async function extractValidPayment(tx, walletAddress) {
 
   // Unwrap fee-bump transaction to get the inner transaction
   const innerTx = tx.inner_transaction || tx;
+
+  let inboundOperations;
+  if (schoolId) {
+    const { recordRejectedPayment } = require("./rejectedStellarPaymentService");
+    const operations = await withStellarRetry(
+      () => (typeof innerTx.operations === "function" ? innerTx : tx).operations(),
+      { label: "extractValidPayment.operations", context: `Transaction ${tx.hash} operations` },
+    );
+    inboundOperations = [];
+    for (const [index, op] of operations.records.entries()) {
+      if (!["payment", "path_payment_strict_send", "path_payment_strict_receive"].includes(op.type) || op.to !== walletAddress) continue;
+      if (detectAsset(op)) {
+        inboundOperations.push(op);
+        continue;
+      }
+      const reason = op.asset_type === "credit_alphanum4" && op.asset_code === "USDC"
+        ? "INVALID_ISSUER"
+        : "UNSUPPORTED_ASSET";
+      await recordRejectedPayment(schoolId, tx, op, reason, String(op.id || op.paging_token || index));
+    }
+  }
 
   // Check memo type and handle accordingly
   const memoType = innerTx.memo_type || 'none';
@@ -118,7 +139,7 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
 
-  const ops = await withStellarRetry(() => innerTx.operations(), {
+  const ops = inboundOperations ? { records: inboundOperations } : await withStellarRetry(() => innerTx.operations(), {
     label: "extractValidPayment.operations",
     context: `Transaction ${tx.hash} operations`,
   });
@@ -688,7 +709,7 @@ async function syncPaymentsForSchool(school) {
 
       summary.new++;
 
-      const valid = await extractValidPayment(tx, stellarAddress);
+      const valid = await extractValidPayment(tx, stellarAddress, schoolId);
       if (!valid) {
         // Log if the tx was skipped due to wrong destination
         if (tx.successful) {

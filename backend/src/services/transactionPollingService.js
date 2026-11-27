@@ -103,7 +103,7 @@ async function processTransaction(tx, school, fencingToken) {
   _incFunnel('received', schoolId);
 
   // Extract and validate payment
-  const valid = await extractValidPayment(tx, stellarAddress);
+  const valid = await extractValidPayment(tx, stellarAddress, schoolId);
   if (!valid) {
     return { processed: false, reason: 'invalid_payment' };
   }
