@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { normalizeSchoolSlug, isValidSchoolSlug } = require('../utils/schoolSlug');
 const StellarSdk = require('@stellar/stellar-sdk');
 const { encryptWebhookSecret, decryptWebhookSecret } = require('../services/webhookSecretEncryption');
 
@@ -19,7 +20,16 @@ const schoolSchema = new mongoose.Schema(
   {
     schoolId:       { type: String, required: true, unique: true, index: true },
     name:           { type: String, required: true, trim: true },
-    slug:           { type: String, required: true, unique: true, index: true, lowercase: true, trim: true },
+    slug: {
+      type: String,
+      required: true,
+      unique: true,
+      set(value) {
+        // Query filters must still be able to address a stored legacy slug.
+        return this instanceof mongoose.Query ? value : normalizeSchoolSlug(value);
+      },
+      validate: [isValidSchoolSlug, 'slug must contain 2–60 URL-safe characters'],
+    },
     stellarAddress: {
       type: String,
       required: true,
