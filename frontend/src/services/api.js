@@ -5,11 +5,29 @@ import { isRetryable } from '../utils/retryClassification';
 
 const TIMEOUT_MS = parseInt(getEnvVar('NEXT_PUBLIC_REQUEST_TIMEOUT_MS', '15000'), 10);
 
+const API_BASE_URL = getEnvVar('NEXT_PUBLIC_API_URL', 'http://localhost:5000/api');
+
 const api = axios.create({
-  baseURL: getEnvVar('NEXT_PUBLIC_API_URL', 'http://localhost:5000/api'),
+  baseURL: API_BASE_URL,
   timeout: TIMEOUT_MS,
   withCredentials: true,
 });
+
+// Start a W3C trace at the API boundary when the caller has no parent.
+function attachTraceContext(config) {
+  if (typeof window === 'undefined' || !window.crypto?.getRandomValues) return;
+  const backend = new URL(API_BASE_URL, window.location.href);
+  const base = new URL(config.baseURL || API_BASE_URL, window.location.href);
+  const target = new URL(config.url || '', base);
+  if (target.origin !== backend.origin) return;
+  if (Object.keys(config.headers || {}).some((name) => name.toLowerCase() === 'traceparent')) return;
+
+  const randomHex = (length) => {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(length));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  };
+  config.headers = { ...config.headers, traceparent: `00-${randomHex(16)}-${randomHex(8)}-00` };
+}
 
 // Attach the school context header to every request unless one is already set.
 // Derives school ID from authenticated user session (stored in localStorage after login).
@@ -25,6 +43,7 @@ api.interceptors.request.use((config) => {
       config.headers = { ...config.headers, "X-School-ID": schoolId };
     }
   }
+  attachTraceContext(config);
   return config;
 });
 
@@ -109,13 +128,14 @@ export const getStudents = (page = 1, limit = 20, { search, status, className } 
   });
 export const getStudent = (studentId, { signal } = {}) => api.get(`/students/${studentId}`, { signal });
 export const registerStudent = (data) => api.post("/students", data);
-const versionHeaders = (version) => ({
-  headers: { 'If-Match': typeof version === 'string' ? version : `"${version ?? 0}"` },
-});
-export const updateStudent = (studentId, data, version) =>
-  api.put(`/students/${studentId}`, data, versionHeaders(version));
+export const updateStudent = (studentId, data) => api.put(`/students/${studentId}`, data);
 // Payment endpoints — also available as a typed client via ./paymentApiClient
 export const getPaymentSummary = ({ signal } = {}) => api.get("/payments/summary", { signal });
+export const createPaymentIntent = (studentId, { signal } = {}) =>
+  api.post("/payments/intent", { studentId }, {
+    signal,
+    headers: { "Idempotency-Key": globalThis.crypto.randomUUID() },
+  });
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
 export const getStudentPayments = (studentId, { signal } = {}) => api.get(`/payments/${studentId}`, { signal });
 export const getStudentBalance  = (studentId, { signal } = {}) => api.get(`/payments/balance/${studentId}`, { signal });
@@ -143,12 +163,19 @@ export const getReportCsvUrl = (params = {}) => {
 // Currency conversion
 export const getConversionRates = () => api.get("/payments/rates");
 
+// FX rates endpoint (issue #662) — alias that hits the dedicated fx route
+export const getFxRates = () => api.get("/fx/rates");
+
 // Disputes
 export const flagDispute = (data) => api.post("/disputes", data);
 export const getDisputes = (params = {}, { signal } = {}) => api.get("/disputes", { params, signal });
 export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
+export const uploadDisputeAttachment = (id, formData) =>
+  api.post(`/disputes/${id}/attachments`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 
 // Refunds
 export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
@@ -207,3 +234,22 @@ export const deleteSourceValidationRule = (id, schoolId) =>
 // Fee adjustment helpers
 export const getFeeAdjustmentAffectedCount = (ruleId, schoolId) =>
   api.get(`/fee-adjustments/${ruleId}/affected-count`, { headers: { "X-School-ID": schoolId } });
+
+// Student fee history (archived records)
+export const getFeeHistory = (studentId, params = {}) =>
+  api.get(`/students/${studentId}/fee-history`, { params });
+
+// Receipts — Issue #604
+// Returns the URL for streaming a PDF receipt from the backend.
+// Using a plain URL (rather than api.get) so callers can pass it to fetch()
+// or an <a href> and get the binary PDF stream directly.
+export const getReceiptDownloadUrl = (txHash) => {
+  const base =
+    typeof window !== "undefined"
+      ? (process.env.NEXT_PUBLIC_API_URL || "/api")
+      : "/api";
+  return `${base}/receipts/${txHash}?format=pdf`;
+};
+
+// Returns JSON receipt data (studentName, amount, signature, etc.)
+export const getReceiptData = (txHash) => api.get(`/receipts/${txHash}`);

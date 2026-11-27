@@ -5,12 +5,15 @@
  * Verifies that creating a school with a duplicate slug returns 409 DUPLICATE_SCHOOL.
  */
 
-const { createSchool } = require('../backend/src/controllers/schoolController');
+const { createSchool, updateSchool } = require('../backend/src/controllers/schoolController');
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 jest.mock('../backend/src/models/schoolModel', () => ({
   create: jest.fn(),
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  distinct: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../backend/src/services/auditService', () => ({
@@ -83,6 +86,7 @@ describe('POST /api/schools — duplicate slug — issue #609', () => {
     const err = next.mock.calls[0][0];
     expect(err.code).toBe('DUPLICATE_SCHOOL');
     expect(err.status).toBe(409);
+    expect(err.details.suggestions).toEqual(['lincoln-high-2', 'lincoln-high-3', 'lincoln-high-4']);
   });
 
   it('calls next with 409 DUPLICATE_SCHOOL when schoolId collides (non-slug 11000)', async () => {
@@ -100,33 +104,36 @@ describe('POST /api/schools — duplicate slug — issue #609', () => {
     expect(err.status).toBe(409);
   });
 
-  it('returns 400 VALIDATION_ERROR when slug contains special characters', async () => {
-    const req = mockReq({ slug: 'Lincoln High!' });
+  it.each([
+    ['Lincoln High!', 'lincoln-high'],
+    ['lincoln high school', 'lincoln-high-school'],
+    ['école-primaire', 'ecole-primaire'],
+  ])('normalizes %s to %s before creating the school', async (slug, normalized) => {
+    School.create.mockResolvedValue({ schoolId: 'SCH-AAAA', slug: normalized });
     const res = mockRes();
-    await createSchool(req, res, next);
+    await createSchool(mockReq({ slug }), res, next);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    const body = res.json.mock.calls[0][0];
-    expect(body.code).toBe('VALIDATION_ERROR');
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(School.create).toHaveBeenCalledWith(expect.objectContaining({ slug: normalized }));
   });
 
-  it('returns 400 VALIDATION_ERROR when slug has spaces', async () => {
-    const req = mockReq({ slug: 'lincoln high school' });
-    const res = mockRes();
-    await createSchool(req, res, next);
+  it('reserves inactive slugs on update and skips reserved suggestions', async () => {
+    const req = mockReq({ slug: ' Lincoln High ' });
+    req.params = { schoolId: 'SCH-AAAA' };
+    School.findOne.mockReturnValue({ lean: async () => ({ slug: 'old-slug', timezone: 'Africa/Lagos' }) });
+    School.findOneAndUpdate.mockRejectedValue(Object.assign(new Error('duplicate key'), {
+      code: 11000,
+      keyPattern: { slug: 1 },
+    }));
+    School.distinct.mockResolvedValueOnce(['lincoln-high-2']);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    const body = res.json.mock.calls[0][0];
-    expect(body.code).toBe('VALIDATION_ERROR');
-  });
+    await updateSchool(req, mockRes(), next);
 
-  it('returns 400 VALIDATION_ERROR when slug has accented characters', async () => {
-    const req = mockReq({ slug: 'école-primaire' });
-    const res = mockRes();
-    await createSchool(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    const body = res.json.mock.calls[0][0];
-    expect(body.code).toBe('VALIDATION_ERROR');
+    expect(School.distinct).toHaveBeenCalledWith('slug', expect.objectContaining({ slug: expect.any(Object) }));
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      status: 409,
+      code: 'DUPLICATE_SCHOOL',
+      details: { suggestions: ['lincoln-high-lagos', 'lincoln-high-3', 'lincoln-high-4'] },
+    }));
   });
 });

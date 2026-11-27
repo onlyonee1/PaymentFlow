@@ -15,6 +15,8 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
     parentEmail: "",
     parentPhone: "",
     reminderOptOut: false,
+    paymentConfirmationOptOut: false,
+    disputeUpdateOptOut: false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -28,7 +30,9 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
         class: student.class || "",
         parentEmail: student.parentEmail || "",
         parentPhone: student.parentPhone || "",
-        reminderOptOut: student.reminderOptOut || false,
+        reminderOptOut: Boolean(student.reminderOptOut),
+        paymentConfirmationOptOut: Boolean(student.paymentConfirmationOptOut),
+        disputeUpdateOptOut: Boolean(student.disputeUpdateOptOut),
       });
     }
   }, [student]);
@@ -56,8 +60,12 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
     setLoading(true);
 
     try {
-      onOptimisticUpdate?.(student.studentId, formData);
-      await updateStudent(student.studentId, formData, student.__v);
+      const updates = { ...formData };
+      for (const field of ["reminderOptOut", "paymentConfirmationOptOut", "disputeUpdateOptOut"]) {
+        if (updates[field] === Boolean(student[field])) delete updates[field];
+      }
+      onOptimisticUpdate?.(student.studentId, updates);
+      await updateStudent(student.studentId, updates);
       setSuccess(t("studentForm.updateSuccess"));
       setTimeout(() => {
         if (onSave) onSave();
@@ -329,6 +337,18 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
               </span>
             </label>
           </div>
+
+          <fieldset style={{ marginBottom: "1rem" }}>
+            <legend>Email preferences</legend>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="paymentConfirmationOptOut" checked={formData.paymentConfirmationOptOut} onChange={handleChange} />
+              Disable payment confirmation emails
+            </label>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="disputeUpdateOptOut" checked={formData.disputeUpdateOptOut} onChange={handleChange} />
+              Disable dispute update emails
+            </label>
+          </fieldset>
 
           <PaymentPlanForm
             student={student}

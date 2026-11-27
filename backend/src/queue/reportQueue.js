@@ -46,12 +46,14 @@ async function enqueueReportJob(jobData) {
 
   // Deduplication: return an existing pending/processing job for the same
   // school + type + date range instead of creating a duplicate.
-  const existingJob = await ReportJob.findOne({
+  const existingJob = jobData.type === 'student_export' ? null : await ReportJob.findOne({
     schoolId: jobData.schoolId,
     type: jobData.type || 'report',
     status: { $in: [REPORT_STATUSES.PENDING, REPORT_STATUSES.PROCESSING] },
     'params.startDate': jobData.startDate || null,
     'params.endDate': jobData.endDate || null,
+    'params.groupBy': jobData.groupBy || null,
+    'params.format': jobData.format || 'json',
   }).lean();
 
   if (existingJob) {
@@ -74,10 +76,15 @@ async function enqueueReportJob(jobData) {
     params: {
       startDate: jobData.startDate || null,
       endDate: jobData.endDate || null,
+      groupBy: jobData.groupBy || null,
       timezone: jobData.timezone || 'UTC',
       schemaVersion: jobData.schemaVersion || null,
       format: jobData.format || 'json',
     },
+    ...(jobData.type === 'student_export' ? {
+      requestedBy: jobData.requestedBy,
+      studentExport: { columns: jobData.columns, includeDeleted: jobData.includeDeleted },
+    } : {}),
     expiresAt,
   });
 
@@ -123,8 +130,8 @@ async function getJobStatus(jobId) {
 
 async function setJobProcessing(jobId) {
   await ReportJob.findOneAndUpdate(
-    { jobId, status: REPORT_STATUSES.PENDING },
-    { status: REPORT_STATUSES.PROCESSING, startedAt: new Date() }
+    { jobId, status: { $in: [REPORT_STATUSES.PENDING, REPORT_STATUSES.FAILED] } },
+    { $set: { status: REPORT_STATUSES.PROCESSING, startedAt: new Date() }, $unset: { 'result.error': 1 } }
   );
 }
 
@@ -143,7 +150,7 @@ async function setJobCompleted(jobId, { artifactKey, schemaVersion = null }) {
   ).lean();
 
   // Notify SSE clients so they receive push completion rather than polling.
-  if (updated) {
+  if (updated && updated.type !== 'student_export') {
     try {
       const { createReportDownloadUrl } = require('../services/reportArtifactStorage');
       const remainingSeconds = Math.max(1, Math.floor((updated.downloadExpiresAt.getTime() - Date.now()) / 1000));
