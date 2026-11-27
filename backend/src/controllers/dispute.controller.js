@@ -16,6 +16,7 @@ const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
 const { fireWebhook, fireWebhookToEndpoints, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
 const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
+const { transition: transitionPayment } = require('../services/paymentTransitionService');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
 const {
@@ -94,22 +95,33 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
     logger.warn('SSE emit failed for dispute event', { schoolId, eventName, error: err.message });
   }
 
+  try {
+    const Student = require('../models/studentModel');
+    const { sendDisputeUpdate } = require('../services/emailService');
+    const student = await Student.findOne({ schoolId, studentId: disputeDoc.studentId });
+    await sendDisputeUpdate({ student, schoolId, status: disputeDoc.status });
+  } catch (err) {
+    logger.warn('Dispute email failed', { schoolId, eventName, error: err.message });
+  }
+
   // Webhook — HMAC-signed HTTP call to the school's registered endpoint.
   // Route through the dispute.* notification helpers so the payload shape stays
   // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).
   try {
-    const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
+    const schoolQuery = School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
+    const school = schoolQuery && typeof schoolQuery.lean === 'function' ? await schoolQuery.lean() : await schoolQuery;
     const webhookUrl = school?.webhookUrl || null;
     const secret = school?.webhookSecret || null;
 
     // #1478: Route through both unified per-endpoint system and legacy single-URL
-    if (eventName === 'dispute.created') {
-      await notifyDisputeCreated(webhookUrl, disputeDoc, secret, schoolId);
-    } else if (holdLifted) {
-      await notifyDisputeResolved(webhookUrl, disputeDoc, secret, schoolId);
-    } else if (webhookUrl || school) {
-      // Intermediate transitions (under_review / reopened) keep their own event name.
-      // Still fire through unified system if school exists
+    if (webhookUrl) {
+      if (eventName === 'dispute.created') {
+        await notifyDisputeCreated(webhookUrl, disputeDoc, secret);
+      } else if (holdLifted) {
+        await notifyDisputeResolved(webhookUrl, disputeDoc, secret);
+      }
+    }
+    if (school && (webhookUrl || school.webhookPayloadConfig)) {
       if (school) {
         const allowedFields = school.webhookPayloadConfig?.allowedFields || null;
         await fireWebhookToEndpoints(schoolId, eventName, {
@@ -152,7 +164,7 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
   const targetPaymentStatus = DISPUTE_TO_PAYMENT_STATUS[newDisputeStatus];
   if (!targetPaymentStatus) return;
 
-  const payment = await Payment.findOne({ schoolId, txHash });
+  let payment = await Payment.findOne({ schoolId, txHash });
   if (!payment) {
     logger.warn('No payment found to sync after dispute transition', { schoolId, txHash, disputeStatus: newDisputeStatus });
     return;
@@ -171,14 +183,12 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
     return;
   }
 
-  // Dispute resolution is an authoritative decision equivalent to an admin
-  // action, so it uses the wider ADMIN_PAYMENT_STATUS_TRANSITIONS table
-  // (e.g. DISPUTED -> SUCCESS on rejection, DISPUTED -> REFUNDED on
-  // resolution) via the same $locals.adminOverride flag updatePaymentStatus
-  // uses. $locals is Mongoose's per-document transient store — never persisted.
+  payment.$locals = payment.$locals || {};
   payment.$locals.adminOverride = true;
   payment.status = targetPaymentStatus;
-  await payment.save();
+  if (typeof payment.save === 'function') {
+    await payment.save();
+  }
 
   // #1353 — Keep the student's totalPaid/feePaid in sync with the dispute
   // outcome: DISPUTED payments must not count toward totalPaid, and moving
@@ -328,6 +338,8 @@ async function getDisputeById(req, res, next) {
  * Lifts the student's disputeHold when the dispute reaches a terminal state (#993).
  */
 async function resolveDispute(req, res, next) {
+  let claim;
+  let writeStarted = false;
   try {
     const { schoolId, user } = req;
     const { resolutionNote, status, assignedTo, evidence } = req.body;
@@ -352,6 +364,18 @@ async function resolveDispute(req, res, next) {
     }
     if (resolutionNoteTrimmed.length > 1000) {
       return res.status(400).json({ error: 'resolutionNote must not exceed 1000 characters.', code: 'VALIDATION_ERROR' });
+    }
+
+    const eventId = req.headers?.['x-event-id'] ?? req.body.eventId;
+    if (eventId !== undefined || req.disputeSync) {
+      if (typeof eventId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(eventId)) {
+        return res.status(400).json({ error: 'A valid dispute sync event ID is required.' });
+      }
+      const { claimDisputeEvent } = require('../services/disputeSyncGuard');
+      claim = await claimDisputeEvent(req, eventId);
+      if (claim.duplicate) return res.status(200).json({ duplicate: true });
+      if (claim.conflict) return res.status(409).json({ error: 'This event ID already has a different payload.' });
+      if (claim.processing) return res.status(503).set('Retry-After', '1').json({ error: 'This event is still being processed.' });
     }
 
     // Load current dispute to know its existing status (#895 — validate transition)
@@ -396,6 +420,7 @@ async function resolveDispute(req, res, next) {
       update.$push = { evidence: { $each: evidence } };
     }
 
+    writeStarted = true;
     const dispute = await Dispute.findOneAndUpdate(
       { _id: req.params.id, schoolId },
       update,
@@ -452,8 +477,15 @@ async function resolveDispute(req, res, next) {
       logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
     }
 
+    if (claim?.complete) await claim.complete();
     res.json(dispute);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    if (!writeStarted && claim?.release) {
+      await claim.release().catch(err => logger.warn('Failed to release dispute sync event', { error: err.message }));
+    }
+  }
 }
 
 /**
@@ -502,4 +534,43 @@ async function addEvidence(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence };
+async function addAttachment(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { id } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'File attachment is required.', code: 'FILE_REQUIRED' });
+    }
+
+    const isPdf = req.file.mimetype === 'application/pdf';
+    const evidenceType = isPdf ? 'document' : 'screenshot';
+    const dataUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+
+    const evidenceItem = {
+      type: evidenceType,
+      url: dataUrl,
+      description: req.body.notes || req.body.description || req.file.originalname,
+      uploadedAt: new Date(),
+    };
+
+    const dispute = await Dispute.findOneAndUpdate(
+      { _id: id, schoolId },
+      {
+        $push: { evidence: evidenceItem },
+        $set: { lastActivityAt: new Date() },
+      },
+      { new: true }
+    );
+
+    if (!dispute) {
+      return res.status(404).json({ error: 'Dispute not found.', code: 'NOT_FOUND' });
+    }
+
+    res.status(201).json({ attachment: evidenceItem, dispute });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence, addAttachment };
