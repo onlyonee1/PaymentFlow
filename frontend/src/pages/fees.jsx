@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   getFeeStructures,
   createFeeStructure,
+  createFeePaymentQr,
   deleteFeeStructure,
   getStudents,
   getSchool,
@@ -27,6 +28,22 @@ const EMPTY_FORM = {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
+  const { t } = useTranslation();
+  const [paymentQr, setPaymentQr] = useState(null);
+  const qrDialog = useRef(null);
+
+  async function showPaymentQr(fee) {
+    const label = fee.className;
+    setPaymentQr({ label, loading: true });
+    qrDialog.current.showModal();
+    try {
+      const { data } = await createFeePaymentQr(fee._id);
+      setPaymentQr({ label, ...data });
+    } catch (err) {
+      setPaymentQr({ label, error: err.response?.data?.error || "Could not create the payment QR code." });
+    }
+  }
+
   const [fees, setFees]             = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
@@ -158,6 +175,22 @@ export default function FeesPage() {
 
   return (
     <>
+      <dialog ref={qrDialog} aria-labelledby="fee-payment-qr-title" style={{ maxWidth: "min(90vw, 26rem)", padding: "1.25rem" }}>
+        <h2 id="fee-payment-qr-title">Payment QR code</h2>
+        {paymentQr?.label && <p>{paymentQr.label}</p>}
+        {paymentQr?.loading && <p role="status">Creating QR code…</p>}
+        {paymentQr?.error && <p role="alert">{paymentQr.error}</p>}
+        {paymentQr?.qrImage && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={paymentQr.qrImage} alt={`Scan to pay ${paymentQr.label}`} width="300" height="300" style={{ maxWidth: "100%", height: "auto" }} />
+            <p>Expires {new Date(paymentQr.expiresAt).toLocaleDateString()}</p>
+            <p><a href={paymentQr.qrImage} download="payment-qr.png">Download QR code</a></p>
+            <p><a href={paymentQr.url} target="_blank" rel="noreferrer">Open payment link</a></p>
+          </>
+        )}
+        <form method="dialog"><button className="btn btn-ghost">Close</button></form>
+      </dialog>
       <PageHero
         eyebrow={t("fees.eyebrow")}
         title={t("fees.title")}
@@ -384,6 +417,11 @@ export default function FeesPage() {
                         {fee.description || "—"}
                       </td>
                       <td>
+                        {fee._id && (
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => showPaymentQr(fee)} aria-label={`Payment QR for ${fee.className}`}>
+                            Payment QR
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDeleteClick(fee)}
                           className="btn btn-sm btn-ghost"

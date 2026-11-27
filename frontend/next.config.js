@@ -100,6 +100,7 @@ const nextConfig = {
     return [
       { source: '/unsubscribe', destination: `${BACKEND_ORIGIN}/unsubscribe` },
       { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
+      { source: '/pay', destination: '/parent-pay/index.html' },
     ];
   },
   async headers() {
@@ -109,6 +110,13 @@ const nextConfig = {
         source: '/_next/static/:path*',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       }] : []),
+      {
+        source: '/parent-pay/sw.js',
+        headers: [
+          { key: 'Service-Worker-Allowed', value: '/pay' },
+          { key: 'Cache-Control', value: 'no-cache' },
+        ],
+      },
       {
         // Apply security headers to all routes
         source: '/(.*)',

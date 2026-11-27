@@ -215,6 +215,7 @@ paymentSchema.index({ schoolId: 1, studentId: 1, feeCategory: 1 });
 // Issue #39 — additional compound indexes for common query patterns
 // { schoolId, status, deletedAt } — getAllPayments with status filter
 paymentSchema.index({ schoolId: 1, status: 1, deletedAt: 1 });
+paymentSchema.index({ schoolId: 1, memo: 1, status: 1 });
 // { schoolId, feeValidationStatus, deletedAt } — getOverpayments (extends single-field index)
 paymentSchema.index({ schoolId: 1, feeValidationStatus: 1, deletedAt: 1 });
 // { schoolId, studentId, deletedAt, confirmedAt } — getStudentPayments sorted by date, excl. deleted

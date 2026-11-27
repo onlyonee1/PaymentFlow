@@ -22,6 +22,11 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_STELLAR_NETWORK=testnet
 ENV NEXT_PUBLIC_STELLAR_NETWORK=$NEXT_PUBLIC_STELLAR_NETWORK
 
+# Next rewrites are compiled during the build. The frontend container proxies
+# the lightweight parent portal's same-origin API calls to the backend service.
+ARG BACKEND_PROXY_TARGET=http://backend:5000
+ENV BACKEND_PROXY_TARGET=$BACKEND_PROXY_TARGET
+
 COPY . .
 RUN npm run build
 

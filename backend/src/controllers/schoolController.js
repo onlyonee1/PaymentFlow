@@ -154,7 +154,11 @@ async function getAllSchools(req, res, next) {
     }
 
     const query = includeInactive ? {} : { isActive: true };
-    const schools = await School.find(query).sort({ name: 1 }).lean();
+    const schools = await School.find(query, {
+      jwtSecret: 0,
+      webhookSecret: 0,
+      internalNotes: 0,
+    }).sort({ name: 1 }).lean();
     res.json(schools);
   } catch (err) {
     next(err);
