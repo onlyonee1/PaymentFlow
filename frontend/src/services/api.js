@@ -115,10 +115,10 @@ api.interceptors.response.use(undefined, async (error) => {
 // coupling to a specific named helper.
 export default api;
 
-export const getStudents = (page = 1, limit = 20, { search, status, className } = {}, { signal } = {}) =>
+export const getStudents = (cursor = null, limit = 20, { search, status, className } = {}, { signal } = {}) =>
   api.get("/students", {
     params: {
-      page,
+      ...(cursor && { cursor }),
       limit,
       ...(search    && { search }),
       ...(status    && status !== "all" && { status }),

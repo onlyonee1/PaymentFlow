@@ -122,6 +122,7 @@ studentSchema.virtual('totalPaidFromFees').get(function () {
   return this.totalPaid || 0;
 });
 
+studentSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 studentSchema.index({ studentId: 1, schoolId: 1 }, { unique: true });
 studentSchema.index({ schoolId: 1, class: 1 });
 studentSchema.index({ schoolId: 1, feePaid: 1 });

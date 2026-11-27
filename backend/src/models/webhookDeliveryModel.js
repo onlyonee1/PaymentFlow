@@ -101,6 +101,7 @@ const webhookDeliverySchema = new mongoose.Schema(
 );
 
 // Fast per-endpoint history queries (most recent first)
+webhookDeliverySchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 webhookDeliverySchema.index({ endpointId: 1, createdAt: -1 });
 // Fast per-school history queries
 webhookDeliverySchema.index({ schoolId: 1, createdAt: -1 });

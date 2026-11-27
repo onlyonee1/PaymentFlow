@@ -9,7 +9,6 @@ import RequireAdmin from "../components/RequireAdmin";
 import EmptyState, { StandaloneEmptyState } from "../components/EmptyState";
 import BlockchainStatusBadge from "../components/BlockchainStatusBadge";
 import { TableDensityControl, useTableDensity } from "../components/TableDensityControl";
-import AccessiblePagination from "../components/AccessiblePagination";
 import { SkeletonStatCard, SkeletonTableRow } from "../components/Skeleton";
 import Pagination from "../components/Pagination";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
@@ -17,13 +16,11 @@ import { usePaymentStream } from "../hooks/usePaymentStream";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useRouteChangeAbort } from "../hooks/useRouteChangeAbort";
 import useGridCellNavigation from "../hooks/useGridCellNavigation";
-import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
   IconUsers, IconCheck, IconAlertTriangle, IconDollarSign,
   IconSearch,
 } from "../components/Icons";
 import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
-import FilterChips from "../components/FilterChips";
 import { formatRelative } from "../utils/dateTime";
 import { isRetryable } from "../utils/retryClassification";
 import {
@@ -39,6 +36,7 @@ const OPTIMISTIC_STUDENT_FIELDS = ["name", "class", "parentEmail", "parentPhone"
 function Dashboard() {
   const { t } = useTranslation();
   const studentGridProps = useGridCellNavigation();
+  const { signal: routeSignal } = useRouteChangeAbort();
   const timeAgo = (iso) => formatRelative(iso, t);
 
   const STATUS_BADGE = {
@@ -57,9 +55,8 @@ function Dashboard() {
   const [studentsLoading, setStudentsLoading] = useState(true);
   const [studentsError, setStudentsError]     = useState(null);
   const [studentsRetryable, setStudentsRetryable] = useState(false);
-  const [page, setPage]                       = useState(1);
-  const [pages, setPages]                     = useState(1);
-  const [total, setTotal]                     = useState(0);
+  const [cursor, setCursor]                   = useState(null);
+  const [pagination, setPagination]           = useState({});
   const [pageSize, setPageSize]               = useState(DEFAULT_PAGE_SIZE);
   const [search, setSearch]                   = useState("");
   const [statusFilter, setStatusFilter]       = useState("all");
@@ -82,7 +79,7 @@ function Dashboard() {
       if (type === 'payment' || type.startsWith('dispute')) {
         invalidateDashboardData();
         fetchSummary();
-        fetchStudents(page, debouncedSearch, statusFilter, classFilter);
+        fetchStudents(cursor, debouncedSearch, statusFilter, classFilter);
       }
     },
   });
@@ -147,7 +144,8 @@ function Dashboard() {
       .finally(() => setSummaryLoading(false));
   }, [t, routeSignal]);
 
-  const fetchStudents = useCallback((p, srch, st, cls) => {
+  const fetchStudents = useCallback((token, srch, st, cls) => {
+    setCursor(token);
     // Cancel any in-flight student fetch before issuing a new one.
     studentsAbortRef.current?.abort();
     const controller = new AbortController();
@@ -156,11 +154,11 @@ function Dashboard() {
     setStudentsLoading(true);
     setStudentsError(null);
     setStudentsRetryable(false);
-    loadDashboardStudents(p, pageSize, { search: srch, status: st, className: cls }, { signal: controller.signal })
+    loadDashboardStudents(token, pageSize, { search: srch, status: st, className: cls }, { signal: controller.signal })
       .then(({ data }) => {
+        if (studentsAbortRef.current !== controller) return;
         setStudents(data.students);
-        setPages(data.pages || 1);
-        setTotal(data.total || 0);
+        setPagination(data.pagination || {});
       })
       .catch((err) => {
         // Silently ignore aborted (superseded) requests.
@@ -176,12 +174,6 @@ function Dashboard() {
       });
   }, [t, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Tracks whether the page effect is running for the very first time.
-  // On mount the filter effect already calls fetchStudents(1, …), so the page
-  // effect must skip that initial run to avoid a duplicate /students request
-  // (#1214).  Subsequent page changes (user clicks Next/Prev) are not skipped.
-  const isInitialPageRender = useRef(true);
-
   useEffect(() => {
     // Pass routeSignal so navigation cancels these page-level requests without
     // triggering error toasts (Issue #6).
@@ -196,32 +188,15 @@ function Dashboard() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setPage(1);
-    fetchStudents(1, debouncedSearch, statusFilter, classFilter);
-  }, [debouncedSearch, statusFilter, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // When page size changes, reset to page 1 and refetch.
-  useEffect(() => {
-    setPage(1);
-    fetchStudents(1, debouncedSearch, statusFilter, classFilter);
-  }, [pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    // Skip the initial render — the filter effect above already fetched page 1.
-    if (isInitialPageRender.current) {
-      isInitialPageRender.current = false;
-      return;
-    }
-    fetchStudents(page, debouncedSearch, statusFilter, classFilter);
-  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchStudents(null, debouncedSearch, statusFilter, classFilter);
+  }, [debouncedSearch, statusFilter, classFilter, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Issue #269 — automatically refresh data when network connectivity is
   // restored after an offline period.
   useEffect(() => {
     if (justReconnected) {
       fetchSummary();
-      fetchStudents(1, debouncedSearch, statusFilter, classFilter);
-      setPage(1);
+      fetchStudents(null, debouncedSearch, statusFilter, classFilter);
     }
   }, [justReconnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -231,8 +206,7 @@ function Dashboard() {
     setSyncMsg(data?.message || t("dashboard.syncComplete"));
     setTimeout(() => setSyncMsg(null), 3500);
     fetchSummary();
-    setPage(1);
-    fetchStudents(1, debouncedSearch, statusFilter, classFilter);
+    fetchStudents(null, debouncedSearch, statusFilter, classFilter);
   }
 
   async function handleEditStudent(student) {
@@ -253,7 +227,7 @@ function Dashboard() {
   function handleSaveStudent() {
     invalidateDashboardData();
     handleCloseForm();
-    fetchStudents(page, debouncedSearch, statusFilter, classFilter);
+    fetchStudents(cursor, debouncedSearch, statusFilter, classFilter);
   }
 
   function handleOptimisticStudentUpdate(studentId, updates) {
@@ -332,8 +306,6 @@ function Dashboard() {
     },
   ];
 
-  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const rangeEnd   = Math.min(page * PAGE_SIZE, total);
 
   return (
     <>
@@ -563,9 +535,7 @@ function Dashboard() {
           <div className="card-header">
             <div>
               <div className="card-title">{t("dashboard.studentsTitle")}</div>
-              {!studentsLoading && total > 0 && (
-                <div className="card-subtitle">{t("dashboard.studentsTotal", { count: total })}</div>
-              )}
+
             </div>
 
             {/* Toolbar */}
@@ -682,11 +652,11 @@ function Dashboard() {
           <ErrorBoundary>
             {studentsError ? (
               <div className="card-body">
-                <StandaloneEmptyState
+                <EmptyState
                     variant="error"
                   title={t("dashboard.failedToLoadStudents")}
                     description={studentsRetryable ? "Check your connection and try again." : studentsError}
-                  action={studentsRetryable ? { label: t("actions.retry"), onClick: () => fetchStudents(page, debouncedSearch, statusFilter, classFilter) } : undefined}
+                  action={studentsRetryable ? { label: t("actions.retry"), onClick: () => fetchStudents(cursor, debouncedSearch, statusFilter, classFilter) } : undefined}
                 />
               </div>
             ) : (
@@ -834,19 +804,17 @@ function Dashboard() {
           </ErrorBoundary>
 
           {/* Pagination */}
-          {total > 0 && (
-            <AccessiblePagination
-              currentPage={page}
-              totalPages={pages}
-              onPageChange={setPage}
-              total={total}
-              rangeStart={rangeStart}
-              rangeEnd={rangeEnd}
-              loading={studentsLoading}
-              ariaLabel={t("dashboard.paginationAria")}
-              itemLabel={t("dashboard.studentsTitle")}
-              rangeTemplate={t("dashboard.rangeOf", { start: rangeStart, end: rangeEnd, total: total.toLocaleString() })}
-            />
+          {(pagination.prevCursor || pagination.nextCursor) && (
+            <nav aria-label={t("dashboard.paginationAria")}>
+              <button className="page-btn" disabled={studentsLoading || !pagination.prevCursor}
+                onClick={() => fetchStudents(pagination.prevCursor, debouncedSearch, statusFilter, classFilter)}>
+                {t("actions.previousPage")}
+              </button>
+              <button className="page-btn" disabled={studentsLoading || !pagination.nextCursor}
+                onClick={() => fetchStudents(pagination.nextCursor, debouncedSearch, statusFilter, classFilter)}>
+                {t("actions.nextPage")}
+              </button>
+            </nav>
           )}
         </div>
       </div>

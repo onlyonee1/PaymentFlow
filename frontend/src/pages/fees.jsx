@@ -5,7 +5,6 @@ import {
   createFeeStructure,
   createFeePaymentQr,
   deleteFeeStructure,
-  getStudents,
   getSchool,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
@@ -57,7 +56,7 @@ export default function FeesPage() {
   const [createSuccess, setCreateSuccess] = useState(false);
 
   // Delete state
-  const [pendingDelete, setPendingDelete] = useState(null); // { fee, studentCount }
+  const [pendingDelete, setPendingDelete] = useState(null);
   const [deleteError, setDeleteError]     = useState(null);
 
   // Issue #254 — abort in-flight fee requests when the component unmounts.
@@ -145,16 +144,9 @@ export default function FeesPage() {
 
   // ── Delete handlers ───────────────────────────────────────────────────────
 
-  async function handleDeleteClick(fee) {
+  function handleDeleteClick(fee) {
     setDeleteError(null);
-    let studentCount = 0;
-    try {
-      const { data } = await getStudents(1, 1, { className: fee.className });
-      studentCount = data.total || 0;
-    } catch {
-      // non-fatal — proceed without count
-    }
-    setPendingDelete({ fee, studentCount });
+    setPendingDelete({ fee });
   }
 
   async function handleConfirmDelete() {
@@ -377,6 +369,7 @@ export default function FeesPage() {
               />
             </div>
           ) : (
+            <>
             <div style={{ overflowX: "auto" }}>
               <table
                 className="data-table"
@@ -449,6 +442,7 @@ export default function FeesPage() {
                 itemLabel={t("fees.title")}
               />
             )}
+            </>
           )}
         </div>
       </div>
@@ -460,9 +454,6 @@ export default function FeesPage() {
           title={t("fees.deleteTitle")}
           description={
             `${t("fees.deleteIntro")} ${pendingDelete.fee.className}.` +
-            (pendingDelete.studentCount > 0
-              ? ` ${t("fees.deleteAffects")} ${t("fees.studentCount", { count: pendingDelete.studentCount })}.`
-              : "") +
             ` ${t("fees.deleteCannotUndo")}`
           }
           confirmLabel={t("actions.delete")}

@@ -58,8 +58,7 @@ The backend process **fails to start** when these are absent or invalid.
 | `SIGNER_MASTER_KEY_HTTP_URL` | Backend | HTTP URL to fetch master key (for Vault/GCP sidecars) | unset | `https://vault.internal/v1/key` | `RESTRICTED` | Security | N/A |
 | `SIGNER_MASTER_KEY_HTTP_TOKEN` | Backend | Bearer token for the HTTP key source | unset | *(bearer token)* | `SECRET` | Security | With key rotation |
 | `STUDENT_PII_ENCRYPTION_KEY` | Backend | AES-256-GCM key for encrypting student PII fields | unset; generated | *(64-char hex)* | `CRITICAL` | Security / platform | Every 180 days |
-| `AUDIT_HMAC_KEY` | Backend | HMAC key for signing audit log pagination cursors | falls back to `JWT_SECRET` | *(32-char hex)* | `CRITICAL` | Security | With JWT_SECRET rotation |
-| `AUDIT_CURSOR_HMAC_KEY` | Backend | Alias for `AUDIT_HMAC_KEY` | falls back to `JWT_SECRET` | *(32-char hex)* | `CRITICAL` | Security | With JWT_SECRET rotation |
+| `AUDIT_HMAC_KEY` | Backend | HMAC key for signing audit log entries | falls back to `JWT_SECRET` | *(32-char hex)* | `CRITICAL` | Security | With JWT_SECRET rotation |
 | `RECEIPT_SIGNATURE_SECRET` | Backend | Signs payment receipt documents | unset | *(32-char hex)* | `CRITICAL` | Security | Every 90 days |
 | `WEBHOOK_SECRET_ENCRYPTION_KEY` | Backend | Encrypts per-school webhook HMAC secrets at rest | unset; generated | *(32-char hex)* | `CRITICAL` | Security | Every 90 days; see `scripts/rotate-webhook-encryption-key.js` |
 | `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` | Backend | Previous webhook encryption key (rotation window) | unset | *(previous key)* | `CRITICAL` | Security | Remove after rotation |
@@ -326,7 +325,7 @@ The following variables are classified `CRITICAL` or `SECRET`. Treat any acciden
 - `SIGNER_MASTER_KEY`, `SIGNER_MASTER_KEY_OLD`
 - `STUDENT_PII_ENCRYPTION_KEY`
 - `WEBHOOK_SECRET_ENCRYPTION_KEY`
-- `AUDIT_HMAC_KEY` / `AUDIT_CURSOR_HMAC_KEY`
+- `AUDIT_HMAC_KEY`
 - `RECEIPT_SIGNATURE_SECRET`
 - `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`
 - `SMTP_PASS`, `SENDGRID_API_KEY`

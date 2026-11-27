@@ -7,7 +7,7 @@ const csv = require('csv-parser');
 const { Readable } = require('stream');
 const { logAudit } = require('../services/auditService');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
-const { encodeListCursor, decodeListCursor, cursorCondition } = require('../utils/listCursor');
+const { paginateList } = require('../utils/listCursor');
 const { validateDecimalAmount } = require('../utils/decimalPrecision');
 
 const { studentLimit, quotaUsage, quotaExceeded, upgradeUrl } = require('../services/studentQuotaService');
@@ -143,8 +143,7 @@ async function registerStudent(req, res, next) {
 
 async function getAllStudents(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit, 10) || 50);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const filter = { schoolId: req.schoolId };
 
     if (req.query.class) {
@@ -172,44 +171,14 @@ async function getAllStudents(req, res, next) {
       filter.$or = [{ name: re }, { studentId: re }];
     }
 
-    const legacyOffset = req.legacyOffsetPagination && !req.query.cursor;
-    let students;
-    let pagination;
-
-    if (legacyOffset) {
-      const skip = (page - 1) * limit;
-      const [offsetStudents, total] = await Promise.all([
-        Student.find(filter, req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 })
-          .sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit),
-        Student.countDocuments(filter),
-      ]);
-      students = offsetStudents;
-      pagination = { page, limit, total, pages: Math.ceil(total / limit), hasNext: page < Math.ceil(total / limit), hasPrev: page > 1 };
-    } else {
-      const cursorFilters = {
-        schoolId: req.schoolId,
-        class: req.query.class || null,
-        status: req.query.status || null,
-        search: req.query.search || null,
-      };
-      const cursorPayload = req.query.cursor ? decodeListCursor(req.query.cursor, cursorFilters) : null;
-      const cursorFilter = cursorPayload
-        ? { $and: [filter, cursorCondition(cursorPayload)] }
-        : filter;
-      const results = await Student.find(cursorFilter, req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 })
-        .sort({ createdAt: -1, _id: -1 })
-        .limit(limit + 1);
-      const hasNextPage = results.length > limit;
-      students = results.slice(0, limit);
-      pagination = {
-        limit,
-        nextCursor: hasNextPage && students.length
-          ? encodeListCursor(students[students.length - 1], cursorFilters)
-          : null,
-        hasPreviousPage: Boolean(cursorPayload),
-        hasNextPage,
-      };
-    }
+    const projection = req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 };
+    const { items: students, pagination } = await paginateList({
+      find: (query) => Student.find(query, projection),
+      scope: 'students',
+      filter,
+      cursor: req.query.cursor,
+      limit,
+    });
 
     res.json({ students, pagination });
   } catch (err) {
@@ -374,20 +343,14 @@ async function getDeletedStudentPayments(req, res, next) {
 
     const Payment = require('../models/paymentModel');
 
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (page - 1) * limit;
-
-    // Include payments regardless of studentDeleted flag — this is the audit path
-    const [total, payments] = await Promise.all([
-      Payment.countDocuments({ schoolId: req.schoolId, studentId }).includeDeleted(),
-      Payment.find({ schoolId: req.schoolId, studentId })
-        .includeDeleted()
-        .sort({ confirmedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
+    const { items: payments, pagination } = await paginateList({
+      find: (query) => Payment.find(query).includeDeleted().lean(),
+      scope: 'deleted-student-payments',
+      filter: { schoolId: req.schoolId, studentId },
+      cursor: req.query.cursor,
+      limit,
+    });
 
     res.json({
       student: {
@@ -398,9 +361,7 @@ async function getDeletedStudentPayments(req, res, next) {
         isDeleted: student.deletedAt !== null,
       },
       payments,
-      total,
-      page,
-      pages: Math.ceil(total / limit),
+      pagination,
     });
   } catch (err) {
     next(err);
@@ -899,21 +860,28 @@ async function bulkImportStudents(req, res, next) {
 
 async function getOverdueStudents(req, res, next) {
   try {
-    const now = new Date();
-    const students = await Student.find({
-      schoolId: req.schoolId,
-      feePaid: false,
-      paymentDeadline: { $lt: now, $ne: null },
-    }).lean();
-    // .lean() bypasses the decrypt-on-load hook in studentModel.js, so
-    // parentEmail/parentPhone (encrypted at rest, issue #1480) must be
-    // decrypted explicitly here before they reach the API response.
-    res.json(students.map(s => ({
-      ...s,
-      parentEmail: decryptStudentPii(s.parentEmail),
-      parentPhone: decryptStudentPii(s.parentPhone),
-      isOverdue: true,
-    })));
+    const { items: students, pagination } = await paginateList({
+      find: (query) => Student.find(query).lean(),
+      scope: 'overdue-students',
+      filter: {
+        schoolId: req.schoolId,
+        feePaid: false,
+        paymentDeadline: { $ne: null },
+        $expr: { $lt: ['$paymentDeadline', '$$NOW'] },
+      },
+      cursor: req.query.cursor,
+      limit: Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50)),
+    });
+    // Lean queries bypass the decrypt-on-load hook.
+    res.json({
+      students: students.map((student) => ({
+        ...student,
+        parentEmail: decryptStudentPii(student.parentEmail),
+        parentPhone: decryptStudentPii(student.parentPhone),
+        isOverdue: true,
+      })),
+      pagination,
+    });
   } catch (err) {
     next(err);
   }
@@ -1176,29 +1144,17 @@ async function getFeeHistory(req, res, next) {
   try {
     const { schoolId } = req;
     const { studentId } = req.params;
-    // A non-positive page or limit is treated as unspecified rather than
-    // clamped to 1: `Math.max(1, parseInt('-5'))` would silently answer with a
-    // single row per page, which reads as data loss to whoever is auditing.
-    const parsePositive = (value, fallback) => {
-      const parsed = parseInt(value, 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-    };
-
-    const page = parsePositive(req.query.page, 1);
-    const limit = Math.min(FEE_HISTORY_MAX_LIMIT, parsePositive(req.query.limit, 50));
-    const skip = (page - 1) * limit;
-
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const limit = Math.min(FEE_HISTORY_MAX_LIMIT, requestedLimit > 0 ? requestedLimit : 50);
     const StudentFeeHistory = require('../models/studentFeeHistoryModel');
-    const filter = { schoolId, studentId };
-
-    const [history, total] = await Promise.all([
-      StudentFeeHistory.find(filter)
-        .sort({ archivedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      StudentFeeHistory.countDocuments(filter),
-    ]);
+    const { items: history, pagination } = await paginateList({
+      find: (query) => StudentFeeHistory.find(query).lean(),
+      scope: 'student-fee-history',
+      filter: { schoolId, studentId },
+      cursor: req.query.cursor,
+      limit,
+      timestamp: 'archivedAt',
+    });
 
     res.json({
       studentId,
@@ -1206,14 +1162,7 @@ async function getFeeHistory(req, res, next) {
       // `archived: true` so a client rendering these alongside the live `fees`
       // array can label them, rather than inferring it from the route.
       archived: true,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: skip + history.length < total,
-        hasPrev: page > 1,
-      },
+      pagination,
     });
   } catch (err) {
     next(err);

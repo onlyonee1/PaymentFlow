@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getAuditLogs } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
-import { useAbortController } from "../hooks/useAbortController";
 import {
   IconChevronLeft, IconChevronRight, IconAlertTriangle, IconCheck,
 } from "../components/Icons";
@@ -39,52 +38,42 @@ function AuditLogsContent() {
   const [logs, setLogs]               = useState([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
-  const [total, setTotal]             = useState(0);
   const [nextCursor, setNextCursor]   = useState(null);
-  const [cursorStack, setCursorStack] = useState([]); // Stack of previous cursors for back button
+  const [prevCursor, setPrevCursor]   = useState(null);
   const [expandedId, setExpandedId]   = useState(null);
-  const [loadingMore, setLoadingMore] = useState(false);
   const { filters, setFilter, clearAll, apiParams } = useAuditFilters();
   const [copyStatus, setCopyStatus] = useState("");
 
+  const hasActiveFilters = Object.values(filters).some(Boolean);
+  const requestRef = useRef(null);
   const fetchLogs = (cursor = null) => {
-    const isLoadMore = cursor !== null && cursor !== undefined;
-    if (isLoadMore) {
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-      setLogs([]);
-      setCursorStack([]);
-    }
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setLoading(true);
     setError(null);
-    const params = { ...apiParams };
-    if (cursor) params.cursor = cursor;
-    getAuditLogs(params)
+    const params = { ...apiParams, ...(cursor && { cursor }) };
+
+    getAuditLogs(params, { signal: controller.signal })
       .then(({ data }) => {
-        if (isLoadMore) {
-          setLogs(prev => [...prev, ...data.data]);
-          setCursorStack(prev => [...prev, cursor]);
-        } else {
-          setLogs(data.data);
-          setTotal(data.total);
-        }
+        if (controller.signal.aborted) return;
+        setLogs(data.logs);
         setNextCursor(data.nextCursor);
+        setPrevCursor(data.prevCursor);
       })
       .catch((err) => {
-        // Silently ignore requests cancelled on unmount or navigation.
         if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
         setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("auditLogs.failedToLoad"));
       })
       .finally(() => {
-        if (isLoadMore) {
-          setLoadingMore(false);
-        } else {
-          setLoading(false);
-        }
+        if (!controller.signal.aborted) setLoading(false);
       });
   };
 
-  useEffect(() => { fetchLogs(null); }, [
+  useEffect(() => {
+    fetchLogs();
+    return () => requestRef.current?.abort();
+  }, [
     filters.action, filters.targetType, filters.result, filters.startDate, filters.endDate,
     apiParams.performedBy, apiParams.search,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -192,11 +181,7 @@ function AuditLogsContent() {
           title={t("auditLogs.title")}
           subtitle={t("auditLogs.subtitle")}
         />
-        {!loading && total !== null && (
-          <p style={{ textAlign: "center", fontSize: "0.8125rem", color: "var(--text-muted)", marginTop: "-1.25rem", marginBottom: "1.5rem" }}>
-            {t("auditLogs.showingEntries", { shown: logs.length.toLocaleString(), total: total.toLocaleString() })}
-          </p>
-        )}
+
 
         <div className="card">
           {/* Filters */}
@@ -281,21 +266,17 @@ function AuditLogsContent() {
 
             <div style={{ gridColumn: "1 / -1" }}>
               <DateRangePicker
-                startDate={startDate}
-                endDate={endDate}
+                startDate={filters.startDate}
+                endDate={filters.endDate}
                 onChange={({ startDate: s, endDate: e }) => {
-                  setStartDate(s);
-                  setEndDate(e);
+                  setFilter("startDate", s);
+                  setFilter("endDate", e);
                 }}
               />
             </div>
           </div>
 
-          {/* Table — loading / error / empty / data */}
-          {(() => {
-            const hasActiveFilters = Object.values(filters).some(Boolean);
-
-          {/* Table */}
+          {error && <div role="alert" className="alert alert-danger">{error}</div>}
           {loading ? (
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
@@ -318,37 +299,10 @@ function AuditLogsContent() {
             </div>
           ) : logs.length === 0 ? (
             <EmptyState
-              variant={
-                actionFilter || targetTypeFilter || resultFilter || actorIdFilter || searchFilter || startDate || endDate
-                  ? "filtered"
-                  : "empty"
-              }
-              title={
-                actionFilter || targetTypeFilter || resultFilter || actorIdFilter || searchFilter || startDate || endDate
-                  ? t("auditLogs.emptyFilteredTitle")
-                  : t("auditLogs.noLogsFound")
-              }
-              description={
-                actionFilter || targetTypeFilter || resultFilter || actorIdFilter || searchFilter || startDate || endDate
-                  ? t("auditLogs.emptyFilteredDesc")
-                  : t("auditLogs.emptyFilters")
-              }
-              action={
-                actionFilter || targetTypeFilter || resultFilter || actorIdFilter || searchFilter || startDate || endDate
-                  ? {
-                      label: t("auditLogs.clearFilters"),
-                      onClick: () => {
-                        setActionFilter("");
-                        setTargetTypeFilter("");
-                        setResultFilter("");
-                        setActorIdInput("");
-                        setSearchInput("");
-                        setStartDate("");
-                        setEndDate("");
-                      },
-                    }
-                  : undefined
-              }
+              variant={hasActiveFilters ? "filtered" : "empty"}
+              title={t(hasActiveFilters ? "auditLogs.emptyFilteredTitle" : "auditLogs.noLogsFound")}
+              description={t(hasActiveFilters ? "auditLogs.emptyFilteredDesc" : "auditLogs.emptyFilters")}
+              action={hasActiveFilters ? { label: t("auditLogs.clearFilters"), onClick: clearAll } : undefined}
             />
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -417,39 +371,18 @@ function AuditLogsContent() {
                 </tbody>
               </table>
             </div>
-          );
-          })()}
+          )}
 
           {/* Pagination */}
-          {!loading && nextCursor && (
-            <div style={{ padding: "0.875rem 1.5rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
-              {cursorStack.length > 0 && (
-                <button
-                  className="page-btn"
-                  onClick={() => {
-                    const prevStack = cursorStack.slice(0, -1);
-                    const prevCursor = prevStack.length > 0 ? prevStack[prevStack.length - 1] : null;
-                    setCursorStack(prevStack);
-                    // Reset to first page with current filters
-                    fetchLogs(null);
-                  }}
-                  aria-label={t("actions.previousPage")}
-                  style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
-                  disabled={loadingMore}
-                >
-                  <IconChevronLeft size={15} /> {t("actions.back")}
-                </button>
-              )}
-              <button
-                className="page-btn"
-                onClick={() => fetchLogs(nextCursor)}
-                aria-label={t("actions.nextPage")}
-                style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
-                disabled={loadingMore}
-              >
-                {loadingMore ? t("actions.loading") : t("actions.loadMore")} <IconChevronRight size={15} />
+          {(prevCursor || nextCursor) && (
+            <nav>
+              <button className="page-btn" disabled={loading || !prevCursor} onClick={() => fetchLogs(prevCursor)}>
+                <IconChevronLeft size={15} /> {t("actions.previousPage")}
               </button>
-            </div>
+              <button className="page-btn" disabled={loading || !nextCursor} onClick={() => fetchLogs(nextCursor)}>
+                {t("actions.nextPage")} <IconChevronRight size={15} />
+              </button>
+            </nav>
           )}
         </div>
       </div>

@@ -85,52 +85,49 @@ describe('getFeeHistory query', () => {
 
   it('returns newest archived entries first', async () => {
     await getFeeHistory(req(), makeRes(), jest.fn());
-    expect(chain.calls.sort).toEqual({ archivedAt: -1 });
+    expect(chain.calls.sort).toEqual({ archivedAt: -1, _id: -1 });
   });
 
   it('applies a default page size instead of reading everything', async () => {
     await getFeeHistory(req(), makeRes(), jest.fn());
-    expect(chain.calls.skip).toBe(0);
-    expect(chain.calls.limit).toBe(50);
+    expect(chain.skip).not.toHaveBeenCalled();
+    expect(chain.calls.limit).toBe(51);
   });
 
-  it('offsets by page', async () => {
+  it('ignores numeric offsets', async () => {
     await getFeeHistory(req({ page: '3', limit: '10' }), makeRes(), jest.fn());
-    expect(chain.calls.skip).toBe(20);
-    expect(chain.calls.limit).toBe(10);
+    expect(chain.skip).not.toHaveBeenCalled();
+    expect(chain.calls.limit).toBe(11);
   });
 
-  it('counts with the same filter it queries with', async () => {
+  it('avoids a total-count query', async () => {
     await getFeeHistory(req(), makeRes(), jest.fn());
-    expect(StudentFeeHistory.countDocuments).toHaveBeenCalledWith({
-      schoolId: 'SCH-1',
-      studentId: 'STU-1',
-    });
+    expect(StudentFeeHistory.countDocuments).not.toHaveBeenCalled();
   });
 });
 
 describe('page size bounds', () => {
   it('caps an oversized limit', async () => {
     await getFeeHistory(req({ limit: '10000' }), makeRes(), jest.fn());
-    expect(chain.calls.limit).toBe(FEE_HISTORY_MAX_LIMIT);
+    expect(chain.calls.limit).toBe(FEE_HISTORY_MAX_LIMIT + 1);
   });
 
   it('rejects a zero or negative limit in favour of the default', async () => {
     for (const limit of ['0', '-5']) {
       await getFeeHistory(req({ limit }), makeRes(), jest.fn());
-      expect(chain.calls.limit).toBe(50);
+      expect(chain.calls.limit).toBe(51);
     }
   });
 
   it('rejects a non-numeric limit in favour of the default', async () => {
     await getFeeHistory(req({ limit: 'all' }), makeRes(), jest.fn());
-    expect(chain.calls.limit).toBe(50);
+    expect(chain.calls.limit).toBe(51);
   });
 
   it('never offsets by a negative amount', async () => {
     for (const page of ['0', '-3', 'first']) {
       await getFeeHistory(req({ page }), makeRes(), jest.fn());
-      expect(chain.calls.skip).toBe(0);
+      expect(chain.skip).not.toHaveBeenCalled();
     }
   });
 });
@@ -149,32 +146,10 @@ describe('response body', () => {
     expect(res.body.archived).toBe(true);
   });
 
-  it('reports the pagination state', async () => {
-    StudentFeeHistory.countDocuments.mockResolvedValue(120);
-    const res = makeRes();
-    await getFeeHistory(req({ page: '2', limit: '50' }), res, jest.fn());
-    expect(res.body.pagination).toMatchObject({
-      page: 2,
-      limit: 50,
-      total: 120,
-      totalPages: 3,
-      hasPrev: true,
-    });
-  });
-
-  it('says there is no next page on the last one', async () => {
-    StudentFeeHistory.countDocuments.mockResolvedValue(2);
+  it('reports cursor state for a terminal page', async () => {
     const res = makeRes();
     await getFeeHistory(req(), res, jest.fn());
-    expect(res.body.pagination.hasNext).toBe(false);
-    expect(res.body.pagination.hasPrev).toBe(false);
-  });
-
-  it('says there is a next page when rows remain', async () => {
-    StudentFeeHistory.countDocuments.mockResolvedValue(500);
-    const res = makeRes();
-    await getFeeHistory(req(), res, jest.fn());
-    expect(res.body.pagination.hasNext).toBe(true);
+    expect(res.body.pagination).toEqual({ limit: 50, nextCursor: null, prevCursor: null, hasMore: false });
   });
 
   it('handles a student with no archived entries', async () => {
@@ -184,13 +159,13 @@ describe('response body', () => {
     const res = makeRes();
     await getFeeHistory(req(), res, jest.fn());
     expect(res.body.history).toEqual([]);
-    expect(res.body.pagination).toMatchObject({ total: 0, totalPages: 0, hasNext: false });
+    expect(res.body.pagination).toMatchObject({ nextCursor: null, prevCursor: null, hasMore: false });
   });
 });
 
 describe('error handling', () => {
   it('forwards a query failure to next() rather than answering 200', async () => {
-    StudentFeeHistory.countDocuments.mockRejectedValue(new Error('db down'));
+    chain.lean.mockRejectedValue(new Error('db down'));
     const next = jest.fn();
     const res = makeRes();
     await getFeeHistory(req(), res, next);

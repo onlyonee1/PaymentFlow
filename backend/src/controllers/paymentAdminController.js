@@ -615,8 +615,8 @@ async function getPaymentRefunds(req, res, next) {
     const { schoolId } = req;
     const { txHash } = req.params;
 
-    const refunds = await getRefundsByPayment(schoolId, txHash);
-    res.json({ refunds });
+    const { items: refunds, pagination } = await getRefundsByPayment(schoolId, txHash, req.query);
+    res.json({ refunds, pagination });
   } catch (err) {
     next(err);
   }
@@ -627,8 +627,8 @@ async function getSchoolRefunds(req, res, next) {
     const { schoolId } = req;
     const { status } = req.query;
 
-    const refunds = await getRefundsBySchool(schoolId, status);
-    res.json({ refunds, count: refunds.length });
+    const { items: refunds, pagination } = await getRefundsBySchool(schoolId, status, req.query);
+    res.json({ refunds, count: refunds.length, pagination });
   } catch (err) {
     next(err);
   }

@@ -187,6 +187,7 @@ paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 // Indexes
 // Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).
 // The single-field txHash index (inline, non-unique) is kept for cross-school lookups.
+paymentSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 paymentSchema.index({ schoolId: 1, txHash: 1 }, { unique: true });
 // Unique sparse index on txHash for fast duplicate detection across all schools.
 // sparse: true excludes documents where txHash is null (manually created records).

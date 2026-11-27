@@ -28,10 +28,10 @@ jest.mock('../backend/src/services/auditService', () => ({
   logAudit:         jest.fn().mockResolvedValue({}),
   getAuditLogs:     jest.fn().mockResolvedValue({
     logs:  MOCK_AUDIT_LOGS,
-    total: 2,
-    page:  1,
+    nextCursor: null,
+    prevCursor: null,
+    hasMore: false,
     limit: 50,
-    pages: 1,
   }),
   getRecentAuditLogs: jest.fn().mockResolvedValue(MOCK_AUDIT_LOGS),
   verifyAuditChain:   jest.fn().mockResolvedValue({ valid: true, checkedCount: 2 }),
@@ -83,10 +83,10 @@ describe('#1175 — auditRoutes is mountable and reachable', () => {
 
     expect(res._status).toBe(200);
     expect(res._body).toHaveProperty('logs');
-    expect(res._body).toHaveProperty('total');
-    expect(res._body).toHaveProperty('page');
+    expect(res._body).toHaveProperty('nextCursor');
+    expect(res._body).toHaveProperty('prevCursor');
     expect(res._body).toHaveProperty('limit');
-    expect(res._body).toHaveProperty('pages');
+    expect(res._body).toHaveProperty('hasMore');
     expect(Array.isArray(res._body.logs)).toBe(true);
   });
 
@@ -99,7 +99,6 @@ describe('#1175 — auditRoutes is mountable and reachable', () => {
     expect(res._status).toBe(200);
     expect(res._body.logs).toHaveLength(2);
     expect(res._body.logs[0].action).toBe('student_create');
-    expect(res._body.total).toBe(2);
   });
 
   test('getRecentAuditLogsEndpoint returns an array', async () => {
@@ -114,13 +113,13 @@ describe('#1175 — auditRoutes is mountable and reachable', () => {
 
   test('getAuditLogs is called with schoolId from request', async () => {
     const { getAuditLogs } = require('../backend/src/services/auditService');
-    const req = makeReq({ page: '2', limit: '10' });
+    const req = makeReq({ cursor: 'sample.cursor', limit: '10' });
     const res = makeRes();
 
     await getAuditLogsEndpoint(req, res, next);
 
     expect(getAuditLogs).toHaveBeenCalledWith(
-      expect.objectContaining({ schoolId: 'SCH-1175', page: 2, limit: 10 }),
+      expect.objectContaining({ schoolId: 'SCH-1175', cursor: 'sample.cursor', limit: 10 }),
     );
   });
 
