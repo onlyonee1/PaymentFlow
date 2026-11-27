@@ -59,6 +59,7 @@ const {
   validateSubmitTransaction,
   validatePagination,
 } = require('../middleware/validate');
+const { createBatchPaymentIntent, confirmBatchPayment } = require('../controllers/batchPaymentController');
 const { resolveSchool } = require('../middleware/schoolContext');
 const idempotencyMiddleware = require('../middleware/idempotency');
 const { auditContext } = require('../middleware/auditContext');
@@ -173,6 +174,14 @@ router.post(
   contractPaused,
   createPaymentIntent,
 );
+router.post(
+  "/batch-intent",
+  resolveSchool,
+  contractPaused,
+  idempotencyMiddleware({ criticalPaymentEndpoints: true, schoolScoped: true }),
+  createBatchPaymentIntent,
+);
+router.post("/batch-confirm", resolveSchool, contractPaused, confirmBatchPayment);
 router.post(
   "/submit",
   validateSubmitTransaction,
