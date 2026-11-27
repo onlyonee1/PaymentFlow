@@ -1,0 +1,65 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #14342f;
+  background: #edf4f1;
+  line-height: 1.5;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+.wrap { width: min(100% - 2rem, 32rem); margin-inline: auto; }
+header { color: #fff; background: #103c35; }
+.masthead { min-height: 4rem; display: flex; align-items: center; justify-content: space-between; }
+main { padding-block: 1.5rem 2.5rem; }
+h1 { font-size: clamp(1.65rem, 6vw, 2.5rem); line-height: 1.15; margin: 0 0 0.75rem; }
+h2 { font-size: 1.25rem; margin-block: 0 0.5rem; }
+p { margin-block: 0.5rem 0.85rem; }
+form, section {
+  padding: clamp(1rem, 5vw, 1.6rem);
+  margin-block: 1rem;
+  background: #fff;
+  border: 1px solid #cfdfd8;
+  border-radius: 1rem;
+}
+label, dt { display: block; font-weight: 650; }
+input {
+  min-height: 3rem;
+  width: 100%;
+  border: 1px solid #64877e;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-block: 0.25rem 0.9rem;
+  color: inherit;
+  font: inherit;
+}
+button, .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  width: 100%;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #11624e;
+  border-radius: 0.5rem;
+  background: #11624e;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  text-align: center;
+  text-decoration: none;
+}
+button:disabled { opacity: 0.65; cursor: wait; }
+.secondary, #install { color: #10503f; background: #fff; }
+#install { width: auto; }
+#check-receipt { margin-block-start: 0.6rem; }
+a { color: #115f4c; }
+:focus-visible { outline: 3px solid #b45513; outline-offset: 3px; }
+.amount { font-size: 1.85rem; font-weight: 700; }
+dl { margin-block: 0.8rem 1rem; }
+dd { margin: 0 0 0.6rem; overflow-wrap: anywhere; }
+ul { list-style: none; padding: 0; margin: 0.75rem 0; }
+.receipt { padding: 0.65rem 0; border-block-start: 1px solid #cfdfd8; overflow-wrap: anywhere; }
+.receipt p { margin: 0.25rem 0; }
+#latest-receipt:empty { display: none; }

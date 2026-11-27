@@ -5,7 +5,7 @@
  *
  * Exported metrics (all registered on the shared registry from metrics/index.js):
  *
- *   webhook_deliveries_total{event, outcome}
+ *   webhook_deliveries_total{event, outcome, status, school, status_class}
  *     Counter. Incremented after every delivery attempt.
  *     outcome: 'success' | 'failure'
  *
@@ -25,7 +25,7 @@ const client = require('prom-client');
 const webhookDeliveriesTotal = new client.Counter({
   name: 'webhook_deliveries_total',
   help: 'Total webhook delivery attempts by event type and outcome',
-  labelNames: ['event', 'outcome'],
+  labelNames: ['event', 'outcome', 'status', 'school', 'status_class'],
   registers: [registry],
 });
 
@@ -55,6 +55,68 @@ const webhookDeadLetterTotal = new client.Gauge({
   labelNames: ['schoolId'],
   registers: [registry],
 });
+
+const webhookRetryAttempts = new client.Counter({
+  name: 'webhook_retry_attempt_total',
+  help: 'Webhook retry attempts by event and attempt number',
+  labelNames: ['event', 'attempt_number'],
+  registers: [registry],
+});
+
+const webhookTerminalOutcomes = new client.Counter({
+  name: 'webhook_deliveries_terminal_total',
+  help: 'Terminal webhook retry outcomes',
+  labelNames: ['event', 'terminal_outcome'],
+  registers: [registry],
+});
+
+const webhookQueueDepth = new client.Gauge({
+  name: 'webhook_queue_depth',
+  help: 'Queued and in-flight webhook retries',
+  registers: [registry],
+  async collect() {
+    const WebhookRetry = require('../models/webhookRetryModel');
+    if (WebhookRetry.db?.readyState !== 1) return;
+    const depth = await WebhookRetry.countDocuments({ status: { $in: ['pending', 'processing'] } })
+      .catch(() => null);
+    if (depth !== null) this.set(depth);
+  },
+});
+
+const webhookPendingAge = new client.Gauge({
+  name: 'webhook_pending_delivery_age_seconds',
+  help: 'Age in seconds of the earliest due pending retry',
+  registers: [registry],
+  async collect() {
+    const WebhookRetry = require('../models/webhookRetryModel');
+    if (WebhookRetry.db?.readyState !== 1) return;
+    const retry = await WebhookRetry.findOne({ status: 'pending', nextRetryAt: { $lte: new Date() } })
+      .sort({ nextRetryAt: 1 }).select('nextRetryAt').lean()
+      .catch(() => undefined);
+    if (retry !== undefined) {
+      this.set(retry ? Math.max(0, (Date.now() - retry.nextRetryAt) / 1000) : 0);
+    }
+  },
+});
+
+function classifyStatus(statusCode, error = '') {
+  if (statusCode >= 200 && statusCode < 300) return '2xx';
+  if (statusCode >= 300 && statusCode < 400) return 'redirect_blocked';
+  if (statusCode >= 400 && statusCode < 500) return '4xx';
+  if (statusCode >= 500 && statusCode < 600) return '5xx';
+  if (/timeout|timed out/i.test(error)) return 'timeout';
+  if (/ssrf/i.test(error)) return 'ssrf_blocked';
+  if (/replay/i.test(error)) return 'replay_blocked';
+  return 'network_error';
+}
+
+function recordRetryAttempt(event, attemptNumber) {
+  webhookRetryAttempts.inc({ event, attempt_number: String(attemptNumber) });
+}
+
+function recordTerminalOutcome(event, outcome) {
+  webhookTerminalOutcomes.inc({ event, terminal_outcome: outcome });
+}
 
 /**
  * Refresh the webhook_dead_letter_total gauge by querying the WebhookDelivery
@@ -88,9 +150,9 @@ async function refreshDeadLetterGauge() {
  * @param {string} event       Webhook event type (e.g. 'payment.confirmed')
  * @param {number} durationMs  Round-trip time in ms
  */
-function recordDeliverySuccess(event, durationMs) {
+function recordDeliverySuccess(event, durationMs, statusCode = 200, schoolId = null) {
   webhookDeliveryTotal.inc({ status: 'success' });
-  webhookDeliveriesTotal.inc({ event, outcome: 'success' });
+  webhookDeliveriesTotal.inc({ event, outcome: 'success', status: 'success', school: schoolId || 'unknown', status_class: classifyStatus(statusCode) });
   webhookDeliveryDurationMs.observe({ event }, durationMs);
   webhookDeliveryDurationSeconds.observe({ event }, durationMs / 1000);
 }
@@ -103,9 +165,9 @@ function recordDeliverySuccess(event, durationMs) {
  * @param {boolean} [isDeadLetter=false]  True when all retries have been exhausted
  * @param {string}  [schoolId]   Required when isDeadLetter is true
  */
-function recordDeliveryFailure(event, durationMs, isDeadLetter = false, schoolId = null) {
+function recordDeliveryFailure(event, durationMs, isDeadLetter = false, schoolId = null, statusCode = null, error = undefined) {
   webhookDeliveryTotal.inc({ status: 'failure' });
-  webhookDeliveriesTotal.inc({ event, outcome: 'failure' });
+  webhookDeliveriesTotal.inc({ event, outcome: 'failure', status: 'failure', school: schoolId || 'unknown', status_class: classifyStatus(statusCode, error) });
   webhookDeliveryDurationMs.observe({ event }, durationMs);
   webhookDeliveryDurationSeconds.observe({ event }, durationMs / 1000);
 
@@ -138,6 +200,11 @@ function recordInboundVerificationFailure(provider = 'stellaredupay', reason = '
 
 module.exports = {
   webhookDeliveriesTotal,
+  webhookQueueDepth,
+  webhookPendingAge,
+  classifyStatus,
+  recordRetryAttempt,
+  recordTerminalOutcome,
   webhookDeliveryDurationMs,
   webhookDeliveryDurationSeconds,
   webhookDeadLetterTotal,

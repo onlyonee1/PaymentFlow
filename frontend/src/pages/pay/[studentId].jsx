@@ -1,21 +1,15 @@
-import { useRouter } from "next/router";
 import Head from "next/head";
 import PaymentForm from "../../components/PaymentForm";
 import VerifyPayment from "../../components/VerifyPayment";
-import SseDegradedBanner from "../../components/SseDegradedBanner";
-import { SkeletonDetailCard, SkeletonBlock } from "../../components/Skeleton";
-import { usePaymentEvents } from "../../hooks/usePaymentEvents";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
-import { useAdminAuthContext } from "../../hooks/AdminAuthContext";
+import { schoolPath } from "../../config/seo";
+import { getPublicSchools } from "../../services/publicSchools";
 import { useTranslation } from "react-i18next";
 
 // #1344 — shareable, bookmarkable payment status URL. Pre-fills the student
 // lookup from the route param instead of requiring manual re-entry.
-export default function PayFeesForStudent() {
-  const router = useRouter();
+export default function PayFeesForStudent({ school, studentId }) {
   const { t } = useTranslation();
-  const { studentId } = router.query;
-  const { degraded, connectionStatus } = usePaymentEvents();
   // Track network connectivity to disable mutation actions while offline (Issue #269).
   const { isOnline } = useOnlineStatus();
 
@@ -47,8 +41,7 @@ export default function PayFeesForStudent() {
 
   return (
     <>
-      <Head><title>{t("nav.payFees")} | {t("app.name")}</title></Head>
-      <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} />
+      <Head><title>{t("nav.payFees")} | {school?.name || t("app.name")}</title></Head>
 
       <div className="payfees-page">
         <div className="payfees-header">
@@ -56,15 +49,33 @@ export default function PayFeesForStudent() {
             <span className="payfees-badge-dot" />
             {t("payFees.liveOnStellar")}
           </span>
-          <h1>{t("payFees.heroTitle")}</h1>
-          <p>{t("payFees.studentHeroDesc")}</p>
+          <h1>{school?.name || t("payFees.heroTitle")}</h1>
+          <p>{t(school && !studentId ? "payFees.heroDesc" : "payFees.studentHeroDesc")}</p>
         </div>
 
         <div className="payfees-grid">
-          {typeof studentId === "string" && <PaymentForm initialStudentId={studentId} disabled={!isOnline} />}
-          <VerifyPayment disabled={!isOnline} />
+          <PaymentForm key={school?.slug || studentId} initialStudentId={studentId} schoolSlug={school?.slug} disabled={!isOnline} />
+          <VerifyPayment schoolSlug={school?.slug} disabled={!isOnline} />
         </div>
       </div>
     </>
   );
+}
+
+export async function getServerSideProps({ params, query, res }) {
+  const id = params.studentId;
+  let school = null;
+  if (id === id.toLowerCase()) {
+    try {
+      school = (await getPublicSchools()).find(({ slug }) => slug === id) || null;
+    } catch {
+      // A directory outage still permits existing shared student URLs.
+    }
+  }
+  const studentId = school
+    ? (typeof query.student === "string" ? query.student : "")
+    : id;
+  const canonicalPath = school && !query.student ? schoolPath("pay", school.slug) : null;
+  if (!canonicalPath) res.setHeader("X-Robots-Tag", "noindex,nofollow");
+  return { props: { school, studentId, canonicalPath } };
 }

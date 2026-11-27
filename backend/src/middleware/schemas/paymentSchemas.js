@@ -14,7 +14,7 @@
  */
 
 const Joi = require('joi');
-const { decimalAmountJoi, CURRENCY_RULES } = require('../utils/decimalPrecision');
+const { decimalAmountJoi, CURRENCY_RULES } = require('../../utils/decimalPrecision');
 
 // ── Shared atomic rules ──────────────────────────────────────────────────────
 

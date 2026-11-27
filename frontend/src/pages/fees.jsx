@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import {
   getFeeStructures,
   createFeeStructure,
+  createFeePaymentQr,
   deleteFeeStructure,
-  getStudents,
   getSchool,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
@@ -27,6 +27,22 @@ const EMPTY_FORM = {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
+  const { t } = useTranslation();
+  const [paymentQr, setPaymentQr] = useState(null);
+  const qrDialog = useRef(null);
+
+  async function showPaymentQr(fee) {
+    const label = fee.className;
+    setPaymentQr({ label, loading: true });
+    qrDialog.current.showModal();
+    try {
+      const { data } = await createFeePaymentQr(fee._id);
+      setPaymentQr({ label, ...data });
+    } catch (err) {
+      setPaymentQr({ label, error: err.response?.data?.error || "Could not create the payment QR code." });
+    }
+  }
+
   const [fees, setFees]             = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
@@ -40,7 +56,7 @@ export default function FeesPage() {
   const [createSuccess, setCreateSuccess] = useState(false);
 
   // Delete state
-  const [pendingDelete, setPendingDelete] = useState(null); // { fee, studentCount }
+  const [pendingDelete, setPendingDelete] = useState(null);
   const [deleteError, setDeleteError]     = useState(null);
 
   // Issue #254 — abort in-flight fee requests when the component unmounts.
@@ -128,16 +144,9 @@ export default function FeesPage() {
 
   // ── Delete handlers ───────────────────────────────────────────────────────
 
-  async function handleDeleteClick(fee) {
+  function handleDeleteClick(fee) {
     setDeleteError(null);
-    let studentCount = 0;
-    try {
-      const { data } = await getStudents(1, 1, { className: fee.className });
-      studentCount = data.total || 0;
-    } catch {
-      // non-fatal — proceed without count
-    }
-    setPendingDelete({ fee, studentCount });
+    setPendingDelete({ fee });
   }
 
   async function handleConfirmDelete() {
@@ -158,6 +167,22 @@ export default function FeesPage() {
 
   return (
     <>
+      <dialog ref={qrDialog} aria-labelledby="fee-payment-qr-title" style={{ maxWidth: "min(90vw, 26rem)", padding: "1.25rem" }}>
+        <h2 id="fee-payment-qr-title">Payment QR code</h2>
+        {paymentQr?.label && <p>{paymentQr.label}</p>}
+        {paymentQr?.loading && <p role="status">Creating QR code…</p>}
+        {paymentQr?.error && <p role="alert">{paymentQr.error}</p>}
+        {paymentQr?.qrImage && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={paymentQr.qrImage} alt={`Scan to pay ${paymentQr.label}`} width="300" height="300" style={{ maxWidth: "100%", height: "auto" }} />
+            <p>Expires {new Date(paymentQr.expiresAt).toLocaleDateString()}</p>
+            <p><a href={paymentQr.qrImage} download="payment-qr.png">Download QR code</a></p>
+            <p><a href={paymentQr.url} target="_blank" rel="noreferrer">Open payment link</a></p>
+          </>
+        )}
+        <form method="dialog"><button className="btn btn-ghost">Close</button></form>
+      </dialog>
       <PageHero
         eyebrow={t("fees.eyebrow")}
         title={t("fees.title")}
@@ -167,7 +192,7 @@ export default function FeesPage() {
       <div className="page-wrap">
 
         {/* ── Create form ──────────────────────────────────────────────────── */}
-        <div className="card" style={{ marginBottom: "1.5rem" }}>
+        <div className="card" id="create-fee" style={{ marginBottom: "1.5rem" }}>
           <div className="card-header">
             <div
               className="card-title"
@@ -344,6 +369,7 @@ export default function FeesPage() {
               />
             </div>
           ) : (
+            <>
             <div style={{ overflowX: "auto" }}>
               <table
                 className="data-table"
@@ -384,6 +410,11 @@ export default function FeesPage() {
                         {fee.description || "—"}
                       </td>
                       <td>
+                        {fee._id && (
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => showPaymentQr(fee)} aria-label={`Payment QR for ${fee.className}`}>
+                            Payment QR
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDeleteClick(fee)}
                           className="btn btn-sm btn-ghost"
@@ -411,6 +442,7 @@ export default function FeesPage() {
                 itemLabel={t("fees.title")}
               />
             )}
+            </>
           )}
         </div>
       </div>
@@ -422,9 +454,6 @@ export default function FeesPage() {
           title={t("fees.deleteTitle")}
           description={
             `${t("fees.deleteIntro")} ${pendingDelete.fee.className}.` +
-            (pendingDelete.studentCount > 0
-              ? ` ${t("fees.deleteAffects")} ${t("fees.studentCount", { count: pendingDelete.studentCount })}.`
-              : "") +
             ` ${t("fees.deleteCannotUndo")}`
           }
           confirmLabel={t("actions.delete")}

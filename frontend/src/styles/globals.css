@@ -890,6 +890,43 @@ table.data-table {
 .empty-state-title { font-weight: 700; font-size: 1rem; color: var(--text); }
 .empty-state-desc { font-size: 0.85rem; color: var(--text-muted); max-width: 320px; }
 
+.empty-state-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 260px;
+  padding: clamp(2rem, 6vw, 3.5rem) clamp(1rem, 4vw, 2rem);
+  text-align: center;
+}
+.empty-state-illustration {
+  display: block;
+  width: clamp(96px, 16vw, 144px);
+  height: auto;
+  margin-bottom: 1.25rem;
+}
+.empty-state-panel-title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.05rem, 2vw, 1.25rem);
+  font-weight: 700;
+}
+.empty-state-panel-description {
+  max-width: 36rem;
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.empty-state-action { margin-top: 1.25rem; min-height: 44px; }
+@media (max-width: 480px) {
+  .empty-state-panel { min-height: 220px; padding: 2rem 1rem; }
+  .empty-state-action { width: min(100%, 18rem); justify-content: center; }
+}
+
 /* ══════════════════════════════════════════════════════════
    PAGINATION
 ══════════════════════════════════════════════════════════ */
@@ -1910,3 +1947,31 @@ html.dark textarea::placeholder { color: var(--text-subtle); }
     animation: none !important;
   }
 }
+
+/* ── RTL Layout Scaffolding (Issue #603) ────────────────────────────────── */
+[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+[dir="rtl"] .nav-inner,
+[dir="rtl"] .card-header,
+[dir="rtl"] .data-table th,
+[dir="rtl"] .data-table td {
+  text-align: right;
+}
+
+[dir="rtl"] .nav-brand {
+  margin-left: 1.5rem;
+  margin-right: 0;
+}
+
+[dir="rtl"] .nav-right {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir="rtl"] .btn {
+  flex-direction: row-reverse;
+}
+

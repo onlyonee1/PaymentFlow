@@ -125,8 +125,11 @@ if (MAX_PAYMENT_AMOUNT <= MIN_PAYMENT_AMOUNT) {
 }
 
 // ── Body Size Limit ───────────────────────────────────────────────────────────
-// Global JSON body size limit. Multipart CSV uploads use their own streaming cap.
-const MAX_BODY_SIZE = '50kb';
+// JSON and URL-encoded bodies can be capped below the 100 KiB ceiling.
+const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE ?? '100kb';
+if (!/^(?:[1-9]\d?|100)kb$/.test(MAX_BODY_SIZE)) {
+  throw new Error('[Config] MAX_BODY_SIZE must be between 1kb and 100kb');
+}
 
 // ── Timeouts ──────────────────────────────────────────────────────────────────
 const REQUEST_TIMEOUT_MS = parseInt(
@@ -265,6 +268,7 @@ const config = Object.freeze({
   STELLAR_TIMEOUT_MS,
   TRUSTED_PROXY_HOPS,
   JWT_SECRET,
+  EMAIL_UNSUBSCRIBE_SECRET: process.env.EMAIL_UNSUBSCRIBE_SECRET,
   JWT_EXPIRES_IN,
   REMINDER_INTERVAL_MS,
   REMINDER_COOLDOWN_HOURS,
