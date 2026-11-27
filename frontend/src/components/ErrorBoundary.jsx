@@ -1,6 +1,55 @@
+/**
+ * ErrorBoundary — Issue #9
+ *
+ * Enhancements over the original:
+ *
+ * 1. Correlation ID — generated via crypto.randomUUID() (with a Math.random
+ *    fallback for environments that lack the Web Crypto API) so operators can
+ *    correlate a user-visible reference with server logs.
+ *
+ * 2. Sensitive detail suppression — raw error.message and stack traces are
+ *    never rendered in the UI; only the correlation ID is surfaced.
+ *
+ * 3. Retry button — resets the boundary's own state (hasError → false) so the
+ *    child tree is re-mounted without a full page reload.
+ *
+ * 4. Reload button — retained for cases where a full reload is needed.
+ *
+ * 5. Accepts an optional `onError` prop for external logging hooks.
+ *
+ * Security note: error.message and componentStack are intentionally kept out
+ * of the rendered output to avoid leaking implementation details (stack paths,
+ * internal state values, etc.) to end users.  Only the correlation ID is shown.
+ */
+
 import { Component } from "react";
 import Link from "next/link";
 import { withTranslation } from "react-i18next";
+import { reportRenderError } from "../services/errorTracker";
+
+/**
+ * Generate a short, URL-safe correlation ID.
+ * Uses the Web Crypto API when available; falls back to Math.random().
+ */
+function generateCorrelationId() {
+  try {
+    if (
+      typeof globalThis !== "undefined" &&
+      globalThis.crypto &&
+      typeof globalThis.crypto.randomUUID === "function"
+    ) {
+      // Full UUID — trim to the first segment for display brevity.
+      return globalThis.crypto.randomUUID().split("-")[0].toUpperCase();
+    }
+  } catch {
+    // Ignore — fall through to the Math.random fallback.
+  }
+  // Fallback: 8 hex chars from Math.random.
+  return Math.floor(Math.random() * 0xffffffff)
+    .toString(16)
+    .padStart(8, "0")
+    .toUpperCase();
+}
 
 /**
  * ErrorBoundary — full-page boundary wrapping the entire app.
@@ -12,36 +61,48 @@ import { withTranslation } from "react-i18next";
  * Usage: wrap the top-level <Component> in _app.jsx.
  */
 class ErrorBoundary extends Component {
-  state = { hasError: false, error: null };
+  constructor(props) {
+    super(props);
+    this.state = {
+      hasError: false,
+      correlationId: null,
+    };
+    this._handleRetry = this._handleRetry.bind(this);
+  }
 
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+  static getDerivedStateFromError() {
+    // Do NOT store the raw error object in state — it would leak to the renderer.
+    return {
+      hasError: true,
+      correlationId: generateCorrelationId(),
+    };
   }
 
   componentDidCatch(error, info) {
-    console.error("Unhandled render error:", error, info.componentStack);
+    const { correlationId } = this.state;
+    const { onError, sectionName = "Application" } = this.props;
+    const componentStack = info?.componentStack || "";
 
-    // Fatal: missing auth/session context — redirect rather than showing
-    // a confusing fallback UI.
-    if (
-      error?.message?.toLowerCase().includes("cannot read propert") &&
-      error?.message?.toLowerCase().includes("auth")
-    ) {
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
+    reportRenderError(error, componentStack, { correlationId, section: sectionName });
+
+    if (typeof onError === "function") {
+      onError({ error, componentStack, correlationId, section: sectionName });
     }
   }
 
-  retry() {
-    this.setState({ hasError: false, error: null });
+  _handleRetry() {
+    // Reset boundary state so children are re-mounted without a page reload.
+    this.setState({ hasError: false, correlationId: null });
   }
 
   render() {
-    const { t } = this.props;
-    if (this.state.hasError) {
+    const { t, children, sectionName = "Application" } = this.props;
+    const { hasError, correlationId } = this.state;
+
+    if (hasError) {
       return (
         <div
+          role="alert"
           style={{
             minHeight: "60vh",
             display: "flex",
@@ -55,10 +116,12 @@ class ErrorBoundary extends Component {
             color: "var(--text, #0f172a)",
           }}
         >
-          <div style={{ fontSize: "3rem" }}>⚠️</div>
+          <div style={{ fontSize: "3rem" }} aria-hidden="true">⚠️</div>
+
           <h2 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>
-            {t("errorBoundary.title")}
+            {t("errorBoundary.sectionTitle", { section: sectionName })}
           </h2>
+
           <p
             style={{
               margin: 0,
@@ -68,6 +131,22 @@ class ErrorBoundary extends Component {
           >
             {t("errorBoundary.body")}
           </p>
+
+          {/* Correlation ID — shown to users so support teams can locate the event. */}
+          {correlationId && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: "0.75rem",
+                color: "var(--text-muted, #94a3b8)",
+                fontFamily: "monospace",
+              }}
+              aria-label={t("errorBoundary.correlationId", { id: correlationId })}
+            >
+              {t("errorBoundary.correlationId", { id: correlationId })}
+            </p>
+          )}
+
           <div
             style={{
               display: "flex",
@@ -76,8 +155,9 @@ class ErrorBoundary extends Component {
               justifyContent: "center",
             }}
           >
+            {/* Retry — resets boundary state, re-mounts the failed subtree */}
             <button
-              onClick={() => this.retry()}
+              onClick={this._handleRetry}
               style={{
                 padding: "0.5rem 1.25rem",
                 borderRadius: "8px",
@@ -88,14 +168,30 @@ class ErrorBoundary extends Component {
                 cursor: "pointer",
               }}
             >
+              {t("errorBoundary.retry")}
+            </button>
+
+            {/* Reload — full page reload as last resort */}
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: "0.5rem 1.25rem",
+                borderRadius: "8px",
+                border: "1px solid var(--border, #e7e9f3)",
+                background: "var(--card-bg, #fff)",
+                color: "var(--text, #0f172a)",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
               {t("errorBoundary.reload")}
             </button>
+
+            {/* Go Back — navigates to the previous history entry */}
             <button
               onClick={() => {
-                const onNavigated = () => {
-                  this.setState({ hasError: false, error: null });
-                };
-                window.addEventListener("popstate", onNavigated, { once: true });
+                // Navigate back; the parent will re-render a fresh boundary
+                // instance because the page component changes.
                 window.history.back();
               }}
               style={{
@@ -110,6 +206,7 @@ class ErrorBoundary extends Component {
             >
               {t("errorBoundary.goBack")}
             </button>
+
             <Link
               href="/"
               style={{
@@ -129,7 +226,8 @@ class ErrorBoundary extends Component {
         </div>
       );
     }
-    return this.props.children;
+
+    return children;
   }
 }
 
