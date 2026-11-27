@@ -1,6 +1,19 @@
 groups:
   - name: webhook_alerts
     rules:
+      - alert: WebhookEndpointConsecutiveFailures
+        expr: webhook_endpoint_consecutive_failures >= 10
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Webhook endpoint has 10 consecutive failures"
+          description: >
+            Endpoint {{ $labels.endpoint_id }} for school {{ $labels.school_id }}
+            has failed {{ $value }} consecutive delivery attempts. Check the
+            endpoint configuration and recent delivery history.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/WEBHOOK_INTEGRATION.md"
+
       # Alert when more than 20% of webhook deliveries are failing over a 5-minute window
       - alert: WebhookHighFailureRate
         expr: |
@@ -18,6 +31,7 @@ groups:
             More than 20% of webhook deliveries are failing (current rate:
             {{ printf "%.1f" (mul 100 $value) }}%).
             Check dead-letter queue and endpoint health.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/WEBHOOK_INTEGRATION.md"
 
       # Alert when dead-letter count exceeds 50 for any school
       - alert: WebhookDeadLetterGrowing
@@ -31,6 +45,7 @@ groups:
             School {{ $labels.schoolId }} has {{ $value }} webhook deliveries in the
             dead-letter queue. Investigate endpoint health and replay failed deliveries
             via POST /api/webhook-deliveries/:id/replay or the admin DLQ endpoint.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/WEBHOOK_INTEGRATION.md"
 
       # Alert when webhook delivery latency p95 exceeds 5 seconds
       - alert: WebhookHighLatency
@@ -44,6 +59,7 @@ groups:
           description: >
             The 95th-percentile webhook delivery time has exceeded 5 seconds.
             Deliveries approaching the 10 s timeout may be failing silently.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/WEBHOOK_INTEGRATION.md"
 
       # Alert when the oldest pending webhook retry is more than 1 hour old.
       # Under normal operation the max backoff is 15 min (WEBHOOK_MAX_BACKOFF_MS).

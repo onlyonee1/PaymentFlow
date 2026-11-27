@@ -9,23 +9,36 @@ import RequireAdmin from "../components/RequireAdmin";
 import EmptyState, { StandaloneEmptyState } from "../components/EmptyState";
 import BlockchainStatusBadge from "../components/BlockchainStatusBadge";
 import { TableDensityControl, useTableDensity } from "../components/TableDensityControl";
+import AccessiblePagination from "../components/AccessiblePagination";
 import { SkeletonStatCard, SkeletonTableRow } from "../components/Skeleton";
-import FilterChips from "../components/FilterChips"; // Issue #107
 import Pagination from "../components/Pagination";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
+import { usePaymentStream } from "../hooks/usePaymentStream";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useRouteChangeAbort } from "../hooks/useRouteChangeAbort";
+import useGridCellNavigation from "../hooks/useGridCellNavigation";
 import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
   IconUsers, IconCheck, IconAlertTriangle, IconDollarSign,
-  IconSearch, IconChevronLeft, IconChevronRight,
+  IconSearch,
 } from "../components/Icons";
 import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
+import FilterChips from "../components/FilterChips";
 import { formatRelative } from "../utils/dateTime";
+import { isRetryable } from "../utils/retryClassification";
+import {
+  invalidateDashboardData,
+  loadDashboardStudents,
+  loadDashboardSummary,
+  loadDashboardSyncStatus,
+} from "../hooks/useDashboardLoader";
 
 const DEFAULT_PAGE_SIZE = 20;
+const OPTIMISTIC_STUDENT_FIELDS = ["name", "class", "parentEmail", "parentPhone", "reminderOptOut"];
 
 function Dashboard() {
   const { t } = useTranslation();
+  const studentGridProps = useGridCellNavigation();
   const timeAgo = (iso) => formatRelative(iso, t);
 
   const STATUS_BADGE = {
@@ -39,9 +52,11 @@ function Dashboard() {
   const [summary, setSummary]                 = useState(null);
   const [summaryLoading, setSummaryLoading]   = useState(true);
   const [summaryError, setSummaryError]       = useState(null);
+  const [summaryRetryable, setSummaryRetryable] = useState(false);
   const [students, setStudents]               = useState([]);
   const [studentsLoading, setStudentsLoading] = useState(true);
   const [studentsError, setStudentsError]     = useState(null);
+  const [studentsRetryable, setStudentsRetryable] = useState(false);
   const [page, setPage]                       = useState(1);
   const [pages, setPages]                     = useState(1);
   const [total, setTotal]                     = useState(0);
@@ -53,6 +68,7 @@ function Dashboard() {
   const [error, setError]                     = useState(null);
   const [editingStudent, setEditingStudent]   = useState(null);
   const [editingStudentData, setEditingStudentData] = useState(null);
+  const [mutationToast, setMutationToast] = useState("");
 
   // Table density (compact / default / comfortable) — Issue #113
   const { density, setDensity } = useTableDensity();
@@ -64,21 +80,49 @@ function Dashboard() {
     onEvent: (type) => {
       // Refresh summary/students whenever a payment or dispute event arrives.
       if (type === 'payment' || type.startsWith('dispute')) {
+        invalidateDashboardData();
         fetchSummary();
         fetchStudents(page, debouncedSearch, statusFilter, classFilter);
       }
     },
   });
 
-  // Issue #6 — abort page-level requests when the user navigates away.
-  // The returned signal is passed to fetchSummary / initial data loads below.
-  const { signal: routeSignal } = useRouteChangeAbort();
+  // Real-time live payment stream (Issue #553) — updates payment status badges without page reload and fires toast on confirmed.
+  const { toast: paymentToast, dismissToast: dismissPaymentToast } = usePaymentStream({
+    onPaymentUpdate: (updatedPayment) => {
+      if (updatedPayment?.studentId) {
+        setStudents((prev) =>
+          prev.map((s) => {
+            if (s.studentId === updatedPayment.studentId) {
+              const paymentStatus = String(updatedPayment.status || '').toLowerCase();
+              let newStatus = s.status;
+              if (paymentStatus === 'confirmed' || paymentStatus === 'success') {
+                newStatus = 'paid';
+              } else if (paymentStatus === 'submitted' || paymentStatus === 'pending') {
+                newStatus = 'partial';
+              }
+              return { ...s, status: newStatus };
+            }
+            return s;
+          })
+        );
+      }
+    },
+    onConfirmed: () => {
+      invalidateDashboardData();
+      fetchSummary();
+    },
+  });
+
+  // Offline / reconnection tracking (Issue #269).
+  const { justReconnected } = useOnlineStatus();
 
   const searchDebounceRef = useRef(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
   // Holds the AbortController for the most-recent fetchStudents call so
   // superseded (stale) requests can be cancelled before the next one starts.
   const studentsAbortRef = useRef(null);
+  const optimisticStudentRef = useRef(null);
 
   useEffect(() => {
     clearTimeout(searchDebounceRef.current);
@@ -89,14 +133,16 @@ function Dashboard() {
   const fetchSummary = useCallback(() => {
     setSummaryLoading(true);
     setSummaryError(null);
+    setSummaryRetryable(false);
     // Pass the route-change signal so navigation cancels the in-flight request
     // without triggering an error toast (Issue #6).
-    getPaymentSummary({ signal: routeSignal })
+    loadDashboardSummary({ signal: routeSignal })
       .then(({ data }) => setSummary(data))
       .catch((err) => {
         // Silently ignore requests cancelled by route change or AbortController.
         if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
         setSummaryError(t("dashboard.failedToLoadSummary"));
+        setSummaryRetryable(isRetryable(err));
       })
       .finally(() => setSummaryLoading(false));
   }, [t, routeSignal]);
@@ -109,7 +155,8 @@ function Dashboard() {
 
     setStudentsLoading(true);
     setStudentsError(null);
-    getStudents(p, pageSize, { search: srch, status: st, className: cls }, { signal: controller.signal })
+    setStudentsRetryable(false);
+    loadDashboardStudents(p, pageSize, { search: srch, status: st, className: cls }, { signal: controller.signal })
       .then(({ data }) => {
         setStudents(data.students);
         setPages(data.pages || 1);
@@ -119,6 +166,7 @@ function Dashboard() {
         // Silently ignore aborted (superseded) requests.
         if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
         setStudentsError(t("dashboard.failedToLoadStudents"));
+        setStudentsRetryable(isRetryable(err));
       })
       .finally(() => {
         // Only clear loading when this controller is still the current one.
@@ -137,7 +185,7 @@ function Dashboard() {
   useEffect(() => {
     // Pass routeSignal so navigation cancels these page-level requests without
     // triggering error toasts (Issue #6).
-    getSyncStatus({ signal: routeSignal })
+    loadDashboardSyncStatus({ signal: routeSignal })
       .then(({ data }) => setLastSyncAt(data.lastSyncAt))
       .catch((err) => {
         if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
@@ -167,7 +215,18 @@ function Dashboard() {
     fetchStudents(page, debouncedSearch, statusFilter, classFilter);
   }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Issue #269 — automatically refresh data when network connectivity is
+  // restored after an offline period.
+  useEffect(() => {
+    if (justReconnected) {
+      fetchSummary();
+      fetchStudents(1, debouncedSearch, statusFilter, classFilter);
+      setPage(1);
+    }
+  }, [justReconnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleSyncComplete(data) {
+    invalidateDashboardData();
     setLastSyncAt(new Date().toISOString());
     setSyncMsg(data?.message || t("dashboard.syncComplete"));
     setTimeout(() => setSyncMsg(null), 3500);
@@ -192,8 +251,42 @@ function Dashboard() {
   }
 
   function handleSaveStudent() {
+    invalidateDashboardData();
     handleCloseForm();
     fetchStudents(page, debouncedSearch, statusFilter, classFilter);
+  }
+
+  function handleOptimisticStudentUpdate(studentId, updates) {
+    const current = students.find((student) => student.studentId === studentId);
+    if (!current) return;
+    const safeUpdates = Object.fromEntries(
+      OPTIMISTIC_STUDENT_FIELDS
+        .filter((field) => Object.prototype.hasOwnProperty.call(updates, field))
+        .map((field) => [field, updates[field]])
+    );
+    optimisticStudentRef.current = {
+      studentId,
+      previous: Object.fromEntries(
+        OPTIMISTIC_STUDENT_FIELDS.map((field) => [field, current[field]])
+      ),
+    };
+    setStudents((previous) => previous.map((student) => (
+      student.studentId === studentId ? { ...student, ...safeUpdates } : student
+    )));
+  }
+
+  function handleOptimisticStudentRollback(reason) {
+    const snapshot = optimisticStudentRef.current;
+    optimisticStudentRef.current = null;
+    if (snapshot) {
+      setStudents((previous) => previous.map((student) => (
+        student.studentId === snapshot.studentId
+          ? { ...student, ...snapshot.previous }
+          : student
+      )));
+    }
+    setMutationToast(`Student update failed. Previous values restored. ${reason}`);
+    setTimeout(() => setMutationToast(""), 5000);
   }
 
   // Toggle expanded detail row for a student — Issue #113
@@ -363,6 +456,50 @@ function Dashboard() {
           {summaryError || studentsError}
         </div>
       )}
+      {mutationToast && (
+        <div role="alert" aria-live="assertive" className="alert alert-danger" style={{ position: "fixed", right: "1rem", bottom: "1rem", zIndex: 1100, maxWidth: "min(32rem, calc(100vw - 2rem))" }}>
+          {mutationToast}
+        </div>
+      )}
+      {paymentToast && paymentToast.visible && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="alert alert-success"
+          style={{
+            position: "fixed",
+            right: "1rem",
+            top: "4.5rem",
+            zIndex: 1100,
+            maxWidth: "min(32rem, calc(100vw - 2rem))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <IconCheck size={18} />
+            <span>{paymentToast.message}</span>
+          </div>
+          <button
+            onClick={dismissPaymentToast}
+            style={{
+              background: "none",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: "1rem",
+              lineHeight: 1,
+              padding: "0.2rem",
+            }}
+            aria-label="Dismiss notification"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="page-wrap dash-wrap">
 
@@ -392,12 +529,22 @@ function Dashboard() {
           </div>
         )}
 
+        {summary?.studentQuota && (
+          <section className="card" aria-label="Student quota" style={{ marginBottom: "1rem" }}>
+            <strong>Student quota</strong>
+            <p>{summary.studentQuota.used} students {summary.studentQuota.limit === null ? "· Unlimited" : `of ${summary.studentQuota.limit}`} · {summary.studentQuota.tier}</p>
+            {summary.studentQuota.limit !== null && summary.studentQuota.used >= summary.studentQuota.limit && (
+              <a href={summary.studentQuota.upgrade_url}>Upgrade student capacity</a>
+            )}
+          </section>
+        )}
+
         {/* ── Stat Cards ────────────────────────────── */}
         <ErrorBoundary>
           {summaryError ? (
             <div role="alert" className="alert alert-danger" style={{ marginBottom: "1.5rem" }}>
               <span style={{ flex: 1 }}>{summaryError}</span>
-              <button onClick={fetchSummary} className="btn btn-sm btn-ghost" style={{ color: "inherit", borderColor: "currentColor", opacity: 0.8 }}>{t("actions.retry")}</button>
+              {summaryRetryable && <button onClick={fetchSummary} className="btn btn-sm btn-ghost" style={{ color: "inherit", borderColor: "currentColor", opacity: 0.8 }}>{t("actions.retry")}</button>}
             </div>
           ) : (
             <div className="stat-grid" style={{ marginBottom: "1.75rem" }}>
@@ -495,37 +642,41 @@ function Dashboard() {
             </div>
           </div>
 
-          {/* Filter chips — Issue #107 */}
-          {(() => {
-            const activeFilters = [
-              statusFilter && statusFilter !== "all"
-                ? { key: "status", label: t("dashboard.colStatus"), value: t(`status.student.${statusFilter}`) }
-                : null,
-              classFilter
-                ? { key: "className", label: t("dashboard.colClass"), value: classFilter }
-                : null,
-              debouncedSearch
-                ? { key: "search", label: t("dashboard.searchAria"), value: debouncedSearch }
-                : null,
-            ].filter(Boolean);
-            return activeFilters.length > 0 ? (
-              <div style={{ padding: "0 1.25rem" }}>
-                <FilterChips
-                  filters={activeFilters}
-                  onRemove={key => {
-                    if (key === "status")    setStatusFilter("all");
-                    if (key === "className") setClassFilter("");
-                    if (key === "search")    setSearch("");
-                  }}
-                  onClearAll={() => {
-                    setStatusFilter("all");
-                    setClassFilter("");
-                    setSearch("");
-                  }}
-                />
-              </div>
-            ) : null;
-          })()}
+          {/* Filter chip bar — Issue #355: show active filters as removable chips */}
+          <div style={{ paddingLeft: "1.25rem", paddingRight: "1.25rem" }}>
+            <FilterChips
+              filters={[
+                {
+                  key: "search",
+                  label: t("dashboard.searchLabel"),
+                  value: debouncedSearch,
+                  displayValue: debouncedSearch,
+                },
+                {
+                  key: "status",
+                  label: t("dashboard.statusLabel"),
+                  value: statusFilter === "all" ? "" : statusFilter,
+                  displayValue: statusFilter === "all" ? "" : t(`status.student.${statusFilter}`, { defaultValue: statusFilter }),
+                },
+                {
+                  key: "class",
+                  label: t("dashboard.classLabel"),
+                  value: classFilter,
+                  displayValue: classFilter,
+                },
+              ]}
+              onRemove={(key) => {
+                if (key === "search")  setSearch("");
+                if (key === "status")  setStatusFilter("all");
+                if (key === "class")   setClassFilter("");
+              }}
+              onClearAll={() => {
+                setSearch("");
+                setStatusFilter("all");
+                setClassFilter("");
+              }}
+            />
+          </div>
 
           {/* Table */}
           <ErrorBoundary>
@@ -534,25 +685,29 @@ function Dashboard() {
                 <StandaloneEmptyState
                     variant="error"
                   title={t("dashboard.failedToLoadStudents")}
-                  description="Check your connection and try again."
-                  action={{ label: t("actions.retry"), onClick: () => fetchStudents(page, debouncedSearch, statusFilter, classFilter) }}
+                    description={studentsRetryable ? "Check your connection and try again." : studentsError}
+                  action={studentsRetryable ? { label: t("actions.retry"), onClick: () => fetchStudents(page, debouncedSearch, statusFilter, classFilter) } : undefined}
                 />
               </div>
             ) : (
               <div style={{ overflowX: "auto" }} aria-busy={studentsLoading} aria-label={t("dashboard.studentTableAria")}>
                 <table
+                  {...studentGridProps}
+                  role="grid"
+                  aria-colcount={6}
+                  aria-rowcount={students.length + 1}
                   className="data-table"
                   data-density={density}
                   aria-label={studentsLoading ? t("dashboard.studentsLoadingAria") : t("dashboard.studentTableAria")}
                 >
                   <thead>
-                    <tr>
-                      <th scope="col">{t("dashboard.colStudentId")}</th>
-                      <th scope="col">{t("dashboard.colName")}</th>
-                      <th scope="col" className="col-hide-sm">{t("dashboard.colClass")}</th>
-                      <th scope="col" className="col-hide-sm">{t("dashboard.colFee")}</th>
-                      <th scope="col" className="col-hide-xs">{t("dashboard.colStatus")}</th>
-                      <th scope="col"></th>
+                    <tr role="row">
+                      <th role="columnheader" data-grid-cell scope="col">{t("dashboard.colStudentId")}</th>
+                      <th role="columnheader" data-grid-cell scope="col">{t("dashboard.colName")}</th>
+                      <th role="columnheader" data-grid-cell scope="col" className="col-hide-sm">{t("dashboard.colClass")}</th>
+                      <th role="columnheader" data-grid-cell scope="col" className="col-hide-sm">{t("dashboard.colFee")}</th>
+                      <th role="columnheader" data-grid-cell scope="col" className="col-hide-xs">{t("dashboard.colStatus")}</th>
+                      <th role="columnheader" data-grid-cell scope="col"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -561,16 +716,39 @@ function Dashboard() {
                         <SkeletonTableRow key={i} index={i} />
                       ))
                     ) : students.length === 0 ? (
-                      <EmptyState
-                        variant={search || statusFilter !== "all" || classFilter ? "filtered" : "empty"}
-                        colSpan={6}
-                        title={search || statusFilter !== "all" || classFilter ? t("dashboard.emptyTitle") : "No students yet"}
-                        description={search || statusFilter !== "all" || classFilter ? t("dashboard.emptyFilters") : t("dashboard.emptyNone")}
-                        action={search || statusFilter !== "all" || classFilter ? {
-                          label: "Clear filters",
-                          onClick: () => { setSearch(""); setStatusFilter("all"); setClassFilter(""); }
-                        } : undefined}
-                      />
+                      <tr>
+                        <td colSpan="6" style={{ padding: 0 }}>
+                          {(search || statusFilter !== "all" || classFilter) ? (
+                            <EmptyState
+                              variant="filtered"
+                              title={t("dashboard.emptyFiltersTitle")}
+                              description={t("dashboard.emptyFilters")}
+                              action={{
+                                label: t("dashboard.clearFilters"),
+                                onClick: () => {
+                                  setSearch("");
+                                  setStatusFilter("all");
+                                  setClassFilter("");
+                                },
+                              }}
+                            />
+                          ) : (
+                            <EmptyState
+                              variant="onboarding"
+                              title={t("dashboard.emptyTitle")}
+                              description={t("dashboard.emptyNone")}
+                              action={{
+                                label: t("dashboard.addFirstStudent"),
+                                onClick: () => {},
+                              }}
+                              secondaryAction={{
+                                label: t("dashboard.gettingStarted"),
+                                href: "/fees",
+                              }}
+                            />
+                          )}
+                        </td>
+                      </tr>
                     ) : students.map(s => {
                       const st = (s.status || "unpaid").toLowerCase();
                       const badge = STATUS_BADGE[st] || STATUS_BADGE.unpaid;
@@ -579,24 +757,23 @@ function Dashboard() {
                         <>
                           <tr
                             key={s.studentId}
+                            role="row"
                             className={`row-clickable${isExpanded ? " row-expanded" : ""}`}
                             onClick={() => handleRowClick(s.studentId)}
                             aria-expanded={isExpanded}
                             aria-label={isExpanded ? t("dashboard.collapseRow") : t("dashboard.expandRow")}
-                            tabIndex={0}
-                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleRowClick(s.studentId); } }}
                           >
-                            <td className="col-mono">{s.studentId}</td>
-                            <td className="student-row-name">{s.name}</td>
-                            <td className="student-row-class col-hide-sm">{s.class}</td>
-                            <td className="student-row-fee col-hide-sm">
+                            <td role="gridcell" data-grid-cell className="col-mono">{s.studentId}</td>
+                            <td role="gridcell" data-grid-cell className="student-row-name">{s.name}</td>
+                            <td role="gridcell" data-grid-cell className="student-row-class col-hide-sm">{s.class}</td>
+                            <td role="gridcell" data-grid-cell className="student-row-fee col-hide-sm">
                               <span style={{ fontVariantNumeric: "tabular-nums" }}>{s.feeAmount}</span>
                               <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
                             </td>
-                            <td className="col-hide-xs">
+                            <td role="gridcell" data-grid-cell className="col-hide-xs">
                               <span className={badge.cls}>{badge.label}</span>
                             </td>
-                            <td>
+                            <td role="gridcell" data-grid-cell>
                               <button
                                 onClick={e => { e.stopPropagation(); handleEditStudent(s); }}
                                 className="btn btn-sm btn-ghost"
@@ -606,8 +783,8 @@ function Dashboard() {
                             </td>
                           </tr>
                           {isExpanded && (
-                            <tr key={`${s.studentId}-detail`} className="row-detail">
-                              <td colSpan="6">
+                            <tr key={`${s.studentId}-detail`} role="row" className="row-detail">
+                              <td role="gridcell" data-grid-cell colSpan="6">
                                 <div className="row-detail-grid" aria-label={t("dashboard.expandedDetails")}>
                                   <div className="row-detail-item">
                                     <span className="row-detail-label">{t("dashboard.colStudentId")}</span>
@@ -658,15 +835,17 @@ function Dashboard() {
 
           {/* Pagination */}
           {total > 0 && (
-            <Pagination
-              page={page}
-              pages={pages}
-              total={total}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 20, 50]}
+            <AccessiblePagination
+              currentPage={page}
+              totalPages={pages}
               onPageChange={setPage}
-              onPageSizeChange={(size) => setPageSize(size)}
+              total={total}
+              rangeStart={rangeStart}
+              rangeEnd={rangeEnd}
               loading={studentsLoading}
+              ariaLabel={t("dashboard.paginationAria")}
+              itemLabel={t("dashboard.studentsTitle")}
+              rangeTemplate={t("dashboard.rangeOf", { start: rangeStart, end: rangeEnd, total: total.toLocaleString() })}
             />
           )}
         </div>
@@ -677,6 +856,8 @@ function Dashboard() {
           student={editingStudentData}
           onClose={handleCloseForm}
           onSave={handleSaveStudent}
+          onOptimisticUpdate={handleOptimisticStudentUpdate}
+          onRollback={handleOptimisticStudentRollback}
         />
       )}
     </>

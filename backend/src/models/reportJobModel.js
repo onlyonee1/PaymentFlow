@@ -5,7 +5,8 @@ const mongoose = require('mongoose');
 const REPORT_STATUSES = {
   PENDING: 'pending',
   PROCESSING: 'processing',
-  COMPLETED: 'completed',
+  READY: 'ready',
+  COMPLETED: 'ready',
   FAILED: 'failed',
   EXPIRED: 'expired',
 };
@@ -16,7 +17,7 @@ const reportJobSchema = new mongoose.Schema(
     jobId: { type: String, required: true, unique: true, index: true },
     type: {
       type: String,
-      enum: ['report', 'accounting_csv'],
+      enum: ['report', 'accounting_csv', 'student_export'],
       required: true,
     },
     status: {
@@ -28,17 +29,26 @@ const reportJobSchema = new mongoose.Schema(
     params: {
       startDate: { type: String, default: null },
       endDate: { type: String, default: null },
+      groupBy: { type: String, enum: ['confirmedAt', 'createdAt'], default: null },
       timezone: { type: String, default: 'UTC' },
       schemaVersion: { type: Number, default: null },
+      format: { type: String, default: 'json' },
     },
     result: {
-      report: { type: mongoose.Schema.Types.Mixed, default: null },
-      csv: { type: String, default: null },
+      report: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
+      csv: { type: String, default: null, select: false },
       schemaVersion: { type: Number, default: null },
       error: { type: String, default: null },
     },
+    requestedBy: { type: String },
+    studentExport: {
+      columns: [String],
+      includeDeleted: Boolean,
+    },
+    artifactKey: { type: String, default: null },
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
+    downloadExpiresAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null },
   },
   { timestamps: true }
@@ -49,11 +59,11 @@ reportJobSchema.index({ status: 1, createdAt: -1 });
 reportJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 reportJobSchema.virtual('downloadUrl').get(function () {
-  return `/api/reports/jobs/${this.jobId}/download`;
+  return `/api/reports/${this.jobId}/download`;
 });
 
 reportJobSchema.virtual('statusUrl').get(function () {
-  return `/api/reports/jobs/${this.jobId}`;
+  return `/api/reports/${this.jobId}/status`;
 });
 
 reportJobSchema.set('toJSON', { virtuals: true });

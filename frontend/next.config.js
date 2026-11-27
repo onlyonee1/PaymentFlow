@@ -78,6 +78,8 @@ const CSP = [
 
 const securityHeaders = [
   { key: 'Content-Security-Policy', value: CSP },
+  { key: 'Content-Security-Policy-Report-Only', value: `${CSP}; report-uri /api/csp-report` },
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -91,15 +93,22 @@ const BACKEND_ORIGIN = process.env.BACKEND_PROXY_TARGET || 'http://localhost:500
 const nextConfig = {
   // Produces a self-contained build in .next/standalone — required for Docker
   output: 'standalone',
+  generateEtags: true,
   // Same-origin API proxy: browser → /api/* (this origin) → backend. Keeps
   // requests first-party so HttpOnly SameSite=Strict auth cookies are sent.
   async rewrites() {
     return [
+      { source: '/unsubscribe', destination: `${BACKEND_ORIGIN}/unsubscribe` },
       { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
     ];
   },
   async headers() {
     return [
+      // Next serves production build assets from hashed or build-scoped URLs.
+      ...(!isDev ? [{
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      }] : []),
       {
         // Apply security headers to all routes
         source: '/(.*)',

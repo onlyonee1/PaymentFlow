@@ -4,13 +4,15 @@ import { useTranslation } from "react-i18next";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
 import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds, getPaymentPlan } from "../services/api";
+import { createPaymentIntent } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import VirtualTransactionList from "./VirtualTransactionList";
 import { useSessionGuard } from "../hooks/useSessionGuard";
+import { useSessionExpiryWarning } from "../hooks/useSessionExpiryWarning";
 import PaymentConfirmationStep from "./PaymentConfirmationStep";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
-import TimestampDisplay, { DISPLAY_MODE } from "./TimestampDisplay";
+import TimestampDisplay from "./TimestampDisplay";
 
 const STATUS_BADGE = {
   valid:     { cls: "badge badge-success", key: "status.validation.valid" },
@@ -52,15 +54,12 @@ function InfoRow({ label, children }) {
   );
 }
 
-/**
- * @param {{ initialStudentId?: string, isOnline?: boolean, wasOffline?: boolean }} props
- *   isOnline  — when false, disables the student lookup / payment submit button
- *               to prevent duplicate submissions while the device is offline.
- *   wasOffline — when true (linger window after reconnect), shows a stale-state
- *               warning so the parent can offer a refresh before re-submitting.
- */
-export default function PaymentForm({ initialStudentId = "", isOnline = true, wasOffline = false }) {
+export default function PaymentForm({ initialStudentId = "", disabled = false, tokenExp = null }) {
   const { t } = useTranslation();
+  const [intent, setIntent] = useState(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [amountChange, setAmountChange] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [studentId, setStudentId]             = useState(initialStudentId);
   const [shareCopied, setShareCopied]         = useState(false);
   const [student, setStudent]                 = useState(null);
@@ -81,9 +80,16 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
   // #1118 — wallets that cannot send free-text memos can switch the QR code to
   // MEMO_ID or MEMO_HASH; all three decode back to the same payment reference.
   const [memoType, setMemoType]               = useState("MEMO_TEXT");
+  // #253 — draft restored banner: shown once after a session-expiry re-login
+  // restores the student ID from sessionStorage.
+  const [showDraftRestoredBanner, setShowDraftRestoredBanner] = useState(false);
+  // #253 — session expiry warning toast: shown 5 minutes before token expiry.
+  const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const errorRef    = useRef(null);
   const debounceRef = useRef(null);
   const qrWrapperRef = useRef(null);
+  const rateDialogRef = useRef(null);
+  const rateExpired = Boolean(intent && secondsLeft === 0);
   // Holds the AbortController for the in-flight lookup so a superseded request
   // can be cancelled before the next one starts (race-condition fix).
   const lookupAbortRef = useRef(null);
@@ -91,8 +97,15 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
   // Issue #5 — session guard: save the non-sensitive student ID draft when the
   // session expires so it can be restored after re-authentication.
   // Sensitive fields (walletAddress, memo, txHash, amounts) are never persisted.
-  const { saveDraft, restoreDraft } = useSessionGuard({
+  const { saveDraft, restoreDraft, clearDraft: clearSavedDraft } = useSessionGuard({
     onSessionExpired: () => saveDraft({ studentId }),
+  });
+
+  // Issue #253 — session expiry warning: fire a toast 5 minutes before the
+  // JWT expires so the user has time to finish or save their work.
+  useSessionExpiryWarning({
+    tokenExp,
+    onWarning: () => setShowExpiryWarning(true),
   });
 
   // Restore a safe draft (studentId only) left from a previous session expiry.
@@ -101,8 +114,18 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
     const draft = restoreDraft();
     if (draft?.studentId && !initialStudentId?.trim()) {
       setStudentId(draft.studentId);
+      // Show the "draft restored" banner so the user knows their data came back.
+      setShowDraftRestoredBanner(true);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Issue #253 — clear the saved draft once the user has confirmed payment
+  // details (i.e. the data has been successfully used and is no longer needed).
+  useEffect(() => {
+    if (confirmed && student) {
+      clearSavedDraft();
+    }
+  }, [confirmed, student, clearSavedDraft]);
 
   function handleStudentIdChange(e) {
     const value = e.target.value;
@@ -118,6 +141,54 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
     };
   }, []);
 
+  useEffect(() => {
+    if (!intent) return;
+    let timer;
+    function syncTimer() {
+      clearInterval(timer);
+      if (document.hidden) return;
+      const tick = () => {
+        const remaining = Math.max(0, Math.ceil((Date.parse(intent.expiresAt) - Date.now()) / 1000));
+        setSecondsLeft(remaining);
+        if (!remaining) clearInterval(timer);
+      };
+      timer = setInterval(tick, 1000);
+      tick();
+    }
+    syncTimer();
+    document.addEventListener("visibilitychange", syncTimer);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncTimer);
+    };
+  }, [intent]);
+
+  useEffect(() => {
+    if (rateExpired) rateDialogRef.current?.showModal();
+  }, [rateExpired]);
+
+  async function refreshRate() {
+    if (refreshing) return;
+    const controller = lookupAbortRef.current;
+    if (!controller || disabled) return;
+    setRefreshing(true);
+    setError("");
+    try {
+      const { data } = await createPaymentIntent(student.studentId, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setAmountChange(String(intent.amount) === String(data.amount) ? null : { from: intent.amount, to: data.amount });
+      setInstructions({ ...instructions, feeAmount: data.amount, memo: data.memo });
+      setSecondsLeft(Math.max(0, Math.ceil((Date.parse(data.expiresAt) - Date.now()) / 1000)));
+      setIntent(data);
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setError(getErrorMessage(err.response?.data?.code, t("paymentForm.rateRefreshFailed", "Could not refresh the rate. Try again.")));
+      }
+    } finally {
+      if (!controller.signal.aborted) setRefreshing(false);
+    }
+  }
+
   const lookupStudent = useCallback(async (id) => {
     if (!id.trim()) return;
 
@@ -129,6 +200,9 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
     setError("");
     setStudent(null);
     setInstructions(null);
+    setIntent(null);
+    setAmountChange(null);
+    setRefreshing(false);
     setPayments(null);
     setPaymentPlan(null);
     setHasDeletedPayments(false);
@@ -152,8 +226,13 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
       ]);
       if (stuRes.status === "rejected") throw stuRes.reason;
 
+      if (instrRes.status === "rejected") throw instrRes.reason;
+      const { data } = await createPaymentIntent(id, { signal });
+      if (signal.aborted) return;
       setStudent(stuRes.value?.data ?? null);
-      setInstructions(instrRes.status === "fulfilled" ? instrRes.value?.data ?? null : null);
+      setInstructions({ ...instrRes.value.data, feeAmount: data.amount, memo: data.memo });
+      setSecondsLeft(Math.max(0, Math.ceil((Date.parse(data.expiresAt) - Date.now()) / 1000)));
+      setIntent(data);
       setPaymentPlan(planRes.status === "fulfilled" ? planRes.value?.data ?? null : null);
       const paymentsData = payRes.status === "fulfilled" ? payRes.value?.data : [];
       const paymentsList = paymentsData?.payments ?? paymentsData ?? [];
@@ -269,6 +348,73 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
     <>
       
 
+      {/* #253 — Session expiry warning toast: shown 5 minutes before the JWT
+          expires. The user can dismiss it; the actual expiry is handled by
+          the axios interceptor and useSessionGuard. */}
+      {showExpiryWarning && (
+        <div
+          role="alert"
+          className="alert alert-warning"
+          style={{
+            marginBottom: "0.75rem",
+            fontSize: "0.8125rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.5rem",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <IconAlertTriangle size={14} />
+            {t("sessionExpiry.warningToast", { minutes: 5 })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            style={{ flexShrink: 0 }}
+            aria-label={t("actions.hide")}
+            onClick={() => setShowExpiryWarning(false)}
+          >
+            {t("actions.hide")}
+          </button>
+        </div>
+      )}
+
+      {/* #253 — Draft restored banner: shown once after re-authentication
+          restores the student ID that was saved before the session expired. */}
+      {showDraftRestoredBanner && (
+        <div
+          role="status"
+          className="alert alert-info"
+          style={{
+            marginBottom: "0.75rem",
+            fontSize: "0.8125rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.5rem",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <IconCheck size={14} />
+            {t("sessionExpiry.draftRestored")}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            style={{ flexShrink: 0 }}
+            aria-label={t("sessionExpiry.discardDraft")}
+            onClick={() => {
+              clearSavedDraft();
+              setStudentId("");
+              setShowDraftRestoredBanner(false);
+            }}
+          >
+            {t("sessionExpiry.discardDraft")}
+          </button>
+        </div>
+      )}
+
       <div className="card pf-wrap">
         <div className="card-header">
           <div className="card-title">{t("paymentForm.title")}</div>
@@ -309,8 +455,8 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
                 className="form-input"
               />
             </div>
-            <button type="submit" disabled={loading || !isOnline} className="btn btn-dark" style={{ width: "100%" }}>
-              {loading ? t("paymentForm.lookingUp") : !isOnline ? t("networkStatus.offlineSubmitLabel", "Offline — submission disabled") : t("paymentForm.submit")}
+            <button type="submit" disabled={loading || disabled} className="btn btn-dark" style={{ width: "100%" }}>
+              {loading ? t("paymentForm.lookingUp") : t("paymentForm.submit")}
             </button>
           </form>
 
@@ -339,23 +485,57 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
             </div>
           )}
 
-          {error && (
+          {error && !rateExpired && (
             <div ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
               <IconAlertTriangle size={15} />
               <span>{error}</span>
             </div>
           )}
 
-          {student && instructions && (
+          {student && instructions && intent && (
             <div style={{ marginTop: "1.25rem" }}>
+              <p role="timer">
+                {t("paymentForm.rateLocked", "Rate locked for {{time}}", {
+                  time: `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`,
+                })}
+              </p>
+              {secondsLeft > 0 && secondsLeft <= 120 && (
+                <div role="status" className="alert alert-warning">
+                  {t("paymentForm.rateExpiring", "Rate expiring soon — complete payment now")}
+                </div>
+              )}
+              {amountChange && (
+                <div role="status" className="alert alert-warning">
+                  {t("paymentForm.rateChanged", "Amount changed from {{from}} to {{to}} due to a rate update", amountChange)}
+                </div>
+              )}
+              {rateExpired && (
+                <dialog
+                  ref={rateDialogRef}
+                  aria-labelledby="payment-rate-expired"
+                  onCancel={(event) => event.preventDefault()}
+                  style={{ margin: "auto", padding: "1.5rem", maxWidth: "min(90vw, 28rem)" }}
+                >
+                  <h2 id="payment-rate-expired">{t("paymentForm.rateExpired", "Rate expired")}</h2>
+                  {error && <p role="alert">{error}</p>}
+                  <button type="button" className="btn btn-dark" onClick={refreshRate} disabled={refreshing || disabled}>
+                    {refreshing
+                      ? t("paymentForm.rateRefreshing", "Refreshing rate…")
+                      : t("paymentForm.rateRefresh", "Refresh and get the latest rate")}
+                  </button>
+                </dialog>
+              )}
               {/* #101 — confirmation step: user must review & confirm before
                   payment details (QR code, wallet address) are revealed.
                   Once confirmed, this block renders the full payment UI. */}
-              {!confirmed && (
+              {!confirmed && secondsLeft > 0 && (
                 <PaymentConfirmationStep
                   student={student}
                   instructions={instructions}
-                  onConfirm={() => setConfirmed(true)}
+                  onConfirm={() => {
+                    if (Date.parse(intent.expiresAt) > Date.now()) setConfirmed(true);
+                    else setSecondsLeft(0);
+                  }}
                   onEdit={() => {
                     setStudent(null);
                     setInstructions(null);
@@ -366,7 +546,7 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
                 />
               )}
 
-              {confirmed && (
+              {confirmed && secondsLeft > 0 && (
               <>
               {isTestnet && (
                 <div className="alert alert-warning" style={{ marginBottom: "1rem", fontSize: "0.8125rem" }}>
@@ -627,7 +807,7 @@ export default function PaymentForm({ initialStudentId = "", isOnline = true, wa
                     </div>
                     {p.confirmedAt && (
                       <div style={{ fontSize: "0.75rem", color: "var(--text-subtle)" }}>
-                        <TimestampDisplay iso={p.confirmedAt} mode={DISPLAY_MODE.UTC} />
+                        <TimestampDisplay iso={p.confirmedAt} />
                       </div>
                     )}
 
