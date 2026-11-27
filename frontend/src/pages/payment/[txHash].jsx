@@ -783,8 +783,10 @@ export default function PaymentDetailPage() {
       {router.isReady ? (
         <PaymentDetailContent studentId={studentId} txHash={txHash} />
       ) : (
-        <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
-          {t("actions.loading")}
+        <div className="page-wrap" role="status" aria-live="polite" aria-busy="true" aria-label={t("actions.loading")}>
+          <SkeletonBlock height={140} style={{ marginBottom: "1.5rem", borderRadius: "var(--radius-lg)" }} />
+          <SkeletonDetailCard rows={4} />
+          <SkeletonDetailCard rows={4} />
         </div>
       )}
     </RequireAdmin>

@@ -11,6 +11,7 @@ import PageHero, { StatCard } from "./PageHero";
 import DateRangePicker from "./DateRangePicker";
 import { useTranslation } from "react-i18next";
 import { useReportExport } from "../hooks/useReportExport";
+import { SkeletonDetailCard } from "./Skeleton";
 
 export default function ReportDownload() {
   const { t } = useTranslation();

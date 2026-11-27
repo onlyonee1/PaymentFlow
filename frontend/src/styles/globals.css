@@ -977,27 +977,40 @@ table.data-table {
   animation: shimmer 1.6s infinite linear;
 }
 
-/* ── Pulse-style skeleton blocks (issue #13) ── */
+/* ── Pulse-style skeleton blocks (issue #13, updated for issue #607) ── */
 @keyframes skel-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.45; }
 }
+/* Skeleton loading — Issue #607 */
+@keyframes skeleton-pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .skeleton-block {
+  background: linear-gradient(90deg, var(--skeleton-base, #e5e7eb) 25%, var(--skeleton-highlight, #f3f4f6) 50%, var(--skeleton-base, #e5e7eb) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
   border-radius: 4px;
-  background: var(--border);
-  animation: skel-pulse 1.4s ease-in-out infinite;
+}
+/* Dark-mode-aware skeleton tokens */
+html.dark .skeleton-block,
+:root:not(.light) .skeleton-block {
+  --skeleton-base: #25304d;
+  --skeleton-highlight: #33415f;
 }
 /* prefers-reduced-motion: drop animation, keep visual placeholder */
 @media (prefers-reduced-motion: reduce) {
   .skeleton-block {
     animation: none;
-    opacity: 0.6;
+    background: var(--skeleton-base, #e5e7eb);
   }
 }
 /* Explicit opt-out class (JS sets this when it detects reduced-motion) */
-.skeleton-block.skeleton-static {
+.skeleton-block.skeleton-static,
+.skeleton-static {
   animation: none !important;
-  opacity: 0.6;
+  background: var(--skeleton-base, #e5e7eb);
 }
 
 /* ══════════════════════════════════════════════════════════

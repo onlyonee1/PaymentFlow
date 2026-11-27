@@ -13,6 +13,32 @@ export default function PayFeesForStudent({ school, studentId }) {
   // Track network connectivity to disable mutation actions while offline (Issue #269).
   const { isOnline } = useOnlineStatus();
 
+  // Show skeleton while the router is hydrating and studentId isn't available yet.
+  if (!router.isReady) {
+    return (
+      <>
+        <Head><title>{t("nav.payFees")} | {t("app.name")}</title></Head>
+        <div
+          className="payfees-page"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          aria-label={t("actions.loading")}
+        >
+          <div className="payfees-header">
+            <SkeletonBlock width={120} height={22} style={{ margin: "0 auto 0.75rem" }} />
+            <SkeletonBlock width={280} height={36} style={{ margin: "0 auto 0.75rem" }} />
+            <SkeletonBlock width={220} height={16} style={{ margin: "0 auto" }} />
+          </div>
+          <div className="payfees-grid">
+            <SkeletonDetailCard rows={5} />
+            <SkeletonDetailCard rows={3} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Head><title>{t("nav.payFees")} | {school?.name || t("app.name")}</title></Head>
