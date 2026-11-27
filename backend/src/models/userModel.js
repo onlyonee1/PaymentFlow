@@ -18,9 +18,10 @@ const userSchema = new mongoose.Schema(
     roles: [
       {
         type: String,
-        enum: ['super_admin', 'owner', 'staff', 'read_only'],
+        enum: ['super_admin', 'owner', 'staff', 'read_only', 'finance', 'finance_officer', 'viewer'],
       },
     ],
+    permissions: [{ type: String, enum: ['pii_export'] }],
     isActive: { type: Boolean, default: true, index: true },
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String, default: null },

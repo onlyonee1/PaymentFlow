@@ -1039,81 +1039,120 @@ async function reconcileStudent(req, res, next) {
   }
 }
 
-// GET /api/students/export
-const MAX_EXPORT_ROWS = 50000;
+// Student exports use the verified school and an explicit CSV field whitelist.
+const { studentExportPermissions } = require('../config/rolePermissions');
+const {
+  MAX_EXPORT_ROWS, ASYNC_EXPORT_THRESHOLD, csvCell, exportQuery, currentExportPermissions,
+} = require('../services/studentExportService');
 
 async function exportStudents(req, res, next) {
   try {
     const { schoolId } = req;
+    const { format = 'csv', class: className, status } = req.query;
     const includeDeleted = req.query.includeDeleted === 'true';
-
-    const filter = { schoolId };
-    if (!includeDeleted) {
-      filter.deletedAt = null;
+    const { allowed, defaults, admin } = req.user
+      ? await currentExportPermissions(req.user, schoolId)
+      : studentExportPermissions({ role: 'admin' }, false);
+    if (!allowed.length || (includeDeleted && !admin)) {
+      return res.status(403).json({ error: 'Student export access denied' });
     }
-    if (req.query.class) {
-      filter.class = req.query.class;
-    }
-    if (req.query.status) {
-      const status = req.query.status;
-      if (status === 'paid') {
-        filter.feePaid = true;
-      } else if (status === 'unpaid') {
-        filter.feePaid = false;
-        filter.totalPaid = { $lte: 0 };
-      } else if (status === 'partial') {
-        filter.feePaid = false;
-        filter.totalPaid = { $gt: 0 };
-      } else {
-        return res.status(400).json({ error: 'status must be paid, unpaid, or partial', code: 'VALIDATION_ERROR' });
-      }
+    const requested = req.query.columns;
+    const columns = requested === undefined
+      ? [...defaults, ...(includeDeleted ? ['deletedAt'] : [])]
+      : typeof requested === 'string' ? requested.split(',').map((column) => column.trim()) : [];
+    if (format !== 'csv' || !columns.length || new Set(columns).size !== columns.length ||
+        columns.some((column) => !allowed.includes(column)) ||
+        (className !== undefined && typeof className !== 'string')) {
+      return res.status(400).json({
+        error: 'Select supported CSV columns and filters', code: 'VALIDATION_ERROR', allowedColumns: allowed,
+      });
     }
 
-    const rowCount = await Student.countDocuments(filter);
+    const filters = {};
+    if (!includeDeleted) filters.deletedAt = null;
+    if (className) filters.class = className;
+    if (status === 'paid') {
+      filters.feePaid = true;
+    } else if (status === 'unpaid') {
+      filters.feePaid = false;
+      filters.totalPaid = { $lte: 0 };
+    } else if (status === 'partial') {
+      filters.feePaid = false;
+      filters.totalPaid = { $gt: 0 };
+    } else if (status !== undefined) {
+      return res.status(400).json({ error: 'status must be paid, unpaid, or partial', code: 'VALIDATION_ERROR' });
+    }
+
+    const filter = { ...filters, schoolId };
+    const count = req.user ? Student.countDocuments(filter) : null;
+    if (req.user && includeDeleted) count.includeDeleted();
+    const rowCount = await count;
     if (rowCount > MAX_EXPORT_ROWS) {
       return res.status(400).json({
-        error: `Export exceeds maximum of ${MAX_EXPORT_ROWS} rows. Current matching records: ${rowCount}. Please apply filters to reduce the result set.`,
+        error: `Export exceeds maximum of ${MAX_EXPORT_ROWS} rows. Please apply filters.`,
         code: 'EXPORT_TOO_LARGE',
         maxRows: MAX_EXPORT_ROWS,
         matchingRows: rowCount,
       });
     }
+    if (rowCount > ASYNC_EXPORT_THRESHOLD) {
+      const { enqueueReportJob } = require('../queue/reportQueue');
+      const { jobId } = await enqueueReportJob({
+        schoolId, type: 'student_export', format, columns, filters, includeDeleted,
+        requestedBy: req.user.userId,
+        globalAdmin: req.user.role === 'admin' && req.user.userId === 'super_admin',
+      });
+      return res.status(202).json({ jobId, statusUrl: `/api/students/export/${jobId}` });
+    }
 
     const date = new Date().toISOString().slice(0, 10);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="students-${date}.csv"`);
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    const baseColumns = ['studentId', 'name', 'class', 'feeAmount', 'totalPaid', 'remainingBalance', 'feePaid', 'createdAt'];
-    const columns = includeDeleted ? [...baseColumns, 'deletedAt'] : baseColumns;
-
-    res.write(columns.join(',') + '\n');
-
-    const query = Student.find(filter).sort({ createdAt: -1 });
-    if (includeDeleted) query.includeDeleted();
+    res.setHeader('Cache-Control', 'private, no-store');
+    const query = req.user ? exportQuery(filter, includeDeleted).select(columns.join(' ')) :
+      Student.find(filter).sort({ createdAt: -1 });
     const cursor = query.cursor();
 
+    res.write(columns.join(',') + '\n');
     cursor.on('data', (doc) => {
-      const row = columns.map((col) => {
-        const val = doc[col];
-        if (val == null) return '';
-        const str = String(val);
-        // Quote fields that contain commas, quotes, or newlines
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return '"' + str.replace(/"/g, '""') + '"';
-        }
-        return str;
-      });
-      res.write(row.join(',') + '\n');
+      if (!res.write(columns.map((column) => csvCell(doc[column])).join(',') + '\n') && cursor.pause) {
+        cursor.pause();
+        res.once('drain', () => cursor.resume());
+      }
     });
+    if (cursor.close) res.on('close', () => cursor.close().catch(next));
+    cursor.on('error', next);
+    cursor.on('end', () => res.end());
+  } catch (err) {
+    if (err.code === 'QUEUE_UNAVAILABLE') {
+      return res.status(503).json({ error: 'Student export queue is temporarily unavailable', code: err.code });
+    }
+    next(err);
+  }
+}
 
-    cursor.on('error', (err) => {
-      next(err);
-    });
+async function getStudentExport(req, res, next) {
+  try {
+    const { ReportJob, REPORT_STATUSES } = require('../models/reportJobModel');
+    const job = await ReportJob.findOne({
+      jobId: req.params.jobId, schoolId: req.schoolId, type: 'student_export', requestedBy: req.user.userId,
+    }).lean();
+    if (!job) return res.status(404).json({ error: 'Export job not found' });
 
-    cursor.on('end', () => {
-      res.end();
-    });
+    const { allowed, admin } = await currentExportPermissions(req.user, req.schoolId);
+    if (!allowed.length || (job.studentExport.includeDeleted && !admin) ||
+        job.studentExport.columns.some((column) => !allowed.includes(column))) {
+      return res.status(403).json({ error: 'Student export access denied' });
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (job.status !== REPORT_STATUSES.READY) {
+      return res.json({ jobId: job.jobId, status: job.status });
+    }
+    const seconds = Math.floor((job.downloadExpiresAt - Date.now()) / 1000);
+    if (seconds <= 0) return res.status(410).json({ error: 'Student export has expired' });
+    const { createReportDownloadUrl } = require('../services/reportArtifactStorage');
+    const downloadUrl = await createReportDownloadUrl(job.artifactKey, Math.min(seconds, 60));
+    return res.json({ jobId: job.jobId, status: job.status, downloadUrl });
   } catch (err) {
     next(err);
   }
@@ -1259,4 +1298,4 @@ async function adjustStudentCredit(req, res, next) {
   }
 }
 
-module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getFeeHistory, FEE_HISTORY_MAX_LIMIT, adjustStudentCredit };
+module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getStudentExport, getFeeHistory, FEE_HISTORY_MAX_LIMIT, adjustStudentCredit };

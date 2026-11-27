@@ -168,7 +168,7 @@ async function getDashboard(req, res, next) {
 async function getReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });
@@ -194,7 +194,7 @@ async function getReportJob(req, res, next) {
 async function downloadReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });

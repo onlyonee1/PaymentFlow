@@ -44,12 +44,28 @@ async function processReportJob(job) {
   }
 }
 
+async function processStudentExport(job) {
+  const { jobId, schoolId } = job.data;
+  await setJobProcessing(jobId);
+  try {
+    const { generateStudentExport } = require('./studentExportService');
+    const csv = await generateStudentExport(job.data);
+    const artifactKey = `student-exports/${encodeURIComponent(schoolId)}/${jobId}.csv`;
+    await storeReportArtifact(artifactKey, csv, 'text/csv', 'attachment; filename="students.csv"');
+    await setJobCompleted(jobId, { artifactKey });
+  } catch (err) {
+    await setJobFailed(jobId, err);
+    throw err;
+  }
+}
+
 let worker = null;
 
 function startWorker() {
   if (worker) return worker;
   createQueue();
-  worker = startReportWorker(processReportJob);
+  worker = startReportWorker((job) => job.data.type === 'student_export'
+    ? processStudentExport(job) : processReportJob(job));
   if (worker) {
     logger.info('[ReportQueueService] Report worker started');
   }
