@@ -40,12 +40,17 @@ router.delete('/sessions/:sessionId', requireAdminAuth, handleRevokeSession);
 router.delete('/sessions/user/:userId', requireAdminAuth, handleRevokeUserSessions);
 
 // ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
+// #618 — /mfa/enroll is the documented entry-point; /mfa/setup kept as alias.
+router.post('/mfa/enroll',  requireAdminAuth, setupMfa);
 router.post('/mfa/setup',   requireAdminAuth, setupMfa);
 router.post('/mfa/verify',  requireAdminAuth, verifyAndEnableMfa);
 router.post('/mfa/disable', requireAdminAuth, disableMfa);
 router.post('/mfa/backup-codes/regenerate', requireAdminAuth, regenerateBackupCodes);
 
 // ── User-level TOTP / MFA routes (any authenticated user) ────────────────────
+// #618 — enroll is the canonical entry-point name from the issue spec; setup
+// is kept as an alias so existing integrations are not broken.
+router.post('/mfa/user/enroll',  requireSchoolAuth(), setupUserMfa);
 router.post('/mfa/user/setup',   requireSchoolAuth(), setupUserMfa);
 router.post('/mfa/user/verify',  requireSchoolAuth(), verifyAndEnableUserMfa);
 router.post('/mfa/user/disable', requireSchoolAuth(), disableUserMfa);
