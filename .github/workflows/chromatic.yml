@@ -38,7 +38,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       - name: Run Chromatic
-        uses: chromaui/action@c93e0bc3a63aa176e14a75b61a31847cbfdd341c
+        uses: chromaui/action@25d2d37fcbe164dfbf5479a432fbd73d03bae733
         with:
           projectToken: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
           storybookBuildDir: ${{ runner.temp }}/storybook-static
