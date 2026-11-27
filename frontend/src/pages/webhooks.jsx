@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import RequireAdmin from "../components/RequireAdmin";
 import PageHero from "../components/PageHero";
@@ -169,6 +170,7 @@ function WebhooksPage() {
     <RequireAdmin>
       <div className="page">
         <PageHero title={t("webhooks.title")} subtitle={t("webhooks.subtitle")} />
+        <Link href="/admin/webhooks">{t("webhooks.deliveryHistory", { defaultValue: "Delivery history" })}</Link>
 
         {error && (
           <div className="alert alert-danger">
