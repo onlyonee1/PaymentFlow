@@ -19,6 +19,10 @@ jest.mock('../backend/src/services/email/suppressionList', () => ({
   isSuppressed: jest.fn().mockResolvedValue(false),
 }));
 
+jest.mock('../backend/src/models/schoolModel', () => ({
+  findOne: jest.fn().mockResolvedValue(null),
+}));
+
 const mockSendMail = jest.fn().mockResolvedValue({ messageId: 'msg-1' });
 const mockVerify = jest.fn().mockResolvedValue(true);
 const mockTransporter = { sendMail: mockSendMail, verify: mockVerify };
@@ -78,6 +82,17 @@ describe('#798 — unsubscribe token: sign and verify', () => {
   });
 });
 
+describe('Typed unsubscribe links', () => {
+  const { generateEmailUnsubscribeToken, verifyEmailUnsubscribeToken } = require('../backend/src/utils/unsubscribeToken');
+
+  it('binds the signed token to a school, student and email category', () => {
+    const secret = 'test-unsubscribe-signing-secret';
+    const token = generateEmailUnsubscribeToken('STU001', 'SCH1', 'payment_confirmation', secret);
+    expect(verifyEmailUnsubscribeToken(token, 'payment_confirmation', secret)).toEqual({ studentId: 'STU001', schoolId: 'SCH1' });
+    expect(verifyEmailUnsubscribeToken(token, 'dispute_update', secret)).toBeNull();
+  });
+});
+
 describe('#798 — sendFeeReminder includes unsubscribe URL', () => {
   it('email bodies contain an unsubscribe link', async () => {
     const { sendFeeReminder } = require('../backend/src/services/notificationService');
@@ -96,7 +111,7 @@ describe('#798 — sendFeeReminder includes unsubscribe URL', () => {
 
     expect(mockSendMail).toHaveBeenCalled();
     const args = mockSendMail.mock.calls[0][0];
-    expect(args.text).toMatch(/\/api\/reminders\/unsubscribe\?token=/);
+    expect(args.text).toMatch(/\/unsubscribe\?token=.*&type=payment_reminder/);
     expect(args.html).toMatch(/unsubscribe/i);
   });
 });

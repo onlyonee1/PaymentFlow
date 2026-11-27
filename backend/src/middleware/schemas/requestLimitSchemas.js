@@ -69,6 +69,9 @@ const auditQuerySchema = Joi.object({
 // ── Student body ──────────────────────────────────────────────────────────────
 
 const updateStudentSchema = Joi.object({
+  reminderOptOut: Joi.boolean().strict().optional(),
+  paymentConfirmationOptOut: Joi.boolean().strict().optional(),
+  disputeUpdateOptOut: Joi.boolean().strict().optional(),
   name:         Joi.string().trim().min(1).max(200).optional()
     .messages({
       'string.max':   '"name" must not exceed 200 characters',

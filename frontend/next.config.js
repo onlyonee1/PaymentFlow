@@ -97,6 +97,7 @@ const nextConfig = {
   // requests first-party so HttpOnly SameSite=Strict auth cookies are sent.
   async rewrites() {
     return [
+      { source: '/unsubscribe', destination: `${BACKEND_ORIGIN}/unsubscribe` },
       { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
     ];
   },

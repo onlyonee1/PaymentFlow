@@ -95,6 +95,15 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
     logger.warn('SSE emit failed for dispute event', { schoolId, eventName, error: err.message });
   }
 
+  try {
+    const Student = require('../models/studentModel');
+    const { sendDisputeUpdate } = require('../services/emailService');
+    const student = await Student.findOne({ schoolId, studentId: disputeDoc.studentId });
+    await sendDisputeUpdate({ student, schoolId, status: disputeDoc.status });
+  } catch (err) {
+    logger.warn('Dispute email failed', { schoolId, eventName, error: err.message });
+  }
+
   // Webhook — HMAC-signed HTTP call to the school's registered endpoint.
   // Route through the dispute.* notification helpers so the payload shape stays
   // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).

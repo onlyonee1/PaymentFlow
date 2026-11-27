@@ -188,6 +188,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
 app.use('/api/reports', reportRoutes);
+app.get('/unsubscribe', require('./controllers/reminderController').unsubscribeViaToken);
 app.use('/api/reminders', reminderRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/source-rules', sourceValidationRuleRoutes);

@@ -109,7 +109,7 @@ export const getStudents = (page = 1, limit = 20, { search, status, className } 
   });
 export const getStudent = (studentId, { signal } = {}) => api.get(`/students/${studentId}`, { signal });
 export const registerStudent = (data) => api.post("/students", data);
-export const updateStudent = (studentId, data) => api.patch(`/students/${studentId}`, data);
+export const updateStudent = (studentId, data) => api.put(`/students/${studentId}`, data);
 // Payment endpoints — also available as a typed client via ./paymentApiClient
 export const getPaymentSummary = ({ signal } = {}) => api.get("/payments/summary", { signal });
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
