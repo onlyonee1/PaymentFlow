@@ -89,16 +89,16 @@ function idempotency(opts = {}) {
   const criticalPaymentEndpoints = opts.criticalPaymentEndpoints ?? false;
 
   return function idempotencyMiddleware(req, res, next) {
-    const rawKey = req.headers['idempotency-key'];
+    const rawKey = req.headers['x-idempotency-key'] || req.headers['idempotency-key'];
 
     if (!rawKey || typeof rawKey !== 'string' || !rawKey.trim()) {
       return res.status(400).json({
-        error: 'Idempotency-Key header is required for this request',
+        error: 'X-Idempotency-Key header is required for this request',
         code: 'MISSING_IDEMPOTENCY_KEY',
       });
     }
 
-    const scope = req.path;
+    const scope = opts.schoolScoped ? `${req.schoolId}:${req.path}` : req.path;
     const canonicalKey = deriveIdempotencyKey(rawKey, scope);
     const fingerprint = fingerprintRequest(req.body);
 
