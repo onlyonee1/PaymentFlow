@@ -151,6 +151,7 @@ jest.mock('../backend/src/services/reminderService', () => ({
   processReminders:       jest.fn().mockResolvedValue({ schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0 }),
   getReminderStatus:      jest.fn().mockReturnValue({ scheduled: false }),
 }));
+jest.mock('../backend/src/services/instalmentReminderService', () => ({ startInstalmentReminderScheduler: jest.fn(), stopInstalmentReminderScheduler: jest.fn(), processInstalmentReminders: jest.fn().mockResolvedValue({ plans: 0, reminders: 0, graceNotices: 0, failed: 0, skipped: 0 }), getInstalmentReminderStatus: jest.fn().mockReturnValue({ schedulerRunning: false }), }));
 jest.mock('../backend/src/services/stellarService', () => ({
   syncPayments:              jest.fn().mockResolvedValue(undefined),
   syncPaymentsForSchool:     jest.fn().mockResolvedValue(undefined),
