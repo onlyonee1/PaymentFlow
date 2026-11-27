@@ -58,7 +58,13 @@ async function withStellarRetry(fn, opts = {}) {
         attributes: { 'horizon.operation': label, 'horizon.attempt': attempt },
       });
     } catch (err) {
-      if (!isTransient(err) || attempt === maxAttempts) throw classifyHorizonError(err, context);
+      // Non-transient errors (4xx except 429) are permanent failures — rethrow
+      // the original error immediately without classification so callers receive
+      // the unmodified error object (preserving .message, .response, and any
+      // custom properties). Do not retry.
+      if (!isTransient(err)) throw err;
+      // On the last retry attempt, classify the transient error before throwing.
+      if (attempt === maxAttempts) throw classifyHorizonError(err, context);
       const delay = Math.min(baseDelay * 2 ** (attempt - 1), MAX_DELAY);
       const wait  = delay + Math.floor(Math.random() * delay * 0.3);
       logger.warn(`${label} attempt ${attempt}/${maxAttempts} failed — retrying in ${wait}ms`, { error: err.message });
