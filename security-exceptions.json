@@ -64,9 +64,27 @@
     },
     {
       "type": "mnemonic",
+      "file": "backend/src/middleware/rateLimiter.js",
+      "line": 191,
+      "reason": "Same inline comment as line 151 — line number shifted after PR merges; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
       "file": "docs/api-spec.md",
       "line": 442,
       "reason": "API documentation prose describing the school wallet address field; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/api-spec.md",
+      "line": 444,
+      "reason": "Same documentation prose as line 442 — line number shifted after PR merges; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/stellarSignerRotation.integration.test.js",
+      "line": 29,
+      "reason": "Test description string in a test() call describing signer rotation behaviour; not a mnemonic phrase."
     },
     {
       "type": "mnemonic",
