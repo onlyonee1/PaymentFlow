@@ -8,7 +8,6 @@
  */
 
 const mongoose = require('mongoose');
-const { resolveTtlSeconds } = require('../src/models/webhookDeliveryModel');
 
 const VERSION = '032_update_webhook_delivery_retention';
 const COLLECTION = 'webhookdeliveries';
@@ -31,7 +30,9 @@ async function replaceCreatedAtTtl(collection, ttlSeconds) {
 
 async function up() {
   const collection = mongoose.connection.collection(COLLECTION);
-  await replaceCreatedAtTtl(collection, resolveTtlSeconds());
+  const seconds = parseInt(process.env.WEBHOOK_DELIVERY_TTL_SECONDS, 10);
+  const days = parseInt(process.env.WEBHOOK_DELIVERY_RETENTION_DAYS, 10);
+  await replaceCreatedAtTtl(collection, seconds > 0 ? seconds : (days > 0 ? days : 30) * 86400);
 }
 
 async function down() {

@@ -587,15 +587,11 @@ class StellarRateLimitedClient {
    * Get transactions for account with rate limiting
    */
   async getTransactionsForAccount(publicKey, options = {}) {
-    const { limit = 20, order = 'desc', ...queryOptions } = options;
+    const { limit = 20, order = 'desc', cursor, ...queryOptions } = options;
     
     return this._executeWithLimits(async () => {
-      return await this.server
-        .transactions()
-        .forAccount(publicKey)
-        .order(order)
-        .limit(limit)
-        .call();
+      const request = this.server.transactions().forAccount(publicKey).order(order).limit(limit);
+      return (cursor ? request.cursor(cursor) : request).call();
     }, {
       priority: options.priority || 5,
       ...queryOptions,

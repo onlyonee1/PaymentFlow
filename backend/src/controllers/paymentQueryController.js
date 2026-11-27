@@ -9,7 +9,7 @@ const { classifyFeePayment, decimalFromMongo, toMoneyNumber } = require('../util
 
 const crypto = require('crypto');
 const Payment = require('../models/paymentModel');
-const { encodeListCursor, decodeListCursor, cursorCondition } = require('../utils/listCursor');
+const { paginateList } = require('../utils/listCursor');
 const Student = require('../models/studentModel');
 const PendingVerification = require('../models/pendingVerificationModel');
 const { ACCEPTED_ASSETS } = require('../config/stellarConfig');
@@ -67,15 +67,14 @@ async function getStudentPayments(req, res, next) {
     const student = await Student.findOne({ schoolId: req.schoolId, studentId: req.params.studentId });
     if (!student) return res.status(404).json({ error: 'Student not found', code: 'NOT_FOUND' });
 
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (page - 1) * limit;
-
-    const [total, payments] = await Promise.all([
-      Payment.countDocuments({ schoolId: req.schoolId, studentId: req.params.studentId, deletedAt: null }),
-      Payment.find({ schoolId: req.schoolId, studentId: req.params.studentId, deletedAt: null })
-        .sort({ confirmedAt: -1 }).skip(skip).limit(limit).lean(),
-    ]);
+    const { items: payments, pagination } = await paginateList({
+      find: (query) => Payment.find(query).lean(),
+      scope: 'student-payments',
+      filter: { schoolId: req.schoolId, studentId: req.params.studentId, deletedAt: null },
+      cursor: req.query.cursor,
+      limit,
+    });
 
     const enriched = await Promise.all(
       payments.map(async (p) => {
@@ -86,7 +85,7 @@ async function getStudentPayments(req, res, next) {
       }),
     );
 
-    res.json({ payments: enriched, total, page, pages: Math.ceil(total / limit) });
+    res.json({ payments: enriched, pagination });
   } catch (err) {
     next(err);
   }
@@ -95,7 +94,7 @@ async function getStudentPayments(req, res, next) {
 async function getAllPayments(req, res, next) {
   try {
     const { schoolId } = req;
-    const { page = 1, limit = 50, startDate, endDate, minAmount, maxAmount, status, studentId, isSuspicious } = req.query;
+    const { limit = 50, startDate, endDate, minAmount, maxAmount, status, studentId, isSuspicious } = req.query;
 
     const filter = { schoolId, studentDeleted: { $ne: true }, deletedAt: null };
 
@@ -131,57 +130,13 @@ async function getAllPayments(req, res, next) {
     if (studentId) filter.studentId = studentId;
     if (isSuspicious !== undefined) filter.isSuspicious = isSuspicious === 'true';
 
-    const pageNum = Math.max(1, parseInt(page, 10));
-    const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10)));
-    const legacyOffset = req.legacyOffsetPagination && !req.query.cursor;
-    let payments;
-    let pagination;
-
-    if (legacyOffset) {
-      const skip = (pageNum - 1) * pageSize;
-      const [offsetPayments, total] = await Promise.all([
-        Payment.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(pageSize).lean(),
-        Payment.countDocuments(filter),
-      ]);
-      payments = offsetPayments;
-      pagination = {
-        page: pageNum,
-        limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-        hasNext: pageNum < Math.ceil(total / pageSize),
-        hasPrev: pageNum > 1,
-      };
-    } else {
-      const cursorFilters = {
-        schoolId,
-        startDate: startDate || null,
-        endDate: endDate || null,
-        minAmount: minAmount || null,
-        maxAmount: maxAmount || null,
-        status: status || null,
-        studentId: studentId || null,
-        isSuspicious: isSuspicious ?? null,
-      };
-      const cursorPayload = req.query.cursor ? decodeListCursor(req.query.cursor, cursorFilters) : null;
-      const cursorFilter = cursorPayload
-        ? { $and: [filter, cursorCondition(cursorPayload)] }
-        : filter;
-      const results = await Payment.find(cursorFilter)
-        .sort({ createdAt: -1, _id: -1 })
-        .limit(pageSize + 1)
-        .lean();
-      const hasNextPage = results.length > pageSize;
-      payments = results.slice(0, pageSize);
-      pagination = {
-        limit: pageSize,
-        nextCursor: hasNextPage && payments.length
-          ? encodeListCursor(payments[payments.length - 1], cursorFilters)
-          : null,
-        hasPreviousPage: Boolean(cursorPayload),
-        hasNextPage,
-      };
-    }
+    const { items: payments, pagination } = await paginateList({
+      find: (query) => Payment.find(query).lean(),
+      scope: 'payments',
+      filter,
+      cursor: req.query.cursor,
+      limit: Math.min(100, Math.max(1, parseInt(limit, 10) || 50)),
+    });
 
     const enrichedPayments = payments.map((p) => ({
       ...p,
@@ -204,23 +159,17 @@ async function getAllPayments(req, res, next) {
 
 async function getOverpayments(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (page - 1) * limit;
-
-    const filter = { schoolId: req.schoolId, feeValidationStatus: 'overpaid' };
-    const [total, overpayments] = await Promise.all([
-      Payment.countDocuments(filter),
-      Payment.find(filter).sort({ confirmedAt: -1 }).skip(skip).limit(limit),
-    ]);
-
-    const totalExcess = overpayments.reduce((sum, p) => sum + (p.excessAmount || 0), 0);
-    res.json({
-      count: overpayments.length,
-      totalExcess,
-      overpayments,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    const { items: overpayments, pagination } = await paginateList({
+      find: (query) => Payment.find(query),
+      scope: 'overpayments',
+      filter: { schoolId: req.schoolId, feeValidationStatus: 'overpaid' },
+      cursor: req.query.cursor,
+      limit,
     });
+    const totalExcess = overpayments.reduce((sum, payment) => sum + (payment.excessAmount || 0), 0);
+
+    res.json({ count: overpayments.length, totalExcess, overpayments, pagination });
   } catch (err) {
     next(err);
   }
@@ -306,28 +255,16 @@ async function getStudentBalance(req, res, next) {
 
 async function getSuspiciousPayments(req, res, next) {
   try {
-    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (pageNum - 1) * pageSize;
-    const filter = { schoolId: req.schoolId, isSuspicious: true };
-
-    const [suspicious, total] = await Promise.all([
-      Payment.find(filter).sort({ confirmedAt: -1 }).skip(skip).limit(pageSize),
-      Payment.countDocuments(filter),
-    ]);
-
-    res.json({
-      count: suspicious.length,
-      suspicious,
-      pagination: {
-        page: pageNum,
-        limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-        hasNext: pageNum < Math.ceil(total / pageSize),
-        hasPrev: pageNum > 1,
-      },
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const { items: suspicious, pagination } = await paginateList({
+      find: (query) => Payment.find(query),
+      scope: 'suspicious',
+      filter: { schoolId: req.schoolId, isSuspicious: true },
+      cursor: req.query.cursor,
+      limit,
     });
+
+    res.json({ count: suspicious.length, suspicious, pagination });
   } catch (err) {
     next(err);
   }
@@ -335,28 +272,16 @@ async function getSuspiciousPayments(req, res, next) {
 
 async function getPendingPayments(req, res, next) {
   try {
-    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (pageNum - 1) * pageSize;
-    const filter = { schoolId: req.schoolId, confirmationStatus: 'pending_confirmation' };
-
-    const [pending, total] = await Promise.all([
-      Payment.find(filter).sort({ confirmedAt: -1 }).skip(skip).limit(pageSize),
-      Payment.countDocuments(filter),
-    ]);
-
-    res.json({
-      count: pending.length,
-      pending,
-      pagination: {
-        page: pageNum,
-        limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-        hasNext: pageNum < Math.ceil(total / pageSize),
-        hasPrev: pageNum > 1,
-      },
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const { items: pending, pagination } = await paginateList({
+      find: (query) => Payment.find(query),
+      scope: 'pending',
+      filter: { schoolId: req.schoolId, confirmationStatus: 'pending_confirmation' },
+      cursor: req.query.cursor,
+      limit,
     });
+
+    res.json({ count: pending.length, pending, pagination });
   } catch (err) {
     next(err);
   }
@@ -390,19 +315,7 @@ async function getExchangeRates(req, res, next) {
     const { _getRates } = require('../services/currencyConversionService');
     const rateEntry = await _getRates(targetCurrency);
 
-    if (!rateEntry) {
-      return res.json({
-        available: false,
-        currency: targetCurrency,
-        rates: null,
-        lastFetchedAt: null,
-        stale: false,
-        staleAge: null,
-        message: 'Price feed is currently unavailable. Amounts are shown in XLM only.',
-      });
-    }
-
-    res.json({
+    const payload = rateEntry ? {
       available: true,
       currency: targetCurrency,
       rates: rateEntry.rates,
@@ -410,7 +323,24 @@ async function getExchangeRates(req, res, next) {
       stale: rateEntry.stale || false,
       staleAge: rateEntry.staleAge || null,
       rateTimestamp: rateEntry.fetchedAt.toISOString(),
-    });
+    } : {
+      available: false,
+      currency: targetCurrency,
+      rates: null,
+      lastFetchedAt: null,
+      stale: false,
+      staleAge: null,
+      message: 'Price feed is currently unavailable. Amounts are shown in XLM only.',
+    };
+
+    // The same URL can serve different school currencies. Request credentials
+    // also affect access, so shared caches must key on them.
+    for (const field of ['X-School-ID', 'X-School-Slug', 'Authorization', 'Cookie']) {
+      res.vary(field);
+    }
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+    res.removeHeader('Pragma');
+    res.json(payload);
   } catch (err) {
     next(err);
   }

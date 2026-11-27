@@ -35,6 +35,7 @@ const auditLogSchema = new mongoose.Schema(
 );
 
 // Compound indexes for common queries
+auditLogSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 auditLogSchema.index({ schoolId: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ schoolId: 1, targetType: 1, createdAt: -1 });
 auditLogSchema.index({ schoolId: 1, performedBy: 1, createdAt: -1 });

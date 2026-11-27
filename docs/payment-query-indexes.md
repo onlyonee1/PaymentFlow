@@ -114,3 +114,27 @@ Look for `winningPlan.inputStage.indexName` containing `schoolId_1_studentId_1_d
 and `executionStats.totalDocsExamined` being equal to (or close to)
 `totalKeysExamined` — this indicates an efficient covered scan with no
 collection-level document fetch beyond what is needed.
+
+## Cursor pagination and outbox scheduling
+
+Migration `034_add_payment_listing_indexes` indexes school-wide and
+status-filtered payment lists in their descending `createdAt, _id` sort
+order. The `_id` suffix supports pagination across equal timestamps.
+It also adds the student and school index and reserves a unique index for
+string `memoHash` values. Existing transactions and payment intents
+continue using their existing memo and transaction identifiers. The hash
+is optional because a memo can be absent or reused across payments.
+
+The dispatcher queries the separate `outboxes` collection using
+`processed`, `deadLettered` and `scheduledAfter`. The retry schedule
+index uses those stored fields. The existing dispatcher claim index still
+covers lock and creation-time filters. Audit date indexes are already
+declared in the model and managed by migration 018.
+
+For a representative database, run `explain('executionStats')` against the
+payment listing filters with and without status, retaining the API's sort
+and page limit. Inspect the winning plan for an index scan and compare
+keys and documents examined with rows returned. Measure P95 separately
+under load using at least 100,000 payments and realistic tenant and status
+distributions. Rollback removes the five named indexes, including after
+partial application.

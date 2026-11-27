@@ -28,10 +28,11 @@
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
   // ── Mutation targets ────────────────────────────────────────────────────────
-  // Focus exclusively on the authorization middleware to keep the run fast and
-  // results actionable. Expand the mutate array incrementally as coverage grows.
+  // Authorization middleware plus the contract authorization policy so that
+  // property-based tests (issue #635) can kill mutations in both layers.
   mutate: [
     'backend/src/middleware/auth.js',
+    'backend/src/services/contractAuthorizationPolicy.js',
   ],
 
   // ── Test runner ─────────────────────────────────────────────────────────────

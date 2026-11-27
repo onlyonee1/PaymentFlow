@@ -114,6 +114,7 @@ jest.mock('../backend/src/services/reminderService', () => ({
   stopReminderScheduler: jest.fn(),
   processReminders: jest.fn().mockResolvedValue({ schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0 }),
 }));
+jest.mock('../backend/src/services/instalmentReminderService', () => ({ startInstalmentReminderScheduler: jest.fn(), stopInstalmentReminderScheduler: jest.fn(), processInstalmentReminders: jest.fn().mockResolvedValue({ plans: 0, reminders: 0, graceNotices: 0, failed: 0, skipped: 0 }), getInstalmentReminderStatus: jest.fn().mockReturnValue({ schedulerRunning: false }), }));
 
 jest.mock('../backend/src/services/stellarService', () => ({
   syncPayments: jest.fn().mockResolvedValue(undefined),
@@ -185,7 +186,7 @@ describe('Student Quota (#680)', () => {
       expect(res.body.studentId).toBe('STU001');
     });
 
-    test('403 — rejects when at quota', async () => {
+    test('402 — rejects when at quota', async () => {
       Student.countDocuments.mockResolvedValueOnce(10);
       Student.findOne.mockResolvedValueOnce(null);
       School.findOne.mockReturnValue({
@@ -198,11 +199,12 @@ describe('Student Quota (#680)', () => {
         class: 'Grade 5A',
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(402);
       expect(res.body.error.code).toBe('STUDENT_QUOTA_EXCEEDED');
+      expect(res.body.upgrade_url).toEqual(expect.any(String));
     });
 
-    test('403 — rejects when exceeding quota', async () => {
+    test('402 — rejects when exceeding quota', async () => {
       Student.countDocuments.mockResolvedValueOnce(15);
       Student.findOne.mockResolvedValueOnce(null);
       School.findOne.mockReturnValue({
@@ -215,8 +217,9 @@ describe('Student Quota (#680)', () => {
         class: 'Grade 5A',
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(402);
       expect(res.body.error.code).toBe('STUDENT_QUOTA_EXCEEDED');
+      expect(res.body.upgrade_url).toEqual(expect.any(String));
     });
   });
 

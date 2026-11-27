@@ -39,7 +39,7 @@ const discrepancyRecordSchema = new mongoose.Schema(
 
     discrepancyType: {
       type: String,
-      enum: ['AMOUNT_MISMATCH', 'MISSING_LOCAL', 'MISSING_ONCHAIN', 'STATUS_MISMATCH'],
+      enum: ['AMOUNT_MISMATCH', 'MISSING_LOCAL', 'MISSING_ONCHAIN', 'STATUS_MISMATCH', 'SETTLEMENT_BALANCE_MISMATCH'],
       required: true,
       index: true,
     },
