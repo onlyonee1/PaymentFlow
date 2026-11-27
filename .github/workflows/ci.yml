@@ -186,6 +186,43 @@ jobs:
           path: frontend/.next/build-manifest.json
           retention-days: 14
 
+  # ── #677: Bundle size budget enforcement ────────────────────────────────
+  # Validates the bundle budget config exists and is well-formed, then checks
+  # actual gzipped entrypoint sizes against the budgets defined in
+  # frontend/bundle-budget.json (main: 300 KB, per-route chunk: 100 KB).
+  # The HTML treemap is uploaded as an artifact for 30-day retention.
+  bundle-budget:
+    name: Frontend bundle size budget
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-node-
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+      - name: Build frontend with bundle analysis
+        run: cd frontend && ANALYZE=true npm run build
+      - name: Enforce bundle size budgets
+        run: node scripts/check-bundle-budget.js
+      - name: Upload bundle report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-report
+          path: |
+            frontend/.next/analyze/
+            frontend/bundle-budget.json
+          retention-days: 30
+
   test:
     runs-on: ubuntu-latest
     env:
@@ -676,6 +713,7 @@ jobs:
       - lint-backend
       - lint-frontend
       - build-frontend
+      - bundle-budget
       - test
       - coverage
       - migration-compat
