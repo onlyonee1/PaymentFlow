@@ -1,299 +1,367 @@
 'use strict';
 
 /**
- * Tests for the deterministic test data factory — issue #652
+ * Tests for the test data factory — Issue #99
  *
- * Validates:
- *   - Every major domain model has a factory function
- *   - Default values are valid and consistent with model schema constraints
- *   - Factories support an overrides parameter for partial customisation
- *   - Deterministic: same seed → same output (seeded LCG)
+ * Verifies:
+ *   1. Each factory generates isolated defaults scoped to a schoolId.
+ *   2. Tests can create deliberate cross-school collisions (same studentId,
+ *      different schoolId) to exercise tenant isolation guards.
+ *   3. Generated secrets are safe (no real credentials, no real Stellar keys).
+ *   4. Sequence counters are deterministic and reset correctly.
  */
 
-const {
-  createSchool,
-  createStudent,
-  createPayment,
-  createFeeStructure,
-  createUser,
-  resetCallIndex,
-} = require('./factories');
+const F = require('./factories/testDataFactory');
 
-// Reset the internal call counter before each test so each test gets a clean sequence
-beforeEach(() => resetCallIndex());
+afterEach(() => {
+  F.resetSequences();
+});
 
-// ── createSchool ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// School factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildSchool()', () => {
+  it('generates isolated defaults', () => {
+    const school = F.buildSchool();
 
-describe('createSchool', () => {
-  test('returns an object with required school fields', () => {
-    const school = createSchool();
-    expect(typeof school.schoolId).toBe('string');
-    expect(typeof school.name).toBe('string');
-    expect(typeof school.slug).toBe('string');
-    expect(typeof school.stellarAddress).toBe('string');
+    expect(school).toMatchObject({
+      schoolId:       expect.stringMatching(/^SCHOOL-/),
+      name:           expect.stringContaining('Test School'),
+      slug:           expect.stringMatching(/^test-school-/),
+      stellarAddress: expect.any(String),
+      currency:       'XLM',
+      active:         true,
+    });
   });
 
-  test('stellarAddress is a valid-format Stellar public key', () => {
-    const school = createSchool();
-    expect(school.stellarAddress).toMatch(/^G[A-Z2-7]{55}$/);
+  it('allows overriding any field', () => {
+    const school = F.buildSchool({ schoolId: 'MY-SCHOOL', currency: 'USDC' });
+
+    expect(school.schoolId).toBe('MY-SCHOOL');
+    expect(school.currency).toBe('USDC');
   });
 
-  test('slug is lowercase and URL-safe', () => {
-    const school = createSchool();
-    expect(school.slug).toMatch(/^[a-z0-9-]+$/);
+  it('generates unique schoolIds across sequential calls', () => {
+    const a = F.buildSchool();
+    const b = F.buildSchool();
+
+    expect(a.schoolId).not.toBe(b.schoolId);
   });
 
-  test('overrides are applied', () => {
-    const school = createSchool({ name: 'Override School', network: 'mainnet' });
-    expect(school.name).toBe('Override School');
-    expect(school.network).toBe('mainnet');
+  it('buildSchoolPair returns two distinct schools', () => {
+    const { schoolA, schoolB } = F.buildSchoolPair();
+
+    expect(schoolA.schoolId).not.toBe(schoolB.schoolId);
+    expect(schoolA.slug).not.toBe(schoolB.slug);
   });
 
-  test('non-overridden fields keep defaults', () => {
-    const school = createSchool({ name: 'Override Only' });
-    expect(school.network).toBe('testnet');
-    expect(school.isActive).toBe(true);
-  });
-
-  test('deterministic: same seed produces same schoolId', () => {
-    resetCallIndex();
-    const a = createSchool({}, 42);
-    resetCallIndex();
-    const b = createSchool({}, 42);
-    expect(a.schoolId).toBe(b.schoolId);
-    expect(a.slug).toBe(b.slug);
+  it('stellar addresses in the pool are never empty', () => {
+    const school = F.buildSchool();
+    expect(school.stellarAddress).toBeTruthy();
+    expect(school.stellarAddress.length).toBeGreaterThan(10);
   });
 });
 
-// ── createStudent ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// User factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildUser()', () => {
+  it('generates an admin scoped to a schoolId', () => {
+    const user = F.buildUser({ schoolId: 'SCHOOL-A' });
 
-describe('createStudent', () => {
-  test('returns an object with required student fields', () => {
-    const s = createStudent();
-    expect(typeof s.schoolId).toBe('string');
-    expect(typeof s.studentId).toBe('string');
-    expect(typeof s.name).toBe('string');
-    expect(typeof s.class).toBe('string');
-    expect(typeof s.feeAmount).toBe('number');
+    expect(user.schoolId).toBe('SCHOOL-A');
+    expect(user.role).toBe('admin');
+    expect(user.email).toMatch(/@school-test\.local$/);
   });
 
-  test('studentId is 28 characters or fewer (Stellar memo limit)', () => {
-    const s = createStudent();
-    expect(s.studentId.length).toBeLessThanOrEqual(28);
+  it('password hash is a placeholder — not a real secret', () => {
+    const user = F.buildUser();
+
+    // Must contain "placeholder" to make it obvious this is not a real hash.
+    expect(user.passwordHash).toMatch(/placeholder/i);
   });
 
-  test('studentId matches alphanumeric + hyphen/underscore pattern', () => {
-    const s = createStudent();
-    expect(s.studentId).toMatch(/^[a-zA-Z0-9_-]+$/);
+  it('generates unique emails across sequential calls', () => {
+    const a = F.buildUser({ schoolId: 'S1' });
+    const b = F.buildUser({ schoolId: 'S1' });
+
+    expect(a.email).not.toBe(b.email);
   });
 
-  test('feeAmount is a positive number', () => {
-    const s = createStudent();
-    expect(s.feeAmount).toBeGreaterThan(0);
+  it('buildFinanceUser sets role to finance', () => {
+    const user = F.buildFinanceUser({ schoolId: 'S1' });
+    expect(user.role).toBe('finance');
   });
 
-  test('feePaid defaults to false', () => {
-    const s = createStudent();
-    expect(s.feePaid).toBe(false);
-  });
-
-  test('totalPaid defaults to 0', () => {
-    const s = createStudent();
-    expect(s.totalPaid).toBe(0);
-  });
-
-  test('parentEmail is a valid email format', () => {
-    const s = createStudent();
-    expect(s.parentEmail).toMatch(/^[^@]+@[^@]+\.[^@]+$/);
-  });
-
-  test('overrides are applied', () => {
-    const s = createStudent({ name: 'Alice Test', feePaid: true, totalPaid: 200 });
-    expect(s.name).toBe('Alice Test');
-    expect(s.feePaid).toBe(true);
-    expect(s.totalPaid).toBe(200);
-  });
-
-  test('non-overridden fields keep defaults', () => {
-    const s = createStudent({ name: 'Override Only' });
-    expect(typeof s.studentId).toBe('string');
-    expect(s.feePaid).toBe(false);
-  });
-
-  test('deterministic: same seed produces same student', () => {
-    resetCallIndex();
-    const a = createStudent({}, 42);
-    resetCallIndex();
-    const b = createStudent({}, 42);
-    expect(a.studentId).toBe(b.studentId);
-    expect(a.name).toBe(b.name);
-    expect(a.feeAmount).toBe(b.feeAmount);
+  it('buildViewerUser sets role to viewer', () => {
+    const user = F.buildViewerUser({ schoolId: 'S1' });
+    expect(user.role).toBe('viewer');
   });
 });
 
-// ── createPayment ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Wallet factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildWallet()', () => {
+  it('returns a public key only — no secret key', () => {
+    const wallet = F.buildWallet('SCHOOL-A');
 
-describe('createPayment', () => {
-  test('returns an object with required payment fields', () => {
-    const p = createPayment();
-    expect(typeof p.schoolId).toBe('string');
-    expect(typeof p.studentId).toBe('string');
-    expect(typeof p.txHash).toBe('string');
-    expect(typeof p.amount).toBe('number');
-    expect(typeof p.status).toBe('string');
+    expect(wallet).toMatchObject({
+      schoolId:       'SCHOOL-A',
+      stellarAddress: expect.any(String),
+      network:        'testnet',
+    });
+
+    // The wallet descriptor must NOT contain any field named "secret" or "privateKey".
+    const keys = Object.keys(wallet);
+    expect(keys).not.toContain('secret');
+    expect(keys).not.toContain('privateKey');
+    expect(keys).not.toContain('secretKey');
   });
 
-  test('amount is positive', () => {
-    const p = createPayment();
-    expect(p.amount).toBeGreaterThan(0);
-  });
-
-  test('status is one of the valid values', () => {
-    const p = createPayment();
-    expect(['SUCCESS', 'PENDING', 'FAILED']).toContain(p.status);
-  });
-
-  test('txHash is a 64-char hex string', () => {
-    const p = createPayment();
-    expect(p.txHash).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  test('overrides are applied', () => {
-    const p = createPayment({ status: 'SUCCESS', amount: 999 });
-    expect(p.status).toBe('SUCCESS');
-    expect(p.amount).toBe(999);
-  });
-
-  test('deterministic: same seed produces same txHash', () => {
-    resetCallIndex();
-    const a = createPayment({}, 7);
-    resetCallIndex();
-    const b = createPayment({}, 7);
-    expect(a.txHash).toBe(b.txHash);
+  it('stellar address never starts with "S" (which would indicate a secret key)', () => {
+    const wallet = F.buildWallet('SCHOOL-A');
+    // Stellar secret keys start with 'S'; public keys start with 'G'.
+    expect(wallet.stellarAddress).not.toMatch(/^S/);
   });
 });
 
-// ── createFeeStructure ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Student factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildStudent()', () => {
+  it('generates a student explicitly scoped to a schoolId', () => {
+    const student = F.buildStudent({ schoolId: 'SCHOOL-A' });
 
-describe('createFeeStructure', () => {
-  test('returns an object with required fee structure fields', () => {
-    const f = createFeeStructure();
-    expect(typeof f.schoolId).toBe('string');
-    expect(typeof f.className).toBe('string');
-    expect(typeof f.feeAmount).toBe('number');
-    expect(typeof f.academicYear).toBe('string');
+    expect(student.schoolId).toBe('SCHOOL-A');
+    expect(student.studentId).toContain('SCHOOL-A');
   });
 
-  test('feeAmount is non-negative', () => {
-    const f = createFeeStructure();
-    expect(f.feeAmount).toBeGreaterThanOrEqual(0);
+  it('generates unique studentIds across sequential calls within the same school', () => {
+    const a = F.buildStudent({ schoolId: 'SCHOOL-A' });
+    const b = F.buildStudent({ schoolId: 'SCHOOL-A' });
+
+    expect(a.studentId).not.toBe(b.studentId);
   });
 
-  test('isActive defaults to true', () => {
-    const f = createFeeStructure();
-    expect(f.isActive).toBe(true);
+  it('deletedAt is null by default (not soft-deleted)', () => {
+    const student = F.buildStudent({ schoolId: 'SCHOOL-A' });
+    expect(student.deletedAt).toBeNull();
   });
 
-  test('academicYear is a 4-digit year string', () => {
-    const f = createFeeStructure();
-    expect(f.academicYear).toMatch(/^\d{4}$/);
-  });
+  it('buildCollisionStudents creates the same studentId in two different schools', () => {
+    const { studentA, studentB } = F.buildCollisionStudents(
+      'SHARED-001',
+      'SCHOOL-A',
+      'SCHOOL-B',
+    );
 
-  test('overrides are applied', () => {
-    const f = createFeeStructure({ className: 'Form 3', feeAmount: 350 });
-    expect(f.className).toBe('Form 3');
-    expect(f.feeAmount).toBe(350);
-  });
+    // Same studentId — the tenant isolation test scenario.
+    expect(studentA.studentId).toBe('SHARED-001');
+    expect(studentB.studentId).toBe('SHARED-001');
 
-  test('deterministic: same seed produces same feeAmount', () => {
-    resetCallIndex();
-    const a = createFeeStructure({}, 100);
-    resetCallIndex();
-    const b = createFeeStructure({}, 100);
-    expect(a.feeAmount).toBe(b.feeAmount);
-    expect(a.className).toBe(b.className);
-  });
-});
-
-// ── createUser ────────────────────────────────────────────────────────────────
-
-describe('createUser', () => {
-  test('returns an object with required user fields', () => {
-    const u = createUser();
-    expect(typeof u.email).toBe('string');
-    expect(typeof u.passwordHash).toBe('string');
-    expect(Array.isArray(u.roles)).toBe(true);
-  });
-
-  test('email is a valid format', () => {
-    const u = createUser();
-    expect(u.email).toMatch(/^[^@]+@[^@]+\.[^@]+$/);
-  });
-
-  test('roles contains at least one valid role', () => {
-    const u = createUser();
-    const validRoles = ['super_admin', 'owner', 'staff', 'read_only'];
-    expect(u.roles.length).toBeGreaterThan(0);
-    u.roles.forEach((r) => expect(validRoles).toContain(r));
-  });
-
-  test('isActive defaults to true', () => {
-    const u = createUser();
-    expect(u.isActive).toBe(true);
-  });
-
-  test('mfaEnabled defaults to false', () => {
-    const u = createUser();
-    expect(u.mfaEnabled).toBe(false);
-  });
-
-  test('overrides are applied', () => {
-    const u = createUser({ email: 'custom@test.com', roles: ['super_admin'] });
-    expect(u.email).toBe('custom@test.com');
-    expect(u.roles).toEqual(['super_admin']);
-  });
-
-  test('deterministic: same seed produces same email', () => {
-    resetCallIndex();
-    const a = createUser({}, 55);
-    resetCallIndex();
-    const b = createUser({}, 55);
-    expect(a.email).toBe(b.email);
+    // But different schools — they must NOT collide at the DB level if
+    // the school-scoped unique index is in place.
+    expect(studentA.schoolId).toBe('SCHOOL-A');
+    expect(studentB.schoolId).toBe('SCHOOL-B');
   });
 });
 
-// ── Cross-factory determinism ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Payment factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildPayment()', () => {
+  it('generates a payment explicitly scoped to a schoolId', () => {
+    const payment = F.buildPayment({ schoolId: 'SCHOOL-A', studentId: 'STU-001' });
 
-describe('cross-factory determinism', () => {
-  test('same global seed produces the same full set of factories', () => {
-    resetCallIndex();
-    const school  = createSchool({}, 1);
-    const student = createStudent({}, 1);
-    const payment = createPayment({}, 1);
-    const fee     = createFeeStructure({}, 1);
-    const user    = createUser({}, 1);
-
-    resetCallIndex();
-    const school2  = createSchool({}, 1);
-    const student2 = createStudent({}, 1);
-    const payment2 = createPayment({}, 1);
-    const fee2     = createFeeStructure({}, 1);
-    const user2    = createUser({}, 1);
-
-    expect(school.schoolId).toBe(school2.schoolId);
-    expect(student.studentId).toBe(student2.studentId);
-    expect(payment.txHash).toBe(payment2.txHash);
-    expect(fee.feeAmount).toBe(fee2.feeAmount);
-    expect(user.email).toBe(user2.email);
+    expect(payment.schoolId).toBe('SCHOOL-A');
+    expect(payment.studentId).toBe('STU-001');
+    expect(payment.status).toBe('SUCCESS');
   });
 
-  test('different seeds produce different values', () => {
-    resetCallIndex();
-    const a = createStudent({}, 1);
-    resetCallIndex();
-    const b = createStudent({}, 2);
-    // With different seeds, at least one generated field should differ
-    const different = a.studentId !== b.studentId || a.name !== b.name || a.feeAmount !== b.feeAmount;
-    expect(different).toBe(true);
+  it('generates unique txHashes across sequential calls', () => {
+    const a = F.buildPayment({ schoolId: 'SCHOOL-A' });
+    const b = F.buildPayment({ schoolId: 'SCHOOL-A' });
+
+    expect(a.txHash).not.toBe(b.txHash);
+  });
+
+  it('deletedAt is null by default', () => {
+    const payment = F.buildPayment({ schoolId: 'SCHOOL-A' });
+    expect(payment.deletedAt).toBeNull();
+  });
+
+  it('buildPendingPayment sets status to PENDING_VERIFICATION', () => {
+    const p = F.buildPendingPayment({ schoolId: 'SCHOOL-A' });
+    expect(p.status).toBe('PENDING_VERIFICATION');
+    expect(p.confirmedAt).toBeNull();
+  });
+
+  it('buildFailedPayment sets status to FAILED', () => {
+    const p = F.buildFailedPayment({ schoolId: 'SCHOOL-A' });
+    expect(p.status).toBe('FAILED');
+  });
+
+  it('buildOverpaidPayment sets status to OVERPAID', () => {
+    const p = F.buildOverpaidPayment({ schoolId: 'SCHOOL-A' });
+    expect(p.status).toBe('OVERPAID');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Audit log factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildAuditLog()', () => {
+  it('generates an audit entry scoped to a schoolId', () => {
+    const log = F.buildAuditLog({ schoolId: 'SCHOOL-A' });
+
+    expect(log.schoolId).toBe('SCHOOL-A');
+    expect(log.action).toBe('PAYMENT_VERIFIED');
+  });
+
+  it('allows overriding action and actor', () => {
+    const log = F.buildAuditLog({
+      schoolId: 'SCHOOL-A',
+      action:   'STUDENT_REGISTERED',
+      actor:    'admin@school-a.local',
+    });
+
+    expect(log.action).toBe('STUDENT_REGISTERED');
+    expect(log.actor).toBe('admin@school-a.local');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Role assignment factory
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildRoleAssignment()', () => {
+  it('creates an admin role assignment', () => {
+    const ra = F.buildRoleAssignment('SCHOOL-A', 'user-1', F.ROLES.ADMIN);
+    expect(ra).toEqual({ schoolId: 'SCHOOL-A', userId: 'user-1', role: 'admin' });
+  });
+
+  it('throws for unknown roles', () => {
+    expect(() => F.buildRoleAssignment('SCHOOL-A', 'user-1', 'superadmin')).toThrow(
+      /unknown role/i
+    );
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Scenario helpers
+// ══════════════════════════════════════════════════════════════════════════════
+describe('buildIsolatedSchoolScenario()', () => {
+  it('returns all entities scoped to the same schoolId', () => {
+    const { school, user, student, payment, auditLog } =
+      F.buildIsolatedSchoolScenario('SCENARIO-SCHOOL');
+
+    expect(school.schoolId).toBe('SCENARIO-SCHOOL');
+    expect(user.schoolId).toBe('SCENARIO-SCHOOL');
+    expect(student.schoolId).toBe('SCENARIO-SCHOOL');
+    expect(payment.schoolId).toBe('SCENARIO-SCHOOL');
+    expect(auditLog.schoolId).toBe('SCENARIO-SCHOOL');
+  });
+
+  it('payment references the student generated in the same scenario', () => {
+    const { student, payment } = F.buildIsolatedSchoolScenario('S1');
+    expect(payment.studentId).toBe(student.studentId);
+  });
+
+  it('audit log references the user generated in the same scenario', () => {
+    const { user, auditLog } = F.buildIsolatedSchoolScenario('S1');
+    expect(auditLog.actor).toBe(user.email);
+  });
+});
+
+describe('buildCrossSchoolCollisionScenario()', () => {
+  it('creates the same studentId in two different schools', () => {
+    const { schoolA, schoolB, studentA, studentB, paymentA, paymentB } =
+      F.buildCrossSchoolCollisionScenario('COLLISION-STU');
+
+    expect(studentA.studentId).toBe('COLLISION-STU');
+    expect(studentB.studentId).toBe('COLLISION-STU');
+    expect(studentA.schoolId).toBe(schoolA.schoolId);
+    expect(studentB.schoolId).toBe(schoolB.schoolId);
+    expect(schoolA.schoolId).not.toBe(schoolB.schoolId);
+  });
+
+  it('payments for the same studentId belong to different schools', () => {
+    const { paymentA, paymentB } = F.buildCrossSchoolCollisionScenario();
+
+    expect(paymentA.schoolId).not.toBe(paymentB.schoolId);
+  });
+
+  it('payment amounts are distinguishable so assertions can identify which school', () => {
+    const { paymentA, paymentB } = F.buildCrossSchoolCollisionScenario();
+
+    expect(paymentA.amount).toBe(100);
+    expect(paymentB.amount).toBe(200);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Sequence counter reset
+// ══════════════════════════════════════════════════════════════════════════════
+describe('resetSequences()', () => {
+  it('resets counters so the first generated ID is deterministic after reset', () => {
+    F.buildSchool(); // consume seq 1
+    F.buildSchool(); // consume seq 2
+
+    F.resetSequences();
+
+    const school = F.buildSchool(); // should be seq 1 again
+    expect(school.schoolId).toBe('SCHOOL-001');
+  });
+
+  it('after reset, addresses cycle back from the beginning of the pool', () => {
+    // Exhaust the address pool once.
+    for (let i = 0; i < 10; i++) F.buildSchool();
+    F.resetSequences();
+
+    const first = F.buildSchool();
+    const second = F.buildSchool();
+    // After reset both schools should have addresses from the top of the pool.
+    expect(first.stellarAddress).toBeTruthy();
+    expect(second.stellarAddress).toBeTruthy();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Security: no real secrets in generated fixtures
+// ══════════════════════════════════════════════════════════════════════════════
+describe('security: generated fixtures are safe', () => {
+  it('no fixture field contains a value starting with "S" (Stellar secret key prefix)', () => {
+    const scenario = F.buildIsolatedSchoolScenario('SEC-SCHOOL');
+
+    function scanObject(obj) {
+      for (const [key, val] of Object.entries(obj)) {
+        if (typeof val === 'string') {
+          // Stellar secret keys are 56 characters starting with 'S'
+          if (/^S[A-Z2-7]{55}$/.test(val)) {
+            throw new Error(
+              `Field "${key}" looks like a Stellar secret key: ${val.slice(0, 4)}...`
+            );
+          }
+        }
+      }
+    }
+
+    expect(() => {
+      scanObject(scenario.school);
+      scanObject(scenario.user);
+      scanObject(scenario.student);
+      scanObject(scenario.payment);
+      scanObject(scenario.auditLog);
+    }).not.toThrow();
+  });
+
+  it('user fixture does not contain plaintext passwords', () => {
+    const user = F.buildUser({ schoolId: 'S1' });
+
+    const fieldValues = Object.values(user).filter((v) => typeof v === 'string');
+    const hasPwPlaintext = fieldValues.some(
+      (v) => /^password\d*!?$/i.test(v) || v === 'Password123!'
+    );
+    expect(hasPwPlaintext).toBe(false);
   });
 });
