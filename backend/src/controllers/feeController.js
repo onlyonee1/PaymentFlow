@@ -1,14 +1,35 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const mongoose = require('mongoose');
 const FeeStructure = require('../models/feeStructureModel');
-const { get, set, del, KEYS, TTL } = require('../cache');
+const { del, KEYS } = require('../cache');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
+const { validateDecimalAmount, toDecimalString } = require('../utils/decimalPrecision');
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function audit(req, action, targetId, details) {
   if (!req.auditContext) return Promise.resolve();
   return logAudit({ schoolId: req.schoolId, action, performedBy: req.auditContext.performedBy, targetId, targetType: 'fee', details, result: 'success', ipAddress: req.auditContext.ipAddress, userAgent: req.auditContext.userAgent });
+}
+
+/**
+ * Validate and normalise a feeAmount value at the API boundary.
+ * Returns { ok: true, amount: Number } or calls next() with a VALIDATION_ERROR
+ * and returns false so the caller can return immediately.
+ */
+function normaliseFeeAmount(raw, next) {
+  const result = validateDecimalAmount(raw, { minValue: 0 });
+  if (!result.ok) {
+    next(Object.assign(new Error(result.error), { code: result.code || 'VALIDATION_ERROR', status: 400 }));
+    return null;
+  }
+  // Store as Number (BSON double).  Precision is guaranteed by validateDecimalAmount
+  // because we only reach here when actualDp <= 2 and the value is within range.
+  return result.value.toNumber();
 }
 
 async function createFeeStructure(req, res, next) {
@@ -17,12 +38,15 @@ async function createFeeStructure(req, res, next) {
     const { className, feeAmount, description, academicYear, paymentDeadline } = req.body;
     if (!className || feeAmount == null) return next(Object.assign(new Error('className and feeAmount are required'), { code: 'VALIDATION_ERROR' }));
 
+    const normalisedFeeAmount = normaliseFeeAmount(feeAmount, next);
+    if (normalisedFeeAmount === null) return;
+
     const existing = await FeeStructure.findOne({ schoolId, className, isActive: true });
     if (existing) return next(Object.assign(new Error(`Active fee structure already exists for class ${className}`), { code: 'DUPLICATE_FEE_STRUCTURE', status: 409 }));
 
-    const fee = await FeeStructure.create({ schoolId, className, feeAmount, description, academicYear: academicYear || new Date().getUTCFullYear().toString(), isActive: true, paymentDeadline: paymentDeadline || null });
+    const fee = await FeeStructure.create({ schoolId, className, feeAmount: normalisedFeeAmount, description, academicYear: academicYear || new Date().getUTCFullYear().toString(), isActive: true, paymentDeadline: paymentDeadline || null });
     del(KEYS.feesAll(), KEYS.feeByClass(className));
-    await audit(req, 'fee_create', className, { className, feeAmount, academicYear });
+    await audit(req, 'fee_create', className, { className, feeAmount: normalisedFeeAmount, academicYear });
     res.status(201).json(fee);
   } catch (err) { next(err); }
 }
@@ -61,13 +85,9 @@ async function getAllFeeStructures(req, res, next) {
 async function getFeeByClass(req, res, next) {
   try {
     const { className } = req.params;
-    const cached = get(KEYS.feeByClass(className));
-    if (cached !== undefined) return res.json(cached);
-
     const fee = await FeeStructure.findOne({ schoolId: req.schoolId, className, deletedAt: null, isActive: true });
     if (!fee) return next(Object.assign(new Error(`No fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-    set(KEYS.feeByClass(className), fee, TTL.FEES);
-    res.json(fee);
+    withVersion(res, fee).json(fee);
   } catch (err) { next(err); }
 }
 
@@ -85,7 +105,10 @@ async function deleteFeeStructure(req, res, next) {
 
     if (affectedCount > 0) logger.warn('Fee structure deactivated with active obligations', { schoolId: req.schoolId, className, affectedStudents: affectedCount });
     del(KEYS.feesAll(), KEYS.feeByClass(className));
-    await audit(req, 'fee_delete', className, { className, feeAmount: fee.feeAmount });
+    await audit(req, 'fee_delete', className, {
+      before: { className, feeAmount: fee.feeAmount, isActive: true },
+      after: { className, feeAmount: fee.feeAmount, isActive: fee.isActive },
+    });
     res.json({ message: `Fee structure for class ${className} deactivated` });
   } catch (err) { next(err); }
 }
@@ -96,15 +119,22 @@ async function updateFeeStructure(req, res, next) {
     const { feeAmount, description, academicYear, paymentDeadline, cascadeToStudents } = req.body;
     if (feeAmount == null) return next(Object.assign(new Error('feeAmount is required'), { code: 'VALIDATION_ERROR' }));
 
-    const updateFields = { feeAmount };
+    const normalisedFeeAmount = normaliseFeeAmount(feeAmount, next);
+    if (normalisedFeeAmount === null) return;
+
+    const updateFields = { feeAmount: normalisedFeeAmount };
     if (description    !== undefined) updateFields.description    = description;
     if (academicYear   !== undefined) updateFields.academicYear   = academicYear;
     if (paymentDeadline !== undefined) updateFields.paymentDeadline = paymentDeadline;
 
-    const fee = await FeeStructure.findOneAndUpdate({ schoolId: req.schoolId, className, isActive: true }, updateFields, { new: true, runValidators: true });
-    if (!fee) return next(Object.assign(new Error(`No active fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-
-    del(KEYS.feesAll(), KEYS.feeByClass(className));
+    const target = { schoolId: req.schoolId, className, isActive: true };
+    const before = await FeeStructure.findOne(target).lean();
+    const writeFee = (session) => FeeStructure.findOneAndUpdate(
+      { ...target, ...versionFilter(req.expectedVersion) },
+      { $set: updateFields, $inc: { __v: 1 } },
+      { new: true, runValidators: true, ...(session && { session }) },
+    );
+    let fee;
 
     let studentsUpdated = 0;
     if (cascadeToStudents === true) {
@@ -117,6 +147,8 @@ async function updateFeeStructure(req, res, next) {
       });
       try {
         await session.withTransaction(async () => {
+          fee = await writeFee(session);
+          if (!fee) return;
           const students = await Student.find({ schoolId: req.schoolId, class: className, deletedAt: null }).session(session);
 
           if (students.length > 0) {
@@ -137,8 +169,9 @@ async function updateFeeStructure(req, res, next) {
                 updateOne: {
                   filter: { _id: s._id, schoolId: req.schoolId },
                   update: {
+                    $inc: { __v: 1 },
                     $set: {
-                      feeAmount,
+                      feeAmount: normalisedFeeAmount,
                       totalPaid: amountPaid,
                       remainingBalance,
                       feePaid: amountPaid >= feeAmount,
@@ -169,12 +202,22 @@ async function updateFeeStructure(req, res, next) {
           }
         });
       } finally {
-        session.endSession();
+        await session.endSession();
       }
+    } else {
+      fee = await writeFee();
     }
 
-    await audit(req, 'fee_update', className, { className, feeAmount, cascadeToStudents, studentsUpdated });
-    res.json({ fee, studentsUpdated });
+    if (!fee) return staleOrMissing(res, next, FeeStructure.findOne(target));
+    del(KEYS.feesAll(), KEYS.feeByClass(className));
+
+    await audit(req, 'fee_update', className, {
+      before: before ? { feeAmount: before.feeAmount, description: before.description, academicYear: before.academicYear, paymentDeadline: before.paymentDeadline } : null,
+      after: { feeAmount: fee.feeAmount, description: fee.description, academicYear: fee.academicYear, paymentDeadline: fee.paymentDeadline },
+      cascadeToStudents,
+      studentsUpdated,
+    });
+    withVersion(res, fee).json({ fee, studentsUpdated });
   } catch (err) { next(err); }
 }
 

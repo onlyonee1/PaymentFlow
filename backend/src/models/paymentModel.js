@@ -109,6 +109,7 @@ const paymentSchema = new mongoose.Schema(
     // Canonical status values are imported from constants/paymentStatus.js (Issue #72).
     status: { type: String, enum: PAYMENT_STATUS_VALUES, default: 'PENDING' },
     memo: { type: String },
+    memoHash: { type: String },
     senderAddress: { type: String, default: null },
     isSuspicious: { type: Boolean, default: false },
     suspicionReason: { type: String, default: null },
@@ -186,6 +187,7 @@ paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 // Indexes
 // Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).
 // The single-field txHash index (inline, non-unique) is kept for cross-school lookups.
+paymentSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 paymentSchema.index({ schoolId: 1, txHash: 1 }, { unique: true });
 // Unique sparse index on txHash for fast duplicate detection across all schools.
 // sparse: true excludes documents where txHash is null (manually created records).
@@ -210,6 +212,15 @@ paymentSchema.index(
   { partialFilterExpression: { deletedAt: null } }
 );
 paymentSchema.index({ schoolId: 1, studentId: 1, feeCategory: 1 });
+
+// Issue #39 — additional compound indexes for common query patterns
+// { schoolId, status, deletedAt } — getAllPayments with status filter
+paymentSchema.index({ schoolId: 1, status: 1, deletedAt: 1 });
+paymentSchema.index({ schoolId: 1, memo: 1, status: 1 });
+// { schoolId, feeValidationStatus, deletedAt } — getOverpayments (extends single-field index)
+paymentSchema.index({ schoolId: 1, feeValidationStatus: 1, deletedAt: 1 });
+// { schoolId, studentId, deletedAt, confirmedAt } — getStudentPayments sorted by date, excl. deleted
+paymentSchema.index({ schoolId: 1, studentId: 1, deletedAt: 1, confirmedAt: -1 });
 
 paymentSchema.virtual('explorerUrl').get(function () {
   const hash = this.transactionHash || this.txHash;
@@ -324,7 +335,7 @@ paymentSchema.post('save', async function () {
       });
     }
 
-    if (student && student.parentEmail) {
+    if (student && student.parentEmail && !student.paymentConfirmationOptOut) {
       try {
         const emailService = require('../services/emailService');
         // Use cumulative totalPaid for accurate remaining balance (issue #1031)

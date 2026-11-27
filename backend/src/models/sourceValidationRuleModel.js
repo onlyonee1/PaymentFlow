@@ -35,6 +35,7 @@
  */
 
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 const sourceValidationRuleSchema = new mongoose.Schema({
   /**
@@ -65,5 +66,7 @@ const sourceValidationRuleSchema = new mongoose.Schema({
 
 // Compound unique index: rule names must be unique per school, not globally
 sourceValidationRuleSchema.index({ schoolId: 1, name: 1 }, { unique: true });
+
+sourceValidationRuleSchema.plugin(tenantScope, { modelName: 'SourceValidationRule' });
 
 module.exports = mongoose.model('SourceValidationRule', sourceValidationRuleSchema);

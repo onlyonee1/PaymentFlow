@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#103c35">
+  <meta name="description" content="Pay a school fee and view your PaymentFlow receipts.">
+  <meta name="referrer" content="no-referrer">
+  <title>School payments | PaymentFlow</title>
+  <link rel="manifest" href="/parent-pay/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/parent-pay/icon-192.png">
+  <link rel="icon" href="/parent-pay/icon-192.png">
+  <link rel="stylesheet" href="/parent-pay/portal.css">
+  <script src="/parent-pay/portal.js" defer></script>
+</head>
+<body>
+  <header><div class="wrap masthead"><strong>PaymentFlow</strong><button type="button" id="install" hidden>Install</button></div></header>
+  <main class="wrap">
+    <h1>School payments</h1>
+    <noscript><p>Enable JavaScript to prepare a payment or view receipts.</p></noscript>
+    <p id="status" role="status">Scan a payment QR code from your school to get started.</p>
+
+    <form id="pay-form" hidden>
+      <h2 id="fee-name"></h2>
+      <p id="school-name"></p>
+      <p class="amount" id="amount"></p>
+      <label for="student-id">Student ID</label>
+      <input id="student-id" maxlength="20" minlength="3" pattern="[A-Za-z0-9_\-]{3,20}" required autocomplete="off" autocapitalize="none" spellcheck="false">
+      <button type="submit">Prepare payment</button>
+    </form>
+
+    <section id="wallet" aria-labelledby="wallet-heading" hidden>
+      <h2 id="wallet-heading">Send with your Stellar wallet</h2>
+      <p>Use the exact amount and text memo below. Check the network in your wallet before sending.</p>
+      <dl>
+        <dt>Network</dt><dd id="network"></dd>
+        <dt>Amount</dt><dd id="wallet-amount"></dd>
+        <dt>Wallet address</dt><dd id="address"></dd>
+        <dt>Text memo</dt><dd id="memo"></dd>
+        <dt>Pay by</dt><dd id="intent-deadline"></dd>
+      </dl>
+      <a class="button" id="open-wallet">Open Stellar wallet</a>
+      <button type="button" id="check-receipt" class="secondary">Check for receipt</button>
+      <p><a id="receipt-link">Receipt link</a> · Bookmark to check again later.</p>
+    </section>
+
+    <section id="receipts" aria-labelledby="receipt-heading">
+      <h2 id="receipt-heading">Receipts</h2>
+      <div id="latest-receipt"></div>
+      <p id="offline-label">The last five confirmed receipts viewed here are saved on this device when offline storage is available.</p>
+      <ul id="saved-receipts"></ul>
+      <button class="secondary" type="button" id="clear-receipts" hidden>Clear saved receipts</button>
+    </section>
+  </main>
+</body>
+</html>

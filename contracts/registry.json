@@ -1,0 +1,10 @@
+[
+  {
+    "network": "testnet",
+    "contractId": "CCBUSXG7VHO5RGNLBKJCBFGQGWQHQPNPQKZXYSWVFJNLPZGXYGXZUAAA",
+    "wasmHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "abiVersion": "1.0.0",
+    "deployedAt": "2024-01-01T00:00:00.000Z",
+    "active": true
+  }
+]

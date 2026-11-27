@@ -3,16 +3,19 @@ import { useTranslation } from "react-i18next";
 import {
   getFeeStructures,
   createFeeStructure,
+  createFeePaymentQr,
   deleteFeeStructure,
-  updateFeeStructure,
-  restoreFeeStructure,
-  getStudents,
   getSchool,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
-import { IconAlertTriangle, IconCheck, IconDollarSign } from "../components/Icons";
+import { IconAlertTriangle, IconCheck, IconDollarSign, IconChevronLeft, IconChevronRight } from "../components/Icons";
 import PageHero from "../components/PageHero";
+import EmptyState from "../components/EmptyState";
+import AccessiblePagination from "../components/AccessiblePagination";
+import ConfirmDialog from "../components/ConfirmDialog"; // Issue #108
+import { SkeletonTable } from "../components/Skeleton";
+import { useAbortController } from "../hooks/useAbortController";
 
 const EMPTY_FORM = {
   className: "",
@@ -21,228 +24,27 @@ const EMPTY_FORM = {
   description: "",
 };
 
-// ── Delete confirmation modal ─────────────────────────────────────────────────
-
-function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel }) {
-  const { t } = useTranslation();
-  const cancelRef = useRef(null);
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKey);
-    cancelRef.current?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="del-modal-title"
-      aria-describedby="del-modal-desc"
-      style={overlayStyle}
-    >
-      <div style={modalStyle}>
-        <h2 id="del-modal-title" style={{ marginTop: 0, fontSize: "1.1rem" }}>
-          {t("fees.deleteTitle")}
-        </h2>
-        <p id="del-modal-desc" style={{ color: "var(--text)", lineHeight: 1.5 }}>
-          {t("fees.deleteIntro")}{" "}
-          <strong>{feeStructure.className}</strong>.
-          {studentCount > 0 && (
-            <>
-              {" "}{t("fees.deleteAffects")}{" "}
-              <strong>{t("fees.studentCount", { count: studentCount })}</strong>.
-            </>
-          )}{" "}
-          This will not affect existing payments.
-        </p>
-        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-          <button ref={cancelRef} onClick={onCancel} className="btn btn-ghost">
-            {t("actions.cancel")}
-          </button>
-          <button onClick={onConfirm} className="btn btn-danger">
-            {t("actions.delete")}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Edit fee modal ────────────────────────────────────────────────────────────
-
-function EditFeeModal({ fee, classOptions, onSave, onCancel }) {
-  const { t } = useTranslation();
-  const [form, setForm] = useState({
-    className:    fee.className,
-    feeAmount:    String(fee.feeAmount),
-    academicYear: fee.academicYear || "",
-    description:  fee.description  || "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState(null);
-  const cancelRef = useRef(null);
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKey);
-    cancelRef.current?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError(null);
-
-    const feeAmount = parseFloat(form.feeAmount);
-    if (!form.className) {
-      setError(t("fees.classRequired") || "Class is required.");
-      return;
-    }
-    if (!form.feeAmount || isNaN(feeAmount) || feeAmount <= 0) {
-      setError(t("fees.amountPositive") || "Fee amount must be a positive number.");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await onSave(fee.className, {
-        className: form.className,
-        feeAmount,
-        ...(form.academicYear && { academicYear: form.academicYear }),
-        ...(form.description.trim() && { description: form.description.trim() }),
-      });
-    } catch (err) {
-      setError(
-        err.response?.data?.error || t("fees.failedToCreate") || "Failed to save changes."
-      );
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="edit-modal-title"
-      style={overlayStyle}
-    >
-      <div style={{ ...modalStyle, maxWidth: 480 }}>
-        <h2 id="edit-modal-title" style={{ marginTop: 0, fontSize: "1.1rem" }}>
-          Edit Fee Structure
-        </h2>
-
-        {error && (
-          <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
-            <IconAlertTriangle size={14} />
-            <span>{error}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="edit-className">
-              {t("fees.classLabel")} *
-            </label>
-            <select
-              id="edit-className"
-              className="form-input"
-              value={form.className}
-              onChange={(e) => setForm((p) => ({ ...p, className: e.target.value }))}
-              disabled={saving}
-              required
-            >
-              <option value="">{t("fees.selectClass")}</option>
-              {classOptions.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="edit-feeAmount">
-              {t("fees.feeAmountLabel")} *
-            </label>
-            <input
-              id="edit-feeAmount"
-              className="form-input"
-              type="number"
-              min="0.0000001"
-              step="any"
-              value={form.feeAmount}
-              onChange={(e) => setForm((p) => ({ ...p, feeAmount: e.target.value }))}
-              disabled={saving}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="edit-academicYear">
-              {t("fees.academicYearLabel")}
-            </label>
-            <input
-              id="edit-academicYear"
-              className="form-input"
-              type="text"
-              value={form.academicYear}
-              onChange={(e) => setForm((p) => ({ ...p, academicYear: e.target.value }))}
-              disabled={saving}
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="edit-description">
-              {t("fees.descriptionLabel")}
-            </label>
-            <input
-              id="edit-description"
-              className="form-input"
-              type="text"
-              value={form.description}
-              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-              disabled={saving}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-            <button
-              ref={cancelRef}
-              type="button"
-              onClick={onCancel}
-              className="btn btn-ghost"
-              disabled={saving}
-            >
-              {t("actions.cancel")}
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={saving}
-              aria-busy={saving}
-            >
-              {saving ? "Saving…" : "Save Changes"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
   const { t } = useTranslation();
+  const [paymentQr, setPaymentQr] = useState(null);
+  const qrDialog = useRef(null);
 
-  const [fees, setFees]               = useState([]);
-  const [archivedFees, setArchivedFees] = useState([]);
-  const [activeTab, setActiveTab]     = useState("active"); // "active" | "archived"
-  const [pagination, setPagination]   = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  async function showPaymentQr(fee) {
+    const label = fee.className;
+    setPaymentQr({ label, loading: true });
+    qrDialog.current.showModal();
+    try {
+      const { data } = await createFeePaymentQr(fee._id);
+      setPaymentQr({ label, ...data });
+    } catch (err) {
+      setPaymentQr({ label, error: err.response?.data?.error || "Could not create the payment QR code." });
+    }
+  }
+
+  const [fees, setFees]             = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
@@ -257,12 +59,8 @@ export default function FeesPage() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleteError, setDeleteError]     = useState(null);
 
-  // Edit state
-  const [editingFee, setEditingFee]   = useState(null);
-  const [editError, setEditError]     = useState(null);
-
-  // Restore state
-  const [restoreError, setRestoreError] = useState(null);
+  // Issue #254 — abort in-flight fee requests when the component unmounts.
+  const { signal } = useAbortController();
 
   const successRef = useRef(null);
 
@@ -282,7 +80,7 @@ export default function FeesPage() {
   function loadFees(page = 1) {
     setLoading(true);
     setError(null);
-    getFeeStructures({ page, limit: pagination.limit })
+    getFeeStructures({ signal, page, limit: pagination.limit })
       .then(({ data }) => {
         const all = Array.isArray(data.data || data) ? (data.data || data) : [];
         // Split into active and archived based on deletedAt presence
@@ -290,9 +88,11 @@ export default function FeesPage() {
         setArchivedFees(all.filter((f) => !!f.deletedAt));
         if (data.pagination) setPagination(data.pagination);
       })
-      .catch(() =>
-        setError(t("fees.failedToLoad") || "Could not load fee structures.")
-      )
+      .catch((err) => {
+        // Silently ignore requests cancelled on unmount or navigation.
+        if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
+        setError(t("fees.failedToLoad"));
+      })
       .finally(() => setLoading(false));
   }
 
@@ -346,16 +146,9 @@ export default function FeesPage() {
 
   // ── Delete handlers ───────────────────────────────────────────────────────
 
-  async function handleDeleteClick(fee) {
+  function handleDeleteClick(fee) {
     setDeleteError(null);
-    let studentCount = 0;
-    try {
-      const { data } = await getStudents(1, 1, { className: fee.className });
-      studentCount = data.total || 0;
-    } catch {
-      // non-fatal
-    }
-    setPendingDelete({ fee, studentCount });
+    setPendingDelete({ fee });
   }
 
   async function handleConfirmDelete() {
@@ -436,6 +229,22 @@ export default function FeesPage() {
 
   return (
     <>
+      <dialog ref={qrDialog} aria-labelledby="fee-payment-qr-title" style={{ maxWidth: "min(90vw, 26rem)", padding: "1.25rem" }}>
+        <h2 id="fee-payment-qr-title">Payment QR code</h2>
+        {paymentQr?.label && <p>{paymentQr.label}</p>}
+        {paymentQr?.loading && <p role="status">Creating QR code…</p>}
+        {paymentQr?.error && <p role="alert">{paymentQr.error}</p>}
+        {paymentQr?.qrImage && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={paymentQr.qrImage} alt={`Scan to pay ${paymentQr.label}`} width="300" height="300" style={{ maxWidth: "100%", height: "auto" }} />
+            <p>Expires {new Date(paymentQr.expiresAt).toLocaleDateString()}</p>
+            <p><a href={paymentQr.qrImage} download="payment-qr.png">Download QR code</a></p>
+            <p><a href={paymentQr.url} target="_blank" rel="noreferrer">Open payment link</a></p>
+          </>
+        )}
+        <form method="dialog"><button className="btn btn-ghost">Close</button></form>
+      </dialog>
       <PageHero
         eyebrow={t("fees.eyebrow")}
         title={t("fees.title")}
@@ -444,8 +253,8 @@ export default function FeesPage() {
 
       <div className="page-wrap">
 
-        {/* ── Create form ── */}
-        <div className="card" style={{ marginBottom: "1.5rem" }}>
+        {/* ── Create form ──────────────────────────────────────────────────── */}
+        <div className="card" id="create-fee" style={{ marginBottom: "1.5rem" }}>
           <div className="card-header">
             <div
               className="card-title"
@@ -624,146 +433,106 @@ export default function FeesPage() {
           </div>
 
           {loading ? (
+            <div className="card-body"><SkeletonTable columns={[90, 90, 100, "100%", 36]} rows={5} /></div>
+          ) : fees.length === 0 ? (
             <div className="card-body">
-              <p aria-busy="true" style={{ color: "var(--text-muted)" }}>
-                {t("fees.loading")}
-              </p>
+              <EmptyState
+                variant="onboarding"
+                title={t("fees.empty")}
+                description={t("fees.emptyDesc")}
+              />
             </div>
-          ) : activeTab === "active" ? (
-            fees.length === 0 ? (
-              <div className="card-body">
-                <p style={{ color: "var(--text-muted)" }}>
-                  {t("fees.empty") || "No fee structures found."}
-                </p>
-              </div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table className="data-table" aria-label={t("fees.tableAria")}>
-                  <thead>
-                    <tr>
-                      <th scope="col">{t("fees.colClass")}</th>
-                      <th scope="col">{t("fees.colFeeAmount")}</th>
-                      <th scope="col">{t("fees.colAcademicYear")}</th>
-                      <th scope="col">{t("fees.colDescription")}</th>
-                      <th scope="col">
-                        <span className="sr-only">{t("fees.colActions")}</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fees.map((fee) => (
-                      <tr key={fee.className}>
-                        <td className="col-mono">{fee.className}</td>
-                        <td>
-                          <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                            {fee.feeAmount}
-                          </span>
-                          <span
-                            style={{
-                              marginLeft: "0.3rem",
-                              fontSize: "0.72rem",
-                              color: "var(--text-muted)",
-                              fontWeight: 600,
-                            }}
-                          >
-                            XLM
-                          </span>
-                        </td>
-                        <td>{fee.academicYear || "—"}</td>
-                        <td style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>
-                          {fee.description || "—"}
-                        </td>
-                        <td style={{ display: "flex", gap: "0.5rem" }}>
-                          <button
-                            onClick={() => setEditingFee(fee)}
-                            className="btn btn-sm btn-ghost"
-                            aria-label={`Edit fee structure for ${fee.className}`}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteClick(fee)}
-                            className="btn btn-sm btn-ghost"
-                            style={{ color: "var(--danger, #dc2626)" }}
-                            aria-label={t("fees.deleteForClass", { className: fee.className })}
-                          >
-                            {t("actions.delete")}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
           ) : (
-            /* Archived tab */
-            archivedFees.length === 0 ? (
-              <div className="card-body">
-                <p style={{ color: "var(--text-muted)" }}>No archived fee structures.</p>
-              </div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table className="data-table" aria-label="Archived fee structures">
-                  <thead>
-                    <tr>
-                      <th scope="col">{t("fees.colClass")}</th>
-                      <th scope="col">{t("fees.colFeeAmount")}</th>
-                      <th scope="col">{t("fees.colAcademicYear")}</th>
-                      <th scope="col">{t("fees.colDescription")}</th>
-                      <th scope="col">
-                        <span className="sr-only">Actions</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {archivedFees.map((fee) => (
-                      <tr key={fee.className} style={{ opacity: 0.65 }}>
-                        <td className="col-mono">{fee.className}</td>
-                        <td>
-                          <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                            {fee.feeAmount}
-                          </span>
-                          <span
-                            style={{
-                              marginLeft: "0.3rem",
-                              fontSize: "0.72rem",
-                              color: "var(--text-muted)",
-                              fontWeight: 600,
-                            }}
-                          >
-                            XLM
-                          </span>
-                        </td>
-                        <td>{fee.academicYear || "—"}</td>
-                        <td style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>
-                          {fee.description || "—"}
-                        </td>
-                        <td>
-                          <button
-                            onClick={() => handleRestore(fee)}
-                            className="btn btn-sm btn-ghost"
-                            style={{ color: "var(--grad-brand, #059669)" }}
-                            aria-label={`Restore fee structure for ${fee.className}`}
-                          >
-                            Restore
+            <>
+            <div style={{ overflowX: "auto" }}>
+              <table
+                className="data-table"
+                aria-label={t("fees.tableAria")}
+              >
+                <thead>
+                  <tr>
+                    <th scope="col">{t("fees.colClass")}</th>
+                    <th scope="col">{t("fees.colFeeAmount")}</th>
+                    <th scope="col">{t("fees.colAcademicYear")}</th>
+                    <th scope="col">{t("fees.colDescription")}</th>
+                    <th scope="col">
+                      <span className="sr-only">{t("fees.colActions")}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fees.map((fee) => (
+                    <tr key={fee.className}>
+                      <td className="col-mono">{fee.className}</td>
+                      <td>
+                        <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fee.feeAmount}
+                        </span>
+                        <span
+                          style={{
+                            marginLeft: "0.3rem",
+                            fontSize: "0.72rem",
+                            color: "var(--text-muted)",
+                            fontWeight: 600,
+                          }}
+                        >
+                          XLM
+                        </span>
+                      </td>
+                      <td>{fee.academicYear || "—"}</td>
+                      <td style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>
+                        {fee.description || "—"}
+                      </td>
+                      <td>
+                        {fee._id && (
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => showPaymentQr(fee)} aria-label={`Payment QR for ${fee.className}`}>
+                            Payment QR
                           </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
+                        )}
+                        <button
+                          onClick={() => handleDeleteClick(fee)}
+                          className="btn btn-sm btn-ghost"
+                          style={{ color: "var(--danger, #dc2626)" }}
+                          aria-label={t("fees.deleteForClass", { className: fee.className })}
+                        >
+                          {t("actions.delete")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {pagination.totalPages > 1 && (
+              <AccessiblePagination
+                currentPage={pagination.page}
+                totalPages={pagination.totalPages}
+                onPageChange={(p) => loadFees(p)}
+                total={pagination.total}
+                rangeStart={(pagination.page - 1) * pagination.limit + 1}
+                rangeEnd={Math.min(pagination.page * pagination.limit, pagination.total)}
+                loading={loading}
+                ariaLabel={t("fees.title")}
+                itemLabel={t("fees.title")}
+              />
+            )}
+            </>
           )}
         </div>
       </div>
 
-      {/* ── Modals ── */}
+      {/* ── Delete confirmation dialog — Issue #108 ──────────────────────── */}
       {pendingDelete && (
-        <DeleteConfirmModal
-          feeStructure={pendingDelete.fee}
-          studentCount={pendingDelete.studentCount}
+        <ConfirmDialog
+          isOpen={Boolean(pendingDelete)}
+          title={t("fees.deleteTitle")}
+          description={
+            `${t("fees.deleteIntro")} ${pendingDelete.fee.className}.` +
+            ` ${t("fees.deleteCannotUndo")}`
+          }
+          confirmLabel={t("actions.delete")}
+          variant="danger"
+          requireTyping={pendingDelete.fee.className}
           onConfirm={handleConfirmDelete}
           onCancel={() => setPendingDelete(null)}
         />
@@ -780,24 +549,3 @@ export default function FeesPage() {
     </>
   );
 }
-
-// ── Shared modal styles ───────────────────────────────────────────────────────
-
-const overlayStyle = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.45)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-
-const modalStyle = {
-  background: "var(--card-bg)",
-  borderRadius: 10,
-  padding: "1.5rem",
-  maxWidth: 420,
-  width: "90%",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-};

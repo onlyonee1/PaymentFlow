@@ -1,0 +1,132 @@
+# Redis Sentinel overlay for local development.
+#
+# Extends docker-compose.yml to replace the standalone Redis instance with a
+# 3-node Sentinel topology: 1 primary + 2 replicas, monitored by 3 sentinels.
+# Sentinel quorum = 2, so the cluster tolerates loss of any single node.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d
+#
+# After startup the backend connects via Sentinel using the env vars:
+#   REDIS_SENTINEL_HOSTS=sentinel1:26379,sentinel2:26379,sentinel3:26379
+#   REDIS_SENTINEL_NAME=mymaster
+#
+# To test failover manually:
+#   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml \
+#     exec redis-primary redis-cli DEBUG SLEEP 30
+# The sentinels should elect a replica as the new primary within ~10 s.
+#
+# See deploy/runbook-redis-sentinel.md for full operational guidance.
+
+version: "3.8"
+
+services:
+  # ── Override the standalone redis service ───────────────────────────────
+  redis:
+    # Repurpose the base redis service as the Sentinel primary.
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    networks:
+      - backend-db
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Replica 1 ────────────────────────────────────────────────────────────
+  redis-replica-1:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no --replicaof redis 6379
+    networks:
+      - backend-db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Replica 2 ────────────────────────────────────────────────────────────
+  redis-replica-2:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no --replicaof redis 6379
+    networks:
+      - backend-db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Sentinel 1 ───────────────────────────────────────────────────────────
+  sentinel1:
+    image: redis:7-alpine
+    command: >
+      sh -c '
+        echo "sentinel monitor mymaster redis 6379 2" > /tmp/sentinel.conf &&
+        echo "sentinel down-after-milliseconds mymaster 5000" >> /tmp/sentinel.conf &&
+        echo "sentinel failover-timeout mymaster 10000" >> /tmp/sentinel.conf &&
+        echo "sentinel parallel-syncs mymaster 1" >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      '
+    ports:
+      - "26379:26379"
+    networks:
+      - backend-db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Sentinel 2 ───────────────────────────────────────────────────────────
+  sentinel2:
+    image: redis:7-alpine
+    command: >
+      sh -c '
+        echo "sentinel monitor mymaster redis 6379 2" > /tmp/sentinel.conf &&
+        echo "sentinel down-after-milliseconds mymaster 5000" >> /tmp/sentinel.conf &&
+        echo "sentinel failover-timeout mymaster 10000" >> /tmp/sentinel.conf &&
+        echo "sentinel parallel-syncs mymaster 1" >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      '
+    ports:
+      - "26380:26379"
+    networks:
+      - backend-db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Sentinel 3 ───────────────────────────────────────────────────────────
+  sentinel3:
+    image: redis:7-alpine
+    command: >
+      sh -c '
+        echo "sentinel monitor mymaster redis 6379 2" > /tmp/sentinel.conf &&
+        echo "sentinel down-after-milliseconds mymaster 5000" >> /tmp/sentinel.conf &&
+        echo "sentinel failover-timeout mymaster 10000" >> /tmp/sentinel.conf &&
+        echo "sentinel parallel-syncs mymaster 1" >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      '
+    ports:
+      - "26381:26379"
+    networks:
+      - backend-db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Override backend to use Sentinel ─────────────────────────────────────
+  backend:
+    environment:
+      - REDIS_SENTINEL_HOSTS=sentinel1:26379,sentinel2:26379,sentinel3:26379
+      - REDIS_SENTINEL_NAME=mymaster
+    depends_on:
+      sentinel1:
+        condition: service_started
+      sentinel2:
+        condition: service_started
+      sentinel3:
+        condition: service_started

@@ -12,18 +12,13 @@ const { getAuditLogs, getRecentAuditLogs, verifyAuditChain, exportAuditLogs } = 
  *   - startDate: filter by date range (ISO 8601)
  *   - endDate: filter by date range (ISO 8601)
  *   - cursor: opaque pagination cursor from a prior response's nextCursor field
- *   - page: page number for offset pagination (default: 1; ignored when cursor is set)
  *   - limit: results per page (default: 50, max: 200)
  */
 async function getAuditLogsEndpoint(req, res, next) {
   try {
     const { schoolId } = req;
-    const { action, targetType, performedBy, result, search, startDate, endDate, cursor, page, limit } = req.query;
+    const { action, targetType, performedBy, result, search, startDate, endDate, cursor, limit } = req.query;
 
-    // Validate page and limit as positive integers if provided
-    if (page && (isNaN(parseInt(page, 10)) || parseInt(page, 10) < 1)) {
-      return res.status(400).json({ error: 'page must be a positive integer', code: 'VALIDATION_ERROR' });
-    }
     if (limit && (isNaN(parseInt(limit, 10)) || parseInt(limit, 10) < 1)) {
       return res.status(400).json({ error: 'limit must be a positive integer', code: 'VALIDATION_ERROR' });
     }
@@ -37,13 +32,15 @@ async function getAuditLogsEndpoint(req, res, next) {
       search,
       startDate,
       endDate,
-      cursor: cursor || null,
-      page: page ? parseInt(page, 10) : 1,
+      cursor,
       limit: limit ? parseInt(limit, 10) : 50,
     });
 
     res.json(auditResult);
   } catch (err) {
+    if (err.code === 'INVALID_CURSOR') {
+      return res.status(400).json({ error: err.message, code: 'INVALID_CURSOR' });
+    }
     next(err);
   }
 }

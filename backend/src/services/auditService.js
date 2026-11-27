@@ -1,12 +1,19 @@
 'use strict';
 
+/**
+ * auditService — append-only audit log with HMAC hash chain.
+ */
+
 const crypto = require('crypto');
 const AuditLog = require('../models/auditLogModel');
 const logger = require('../utils/logger');
+const { paginateList, encodeListCursor, decodeListCursor, CURSOR_TTL_MS } = require('../utils/listCursor');
 
 // HMAC key for entry hashes. Falls back to JWT_SECRET so no new env var is
 // required; operators can add AUDIT_HMAC_KEY to isolate the secret.
 const HMAC_KEY = process.env.AUDIT_HMAC_KEY || process.env.JWT_SECRET || 'audit-integrity-key';
+
+const SENSITIVE_AUDIT_KEY = /secret|password|token|private.?key|authorization/i;
 
 // In-process failure counter — reset on restart
 let _auditFailureCount = 0;
@@ -22,12 +29,23 @@ function _resetAuditFailureCount() {
   _auditFailureCount = 0;
 }
 
+function sanitizeAuditValue(value) {
+  if (value == null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) return value.map(sanitizeAuditValue);
+  if (typeof value.toObject === 'function') return sanitizeAuditValue(value.toObject());
+  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+    key,
+    SENSITIVE_AUDIT_KEY.test(key) ? '[REDACTED]' : sanitizeAuditValue(nested),
+  ]));
+}
+
 /**
  * Compute a deterministic HMAC-SHA256 over the canonical fields of an entry.
  * prevHash is included so any modification to the chain is detectable.
  */
 function _computeEntryHash(fields) {
-  const canonical = JSON.stringify({
+  const canonicalFields = {
     schoolId:     fields.schoolId,
     action:       fields.action,
     performedBy:  fields.performedBy,
@@ -39,7 +57,10 @@ function _computeEntryHash(fields) {
     ipAddress:    fields.ipAddress ?? null,
     prevHash:     fields.prevHash ?? null,
     createdAt:    fields.createdAt instanceof Date ? fields.createdAt.toISOString() : fields.createdAt,
-  });
+  };
+  if (fields.before != null) canonicalFields.before = fields.before;
+  if (fields.after != null) canonicalFields.after = fields.after;
+  const canonical = JSON.stringify(canonicalFields);
   return crypto.createHmac('sha256', HMAC_KEY).update(canonical).digest('hex');
 }
 
@@ -47,12 +68,14 @@ function _computeEntryHash(fields) {
  * Fetch the most recent audit entry's entryHash for the given schoolId.
  * Used to link the new entry into the hash chain.
  */
-async function _getPrevHash(schoolId) {
-  const last = await AuditLog.findOne({ schoolId })
+async function _getPrevHash(schoolId, session = null) {
+  let query = AuditLog.findOne({ schoolId })
     .sort({ _id: -1 })
     .select('entryHash')
     .lean()
     .bypassTenantScope();
+  if (session) query = query.session(session);
+  const last = await query;
   return last ? (last.entryHash || null) : null;
 }
 
@@ -69,27 +92,36 @@ async function logAudit({
   targetType,
   details = {},
   result = 'success',
+  before = details?.before ?? null,
+  after = details?.after ?? (result === 'success' ? details : null),
   errorMessage = null,
   ipAddress = null,
   userAgent = null,
   severity = null,
+  session = null,
+  throwOnFailure = false,
 }) {
   try {
-    const prevHash = await _getPrevHash(schoolId);
+    details = sanitizeAuditValue(details);
+    before = sanitizeAuditValue(before);
+    after = sanitizeAuditValue(after);
+    const prevHash = await _getPrevHash(schoolId, session);
     const createdAt = new Date();
 
     const entryHash = _computeEntryHash({
       schoolId, action, performedBy, targetId, targetType,
-      details, result, errorMessage, ipAddress, prevHash, createdAt,
+      details, before, after, result, errorMessage, ipAddress, prevHash, createdAt,
     });
 
-    await AuditLog.create({
+    const entry = {
       schoolId,
       action,
       performedBy,
       targetId,
       targetType,
       details,
+      before,
+      after,
       result,
       errorMessage,
       ipAddress,
@@ -98,52 +130,45 @@ async function logAudit({
       prevHash,
       entryHash,
       createdAt,
-    });
+    };
+    if (session) {
+      await AuditLog.create([entry], { session });
+    } else {
+      await AuditLog.create(entry);
+    }
   } catch (err) {
     _auditFailureCount += 1;
     logger.error('AUDIT_LOG_FAILURE', { err, schoolId, action });
+    if (throwOnFailure) throw err;
   }
 }
 
 const MAX_PAGE_SIZE = 200;
 
-/**
- * Decode a cursor token or return null if invalid.
- * Cursor format: base64-encoded JSON { createdAt, _id }
- */
-function _decodeCursor(cursorToken) {
-  if (!cursorToken) return null;
-  try {
-    const json = Buffer.from(cursorToken, 'base64').toString('utf-8');
-    const obj = JSON.parse(json);
-    return obj.createdAt && obj._id ? obj : null;
-  } catch {
-    return null;
-  }
+// ── Cursor encode / decode ────────────────────────────────────────────────────
+
+function _signCursor(entry, filters) {
+  return encodeListCursor(entry, 'audit-logs', filters, 'next');
 }
 
-/**
- * Encode a cursor token from an audit log entry.
- */
-function _encodeCursor(entry) {
-  return Buffer.from(JSON.stringify({
-    createdAt: entry.createdAt,
-    _id: entry._id,
-  })).toString('base64');
+function _verifyCursor(token, filters) {
+  const payload = decodeListCursor(token, 'audit-logs', filters);
+  return { _id: payload.id, createdAt: payload.ts };
 }
 
+/** Retrieve a school-scoped page of audit logs. */
 async function getAuditLogs(filters = {}) {
   const {
     schoolId, action, targetType, performedBy, result, search,
-    startDate, endDate, cursor, page = 1, limit = 50,
+    startDate, endDate, cursor, limit = 50,
   } = filters;
 
   const baseQuery = { schoolId };
-  if (action) baseQuery.action = action;
-  if (targetType) baseQuery.targetType = targetType;
+  if (action)      baseQuery.action      = action;
+  if (targetType)  baseQuery.targetType  = targetType;
   if (performedBy) baseQuery.performedBy = performedBy;
-  if (result) baseQuery.result = result;
-  if (search) baseQuery.$text = { $search: search };
+  if (result)      baseQuery.result      = result;
+  if (search)      baseQuery.$text       = { $search: search };
   if (startDate || endDate) {
     baseQuery.createdAt = {};
     if (startDate) baseQuery.createdAt.$gte = new Date(startDate);
@@ -151,33 +176,17 @@ async function getAuditLogs(filters = {}) {
   }
 
   const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), MAX_PAGE_SIZE);
-
-  let indexHint;
-  if (search)            indexHint = 'details_text';
-  else if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
-  else if (performedBy) indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
-  else if (targetType)  indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
-  else              indexHint = { schoolId: 1, createdAt: -1 };
-
-  const [logs, total] = await Promise.all([
-    AuditLog.find(baseQuery)
-      .hint(indexHint)
-      .sort(search ? { score: { $meta: 'textScore' } } : { createdAt: -1 })
-      .skip(skip)
-      .limit(actualLimit)
-      .lean(),
-    AuditLog.countDocuments(baseQuery),
-  ]);
-
-  const nextCursor =
-    skip + logs.length < total && logs.length > 0
-      ? Buffer.from(JSON.stringify({
-          createdAt: logs[logs.length - 1].createdAt,
-          _id: logs[logs.length - 1]._id,
-        })).toString('base64')
-      : null;
-
-  return { logs, total, page: actualPage, limit: actualLimit, pages: Math.ceil(total / actualLimit) || 1, nextCursor };
+  const { items: logs, pagination } = await paginateList({
+    find: (query) => AuditLog.find(query).lean(),
+    scope: 'audit-logs',
+    filter: baseQuery,
+    cursor,
+    limit: actualLimit,
+  });
+  const cursorExpiry = pagination.nextCursor
+    ? new Date(decodeListCursor(pagination.nextCursor, 'audit-logs', baseQuery).expiresAt).toISOString()
+    : null;
+  return { logs, ...pagination, cursorExpiry };
 }
 
 async function getRecentAuditLogs(schoolId, limit = 10) {
@@ -212,6 +221,8 @@ async function verifyAuditChain(schoolId, { limit = 1000 } = {}) {
       targetId:     entry.targetId,
       targetType:   entry.targetType,
       details:      entry.details,
+      before:       entry.before,
+      after:        entry.after,
       result:       entry.result,
       errorMessage: entry.errorMessage,
       ipAddress:    entry.ipAddress,
@@ -279,16 +290,26 @@ async function exportAuditLogs(filters = {}) {
  * archiveAuditLogs — marks records older than retentionDays as archived=true.
  * Records are never deleted; archiving signals they can be exported to cold storage.
  */
-async function archiveAuditLogs(retentionDays = 730) {
+async function archiveAuditLogs(retentionDays = 90, { batchSize = 500 } = {}) {
   const expiry = new Date(Date.now() - retentionDays * 86400000);
-  const result = await AuditLog.updateMany(
-    { createdAt: { $lt: expiry }, archived: false },
-    { $set: { archived: true } },
-  ).bypassTenantScope();
-  if (result.modifiedCount > 0) {
-    logger.info('AUDIT_LOG_ARCHIVE', { archivedCount: result.modifiedCount });
+  const filter = { createdAt: { $lt: expiry }, archived: false };
+  let archivedCount = 0;
+  while (true) {
+    const entries = await AuditLog.find(filter)
+      .bypassTenantScope()
+      .select('_id')
+      .sort({ _id: 1 })
+      .limit(batchSize)
+      .lean();
+    if (!entries.length) break;
+    const result = await AuditLog.updateMany(
+      { _id: { $in: entries.map((entry) => entry._id) } },
+      { $set: { archived: true } },
+    ).bypassTenantScope();
+    archivedCount += result.modifiedCount || 0;
   }
-  return result.modifiedCount;
+  if (archivedCount > 0) logger.info('AUDIT_LOG_ARCHIVE', { archivedCount });
+  return archivedCount;
 }
 
 module.exports = {
@@ -302,5 +323,8 @@ module.exports = {
   _resetAuditFailureCount,
   // Exported for testing
   _computeEntryHash,
+  _signCursor,
+  _verifyCursor,
+  CURSOR_TTL_MS,
   MAX_EXPORT_ROWS,
 };

@@ -1,5 +1,7 @@
 'use strict';
 
+const { paginateList } = require('../utils/listCursor');
+
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const WebhookEndpoint = require('../models/webhookEndpointModel');
@@ -92,8 +94,45 @@ async function listEndpoints(req, res, next) {
     const schoolId = _callerSchoolId(req);
     if (!schoolId) return res.status(400).json({ error: 'schoolId required', code: 'MISSING_SCHOOL_ID' });
 
-    const endpoints = await WebhookEndpoint.find({ schoolId }).sort({ createdAt: -1 }).lean();
-    return res.json({ endpoints });
+    const { items: endpoints, pagination } = await paginateList({
+      find: (query) => WebhookEndpoint.find(query).select('-secret').lean(),
+      scope: 'webhook-endpoints',
+      filter: { schoolId },
+      cursor: req.query.cursor,
+      limit: Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20)),
+    });
+    const endpointIds = endpoints.map((endpoint) => endpoint._id);
+    const deliveryStats = endpointIds.length
+      ? await WebhookDelivery.aggregate([
+        { $match: { schoolId, endpointId: { $in: endpointIds }, createdAt: { $gte: new Date(Date.now() - 30 * 86400000) } } },
+        {
+          $group: {
+            _id: '$endpointId',
+            attempts: { $sum: 1 },
+            successes: { $sum: { $cond: ['$success', 1, 0] } },
+            lastDeliveryAt: { $max: '$createdAt' },
+            lastSuccessAt: { $max: { $cond: ['$success', '$createdAt', null] } },
+            lastFailureAt: { $max: { $cond: ['$success', null, '$createdAt'] } },
+          },
+        },
+      ])
+      : [];
+    const statsByEndpoint = new Map(deliveryStats.map((stats) => [String(stats._id), stats]));
+    const withHealth = endpoints.map((endpoint) => {
+      const stats = statsByEndpoint.get(String(endpoint._id));
+      return {
+        ...endpoint,
+        deliveryStats: {
+          attempts: stats?.attempts || 0,
+          successRate: stats?.attempts ? Math.round((stats.successes / stats.attempts) * 100) : null,
+          lastDeliveryAt: stats?.lastDeliveryAt || null,
+          lastSuccessAt: stats?.lastSuccessAt || endpoint.lastDeliveredAt || null,
+          lastFailureAt: stats?.lastFailureAt || endpoint.lastFailedAt || null,
+          consecutiveFailures: endpoint.consecutiveFailures || 0,
+        },
+      };
+    });
+    return res.json({ endpoints: withHealth, ...pagination });
   } catch (err) {
     next(err);
   }
@@ -198,21 +237,21 @@ async function listDeliveries(req, res, next) {
     const schoolId = _callerSchoolId(req);
     if (!schoolId) return res.status(400).json({ error: 'schoolId required', code: 'MISSING_SCHOOL_ID' });
 
-    const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-    const skip  = (page - 1) * limit;
 
     const filter = { schoolId };
     if (req.query.endpointId) filter.endpointId = req.query.endpointId;
     if (req.query.event) filter.event = req.query.event;
     if (req.query.success !== undefined) filter.success = req.query.success === 'true';
 
-    const [items, total] = await Promise.all([
-      WebhookDelivery.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      WebhookDelivery.countDocuments(filter),
-    ]);
-
-    return res.json({ total, page, limit, items });
+    const { items, pagination } = await paginateList({
+      find: (query) => WebhookDelivery.find(query).lean(),
+      scope: 'webhook-deliveries',
+      filter,
+      cursor: req.query.cursor,
+      limit,
+    });
+    return res.json({ items, ...pagination });
   } catch (err) {
     next(err);
   }

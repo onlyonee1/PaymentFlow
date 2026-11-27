@@ -1,10 +1,13 @@
 'use strict';
 
+const { paginateList } = require('../utils/listCursor');
+
 const Refund = require('../models/refundModel');
 const Payment = require('../models/paymentModel');
 const Outbox = require('../models/outboxModel');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger').child('RefundService');
+const { transition: transitionPayment } = require('./paymentTransitionService');
 const { amountsEqual } = require('../utils/stellarAmount');
 const lock = require('./distributedLock');
 
@@ -72,12 +75,12 @@ async function initiateRefund(schoolId, originalTxHash, studentId, amount, reaso
       initiatedBy,
     });
 
-    // Update payment status to REFUNDED to reflect the in-flight refund.
-    // Uses adminOverride to allow the SUCCESS → REFUNDED transition via the proper
-    // .save() path (mirroring how dispute resolution handles payment status sync).
-    payment.$locals.adminOverride = true;
-    payment.status = 'REFUNDED';
-    await payment.save();
+    await transitionPayment(payment, 'REFUNDED', {
+      adminOverride: true,
+      performedBy: initiatedBy,
+      schoolId,
+      reason: 'Refund initiated',
+    });
 
     const eventId = uuidv4();
     await Outbox.create({
@@ -267,14 +270,22 @@ async function updateRefundStatus(refundId, newStatus, txHash = null, failureRea
   }
 }
 
-async function getRefundsByPayment(schoolId, originalTxHash) {
-  return Refund.find({ schoolId, originalTxHash }).sort({ createdAt: -1 }).lean();
+function listRefunds(scope, filter, { cursor, limit } = {}) {
+  return paginateList({
+    find: (query) => Refund.find(query).lean(),
+    scope,
+    filter,
+    cursor,
+    limit: Math.min(100, Math.max(1, parseInt(limit, 10) || 50)),
+  });
 }
 
-async function getRefundsBySchool(schoolId, status = null) {
-  const query = { schoolId };
-  if (status) query.status = status;
-  return Refund.find(query).sort({ createdAt: -1 }).lean();
+function getRefundsByPayment(schoolId, originalTxHash, pagination) {
+  return listRefunds('payment-refunds', { schoolId, originalTxHash }, pagination);
+}
+
+function getRefundsBySchool(schoolId, status, pagination) {
+  return listRefunds('school-refunds', { schoolId, ...(status && { status }) }, pagination);
 }
 
 module.exports = {

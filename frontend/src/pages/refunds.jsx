@@ -4,7 +4,11 @@ import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck, IconChevronLeft, IconChevronRight } from "../components/Icons";
 import PageHero from "../components/PageHero";
 import RequireAdmin from "../components/RequireAdmin";
+import EmptyState from "../components/EmptyState";
+import ConfirmDialog, { CONFIRM_TIER } from "../components/ConfirmDialog";
 import { useTranslation } from "react-i18next";
+import { SkeletonDetailCard } from "../components/Skeleton";
+import { useAbortController } from "../hooks/useAbortController";
 
 const STATUS_META = {
   approval_pending: { cls: "badge-warning",  labelKey: "status.refund.approval_pending", color: "var(--warning)" },
@@ -25,18 +29,19 @@ function StatusBadge({ status }) {
 
 function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
   const { t } = useTranslation();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
-  const [note, setNote] = useState("");
+  const [submitting, setSubmitting]       = useState(false);
+  const [error, setError]                 = useState(null);
+  const [note, setNote]                   = useState("");
+  const [showConfirm, setShowConfirm]     = useState(false);
 
   const canApprove = refund.initiatedBy !== user?.email && refund.status === "approval_pending";
 
-  async function handleApprove(e) {
-    e.preventDefault();
+  async function handleApprove() {
     if (!canApprove) return;
 
     setError(null);
     setSubmitting(true);
+    setShowConfirm(false);
     try {
       await approveRefund(refund._id, { note });
       onApproved();
@@ -67,18 +72,33 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
   }
 
   return (
-    <form onSubmit={handleApprove} style={{
-      padding: "0.75rem",
-      border: "1px solid var(--border)",
-      borderRadius: "var(--radius-sm)",
-      background: "var(--bg-subtle)",
-    }}>
+    <>
+      <ConfirmDialog
+        open={showConfirm}
+        tier={CONFIRM_TIER.HIGH}
+        title={t("refunds.approveRefund")}
+        description={t("refunds.approveConfirmDesc", { studentId: refund.studentId, amount: refund.amount })}
+        confirmPhrase="approve refund"
+        confirmLabel={t("refunds.approveRefund")}
+        cancelLabel={t("actions.cancel")}
+        onConfirm={handleApprove}
+        onCancel={() => setShowConfirm(false)}
+        loading={submitting}
+      />
+
+      <form onSubmit={(e) => { e.preventDefault(); setShowConfirm(true); }} style={{
+        padding: "0.75rem",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        background: "var(--bg-subtle)",
+      }}>
       {error && (
         <div style={{
           marginBottom: "0.75rem",
           padding: "0.5rem 0.75rem",
-          background: "var(--danger-subtle)",
-          color: "var(--danger)",
+          background: "var(--danger-bg)",
+          color: "var(--danger-text)",
+          border: "1px solid var(--danger-border)",
           borderRadius: "var(--radius-sm)",
           fontSize: "0.8125rem",
         }}>
@@ -160,6 +180,7 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
         </button>
       </div>
     </form>
+    </>
   );
 }
 
@@ -257,11 +278,13 @@ function Refunds() {
   const [refunds, setRefunds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
+  const [cursor, setCursor] = useState(null);
+  const [pagination, setPagination] = useState({});
   const [statusFilter, setStatusFilter] = useState("approval_pending");
   const [user, setUser] = useState(null);
+
+  // Issue #254 — abort in-flight refund requests when the component unmounts.
+  const { signal } = useAbortController();
 
   const PAGE_SIZE = 10;
 
@@ -274,19 +297,22 @@ function Refunds() {
     setLoading(true);
     setError(null);
     const params = {
-      page,
+      ...(cursor && { cursor }),
       limit: PAGE_SIZE,
       ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
     };
-    getSchoolRefunds(params)
+    getSchoolRefunds(params, { signal })
       .then(({ data }) => {
         setRefunds(Array.isArray(data.refunds) ? data.refunds : []);
-        setPages(data.pages || 1);
-        setTotal(data.total || 0);
+        setPagination(data.pagination || {});
       })
-      .catch(() => setError(t("refunds.failedToLoad")))
+      .catch((err) => {
+        // Silently ignore requests cancelled on unmount or navigation.
+        if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
+        setError(t("refunds.failedToLoad"));
+      })
       .finally(() => setLoading(false));
-  }, [page, statusFilter, t]);
+  }, [cursor, statusFilter, t, signal]);
 
   useEffect(() => {
     fetchRefunds();
@@ -341,7 +367,7 @@ function Refunds() {
             key={opt.value}
             onClick={() => {
               setStatusFilter(opt.value);
-              setPage(1);
+              setCursor(null);
             }}
             style={{
               padding: "0.5rem 1rem",
@@ -373,15 +399,24 @@ function Refunds() {
       )}
 
       {loading && (
-        <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
-          {t("actions.loading")}
+        <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading..." style={{ display: "grid", gap: "1rem" }}>
+          <SkeletonDetailCard rows={3} />
+          <SkeletonDetailCard rows={3} />
+          <SkeletonDetailCard rows={3} />
         </div>
       )}
 
       {!loading && refunds.length === 0 && (
-        <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
-          {t("refunds.emptyStatus")}
-        </div>
+        <EmptyState
+          variant={statusFilter && statusFilter !== "all" ? "filtered" : "empty"}
+          title={t("refunds.emptyStatus")}
+          description={t("refunds.emptyStatusDesc")}
+          action={
+            statusFilter && statusFilter !== "all"
+              ? { label: t("refunds.clearFilter"), onClick: () => setStatusFilter("all") }
+              : undefined
+          }
+        />
       )}
 
       {!loading && refunds.length > 0 && (
@@ -397,58 +432,13 @@ function Refunds() {
             ))}
           </div>
 
-          {pages > 1 && (
-            <div style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "1.5rem",
-              paddingTop: "1rem",
-              borderTop: "1px solid var(--border)",
-            }}>
-              <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                {t("refunds.showingRange", { start: (page - 1) * PAGE_SIZE + 1, end: Math.min(page * PAGE_SIZE, total), total })}
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    border: "1px solid var(--border)",
-                    background: page === 1 ? "var(--bg-subtle)" : "var(--bg)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: page === 1 ? "not-allowed" : "pointer",
-                    opacity: page === 1 ? 0.5 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.375rem",
-                  }}
-                >
-                  <IconChevronLeft size={16} />
-                </button>
-                <span style={{ fontSize: "0.8125rem", padding: "0.5rem 0.75rem" }}>
-                  {t("refunds.pageOf", { page, total: pages })}
-                </span>
-                <button
-                  onClick={() => setPage(p => Math.min(pages, p + 1))}
-                  disabled={page === pages}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    border: "1px solid var(--border)",
-                    background: page === pages ? "var(--bg-subtle)" : "var(--bg)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: page === pages ? "not-allowed" : "pointer",
-                    opacity: page === pages ? 0.5 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.375rem",
-                  }}
-                >
-                  <IconChevronRight size={16} />
-                </button>
-              </div>
-            </div>
+          {(pagination.prevCursor || pagination.nextCursor) && (
+            <nav>
+              <button className="page-btn" disabled={loading || !pagination.prevCursor}
+                onClick={() => setCursor(pagination.prevCursor)}>{t("actions.previousPage")}</button>
+              <button className="page-btn" disabled={loading || !pagination.nextCursor}
+                onClick={() => setCursor(pagination.nextCursor)}>{t("actions.nextPage")}</button>
+            </nav>
           )}
         </>
       )}

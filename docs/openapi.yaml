@@ -1,0 +1,1142 @@
+openapi: 3.0.0
+info:
+  title: StellarEduPay API
+  version: 1.0.0
+  description: Decentralized school fee payment system built on Stellar blockchain
+  contact:
+    name: StellarEduPay Support
+    url: 'https://github.com/manuelusman73-png/StellarEduPay'
+  license:
+    name: MIT
+    url: 'https://opensource.org/licenses/MIT'
+servers:
+  - url: 'http://localhost:5000/api'
+    description: API Server
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token for admin authentication
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-School-ID
+      description: School ID passed as a header for school-scoped endpoints (alternative to slug-based routing)
+  schemas:
+    Payment:
+      type: object
+      properties:
+        _id:
+          type: string
+        schoolId:
+          type: string
+        studentId:
+          type: string
+        txHash:
+          type: string
+        amount:
+          type: number
+        feeAmount:
+          type: number
+        status:
+          type: string
+          enum:
+            - PENDING
+            - SUBMITTED
+            - SUCCESS
+            - FAILED
+            - DISPUTED
+            - INVALID
+        confirmedAt:
+          type: string
+          format: date-time
+        feeValidationStatus:
+          type: string
+          enum:
+            - valid
+            - underpaid
+            - overpaid
+            - partial
+            - unknown
+    Student:
+      type: object
+      properties:
+        _id:
+          type: string
+        schoolId:
+          type: string
+        studentId:
+          type: string
+        name:
+          type: string
+        class:
+          type: string
+        feeAmount:
+          type: number
+        contactEmail:
+          type: string
+          format: email
+    School:
+      type: object
+      properties:
+        _id:
+          type: string
+        schoolId:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        stellarAddress:
+          type: string
+        network:
+          type: string
+          enum:
+            - testnet
+            - mainnet
+        isActive:
+          type: boolean
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+security:
+  - BearerAuth: []
+paths:
+  /api/students:
+    post:
+      summary: Register a new student
+      operationId: registerStudent
+      tags:
+        - Students
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - studentId
+                - name
+                - feeAmount
+              properties:
+                studentId:
+                  type: string
+                name:
+                  type: string
+                class:
+                  type: string
+                feeAmount:
+                  type: number
+                contactEmail:
+                  type: string
+                  format: email
+      responses:
+        '201':
+          description: Student registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '409':
+          description: Student ID already exists
+    get:
+      summary: List all students (paginated)
+      operationId: getAllStudents
+      tags:
+        - Students
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated student list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  students:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Student'
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  pages:
+                    type: integer
+        '401':
+          description: Unauthorized
+  '/api/students/{studentId}':
+    get:
+      summary: Get a student by ID
+      operationId: getStudent
+      tags:
+        - Students
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Student record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Student not found
+    put:
+      summary: Update a student record
+      operationId: updateStudent
+      tags:
+        - Students
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                class:
+                  type: string
+                feeAmount:
+                  type: number
+                contactEmail:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Updated student record
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '404':
+          description: Student not found
+    delete:
+      summary: Soft-delete a student
+      operationId: deleteStudent
+      tags:
+        - Students
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Student deleted
+        '401':
+          description: Unauthorized
+        '404':
+          description: Student not found
+  '/api/students/public/{studentId}':
+    get:
+      summary: Get public student info (no auth required)
+      operationId: getPublicStudentInfo
+      tags:
+        - Students
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Public student info (no PII)
+        '404':
+          description: Student not found
+  /api/schools:
+    get:
+      summary: List all schools
+      operationId: getAllSchools
+      tags:
+        - Schools
+      responses:
+        '200':
+          description: List of schools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/School'
+    post:
+      summary: Create a new school
+      operationId: createSchool
+      tags:
+        - Schools
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - stellarAddress
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                stellarAddress:
+                  type: string
+                network:
+                  type: string
+                  enum:
+                    - testnet
+                    - mainnet
+      responses:
+        '201':
+          description: School created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/School'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '409':
+          description: School slug already exists
+  '/api/schools/{schoolId}':
+    get:
+      summary: Get a school by ID
+      operationId: getSchool
+      tags:
+        - Schools
+      parameters:
+        - in: path
+          name: schoolId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: School record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/School'
+        '404':
+          description: School not found
+    patch:
+      summary: Update a school
+      operationId: updateSchool
+      tags:
+        - Schools
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: schoolId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                webhookUrl:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Updated school record
+        '401':
+          description: Unauthorized
+        '404':
+          description: School not found
+    delete:
+      summary: Deactivate a school
+      operationId: deactivateSchool
+      tags:
+        - Schools
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: schoolId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: School deactivated
+        '401':
+          description: Unauthorized
+        '404':
+          description: School not found
+  '/api/schools/{schoolId}/settings':
+    get:
+      summary: Get per-school settings overrides
+      operationId: getSchoolSettings
+      tags:
+        - Schools
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: schoolId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: School settings
+        '401':
+          description: Unauthorized
+        '404':
+          description: School not found
+    patch:
+      summary: Update per-school settings overrides
+      operationId: updateSchoolSettings
+      tags:
+        - Schools
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: schoolId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Settings updated
+        '401':
+          description: Unauthorized
+  /api/reports/dashboard:
+    get:
+      summary: Get payment dashboard metrics
+      operationId: getDashboard
+      tags:
+        - Reports
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Dashboard metrics
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden — finance role required
+  /api/reports:
+    get:
+      summary: 'Generate a payment report (synchronous for short ranges, async for >30 days)'
+      operationId: getReport
+      tags:
+        - Reports
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: startDate
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: endDate
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum:
+              - json
+              - csv
+            default: json
+      responses:
+        '200':
+          description: Report data or async job reference
+        '400':
+          description: Invalid date range
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+  '/api/reports/jobs/{jobId}':
+    get:
+      summary: Check status of an async report job
+      operationId: getReportJob
+      tags:
+        - Reports
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Report job status
+        '401':
+          description: Unauthorized
+        '404':
+          description: Job not found
+  '/api/reports/jobs/{jobId}/download':
+    get:
+      summary: Download completed async report
+      operationId: downloadReportJob
+      tags:
+        - Reports
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Report file (CSV or JSON)
+        '401':
+          description: Unauthorized
+        '404':
+          description: Job not found or not complete
+  '/api/payments/instructions/{studentId}':
+    get:
+      summary: Get payment instructions for a student
+      operationId: getPaymentInstructions
+      tags:
+        - Payments
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema:
+            type: string
+          description: Student ID
+        - in: query
+          name: feeCategory
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+            pattern: '^[A-Za-z0-9_-]+$'
+          description: Restrict the instructions to a single fee category
+      responses:
+        '200':
+          description: Payment instructions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  walletAddress:
+                    type: string
+                  memo:
+                    type: string
+                  acceptedAssets:
+                    type: array
+        '400':
+          description: VALIDATION_ERROR - feeCategory is malformed
+        '404':
+          description: Student not found
+  /api/payments/verify:
+    post:
+      summary: Verify a payment transaction
+      operationId: verifyPayment
+      tags:
+        - Payments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                txHash:
+                  type: string
+                  description: Stellar transaction hash
+      responses:
+        '200':
+          description: Payment verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          description: Invalid transaction
+  /api/payments/sync:
+    post:
+      summary: Sync payments from Stellar blockchain
+      operationId: syncAllPayments
+      tags:
+        - Payments
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Sync completed
+        '401':
+          description: Unauthorized
+  /api/fees:
+    post:
+      summary: Create a fee structure
+      operationId: createFeeStructure
+      tags:
+        - Fees
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - className
+                - amount
+              properties:
+                className:
+                  type: string
+                amount:
+                  type: number
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Fee structure created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+    get:
+      summary: List all fee structures for the school
+      operationId: getAllFeeStructures
+      tags:
+        - Fees
+      parameters:
+        - in: query
+          name: includeDeleted
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of fee structures
+        '401':
+          description: Unauthorized (required when includeDeleted=true)
+  '/api/fees/{className}':
+    get:
+      summary: Get fee structure for a specific class
+      operationId: getFeeByClass
+      tags:
+        - Fees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: className
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Fee structure
+        '401':
+          description: Unauthorized
+        '404':
+          description: Fee structure not found
+    put:
+      summary: Update fee structure for a class
+      operationId: updateFeeStructure
+      tags:
+        - Fees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: className
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Updated fee structure
+        '401':
+          description: Unauthorized
+        '404':
+          description: Fee structure not found
+    delete:
+      summary: Delete (soft-delete) a fee structure
+      operationId: deleteFeeStructure
+      tags:
+        - Fees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: className
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Fee structure deleted
+        '401':
+          description: Unauthorized
+        '404':
+          description: Fee structure not found
+  /api/disputes:
+    post:
+      summary: Raise a payment dispute
+      operationId: flagDispute
+      tags:
+        - Disputes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - txHash
+                - reason
+              properties:
+                txHash:
+                  type: string
+                reason:
+                  type: string
+                evidence:
+                  type: string
+      responses:
+        '201':
+          description: Dispute raised
+        '400':
+          description: Validation error
+        '404':
+          description: Transaction not found
+    get:
+      summary: List disputes (paginated)
+      operationId: getDisputes
+      tags:
+        - Disputes
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum:
+              - open
+              - resolved
+              - dismissed
+      responses:
+        '200':
+          description: Paginated dispute list
+  '/api/disputes/{id}':
+    get:
+      summary: Get a dispute by ID
+      operationId: getDisputeById
+      tags:
+        - Disputes
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dispute record
+        '404':
+          description: Dispute not found
+  '/api/disputes/{id}/resolve':
+    patch:
+      summary: Resolve a dispute (admin only)
+      operationId: resolveDispute
+      tags:
+        - Disputes
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - resolution
+              properties:
+                resolution:
+                  type: string
+                  enum:
+                    - approved
+                    - dismissed
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Dispute resolved
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '404':
+          description: Dispute not found
+  /api/auth/login:
+    post:
+      summary: Authenticate and obtain a JWT
+      operationId: login
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      role:
+                        type: string
+                      schoolId:
+                        type: string
+        '400':
+          description: Missing username or password
+        '401':
+          description: Invalid credentials
+        '429':
+          description: Too many login attempts
+  /api/auth/refresh:
+    post:
+      summary: Refresh an access token using a refresh token cookie
+      operationId: refreshToken
+      tags:
+        - Auth
+      responses:
+        '200':
+          description: New access token issued
+        '401':
+          description: Invalid or expired refresh token
+  /api/auth/logout:
+    post:
+      summary: Invalidate the current session and clear refresh token cookie
+      operationId: logout
+      tags:
+        - Auth
+      responses:
+        '200':
+          description: Logged out successfully
+  /api/auth/me:
+    get:
+      summary: Get the currently authenticated user's profile
+      operationId: getMe
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user profile
+        '401':
+          description: Unauthorized
+  /api/auth/change-password:
+    post:
+      summary: Change the authenticated user's password (invalidates all sessions)
+      operationId: changePassword
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  format: password
+                newPassword:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Password changed; all sessions invalidated
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized or wrong current password
+  /api/auth/sessions:
+    get:
+      summary: List all active sessions for the authenticated admin
+      operationId: listSessions
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of active sessions
+        '401':
+          description: Unauthorized
+  '/api/auth/sessions/{sessionId}':
+    delete:
+      summary: Revoke a specific session by ID
+      operationId: revokeSession
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session revoked
+        '401':
+          description: Unauthorized
+        '404':
+          description: Session not found
+  /api/auth/mfa/setup:
+    post:
+      summary: Set up TOTP MFA for the admin account
+      operationId: setupMfa
+      tags:
+        - Auth
+        - MFA
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: MFA setup initiated — returns TOTP secret and QR code URI
+        '401':
+          description: Unauthorized
+  /api/auth/mfa/verify:
+    post:
+      summary: Verify TOTP token and enable MFA
+      operationId: verifyAndEnableMfa
+      tags:
+        - Auth
+        - MFA
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+              properties:
+                token:
+                  type: string
+                  description: 6-digit TOTP code
+      responses:
+        '200':
+          description: MFA enabled
+        '400':
+          description: Invalid token
+        '401':
+          description: Unauthorized
+  /api/audit:
+    get:
+      summary: 'List audit log entries (paginated, filterable)'
+      operationId: getAuditLogs
+      tags:
+        - Audit
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+        - in: query
+          name: startDate
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: endDate
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: action
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated audit log entries
+        '401':
+          description: Unauthorized
+  /api/audit/recent:
+    get:
+      summary: Get the most recent audit log entries
+      operationId: getRecentAuditLogs
+      tags:
+        - Audit
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Recent audit log entries
+        '401':
+          description: Unauthorized
+  /api/audit/export:
+    get:
+      summary: Export audit logs as CSV or JSON
+      operationId: exportAuditLogs
+      tags:
+        - Audit
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum:
+              - json
+              - csv
+            default: json
+      responses:
+        '200':
+          description: Exported audit log file
+        '401':
+          description: Unauthorized
+  /api/audit/verify-chain:
+    get:
+      summary: Verify audit log hash-chain integrity
+      operationId: verifyAuditChain
+      tags:
+        - Audit
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Chain integrity verified
+        '401':
+          description: Unauthorized
+        '422':
+          description: Chain integrity violation detected
+tags: []

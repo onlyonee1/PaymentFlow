@@ -1,38 +1,75 @@
 'use strict';
 
-/**
- * sanitizeRequest middleware — Issue #826
- *
- * Two protections:
- *  1. JSON depth / array-length bomb guard  (applied after express.json parses the body)
- *  2. Query-parameter de-pollution — duplicated scalar params (arrays) are
- *     collapsed to their last value; arrays are disallowed on scalar fields.
- */
+const sanitizeHtml = require('sanitize-html');
+
+const FORMATTING_TAGS = new Set(['b', 'br', 'em', 'i', 'p', 'strong', 'u']);
+const MARKUP = /<(?:\/?[a-z]|!|\?)/i;
+
+function sanitizeBody(req, res, next) {
+  let rejected = false;
+
+  function clean(value) {
+    if (value && typeof value === 'object') {
+      for (const key of Object.keys(value)) {
+        value[key] = clean(value[key]);
+      }
+      return value;
+    }
+    if (typeof value !== 'string' || !MARKUP.test(value)) return value;
+
+    return sanitizeHtml(value, {
+      allowedTags: [],
+      allowedAttributes: {},
+      transformTags: {
+        '*': (tagName, attribs) => {
+          if (!FORMATTING_TAGS.has(tagName) || Object.keys(attribs).length) rejected = true;
+          return { tagName, attribs };
+        },
+      },
+    });
+  }
+
+  req.body = clean(req.body);
+  if (rejected) {
+    return res.status(400).json({
+      code: 'INVALID_BODY_MARKUP',
+      errors: [{ field: 'body', message: 'Request body contains disallowed HTML markup' }],
+    });
+  }
+  return next();
+}
 
 const MAX_DEPTH        = parseInt(process.env.JSON_MAX_DEPTH         || '10', 10);
 const MAX_ARRAY_LENGTH = parseInt(process.env.JSON_MAX_ARRAY_LENGTH  || '100', 10);
 
 // ── Depth / array-length checker ──────────────────────────────────────────────
 
-function checkDepth(value, currentDepth) {
-  if (currentDepth > MAX_DEPTH) return false;
+function collectComplexityErrors(value, currentDepth, path, errors) {
+  if (currentDepth > MAX_DEPTH) {
+    errors.push({ field: path || 'body', message: `must not exceed ${MAX_DEPTH} levels of nesting` });
+    return;
+  }
   if (Array.isArray(value)) {
-    if (value.length > MAX_ARRAY_LENGTH) return false;
-    return value.every((v) => checkDepth(v, currentDepth + 1));
+    if (value.length > MAX_ARRAY_LENGTH) {
+      errors.push({ field: path || 'body', message: `must not contain more than ${MAX_ARRAY_LENGTH} items` });
+      return;
+    }
+    value.forEach((item, index) => collectComplexityErrors(item, currentDepth + 1, `${path}[${index}]`, errors));
+    return;
   }
   if (value !== null && typeof value === 'object') {
-    return Object.values(value).every((v) => checkDepth(v, currentDepth + 1));
+    for (const [key, child] of Object.entries(value)) {
+      collectComplexityErrors(child, currentDepth + 1, path ? `${path}.${key}` : key, errors);
+    }
   }
-  return true;
 }
 
 function jsonDepthGuard(req, res, next) {
   if (req.body && typeof req.body === 'object') {
-    if (!checkDepth(req.body, 1)) {
-      return res.status(400).json({
-        error: 'Request body exceeds maximum allowed depth or array length.',
-        code: 'PAYLOAD_TOO_COMPLEX',
-      });
+    const errors = [];
+    collectComplexityErrors(req.body, 1, '', errors);
+    if (errors.length) {
+      return res.status(400).json({ errors, code: 'PAYLOAD_TOO_COMPLEX' });
     }
   }
   return next();
@@ -53,4 +90,4 @@ function deduplicateQueryParams(req, res, next) {
   return next();
 }
 
-module.exports = { jsonDepthGuard, deduplicateQueryParams };
+module.exports = { jsonDepthGuard, sanitizeBody, deduplicateQueryParams };

@@ -77,21 +77,40 @@ HTTP 400
 
 ## Request Body Size Limits
 
-To protect against oversized payload attacks, the API enforces JSON body size limits:
+To protect against oversized payload attacks, the API enforces these request body limits:
 
 | Endpoint | Limit |
 |----------|-------|
-| All endpoints (default) | `10kb` (configurable via `MAX_BODY_SIZE` env var) |
-| `POST /api/students/bulk` | `1mb` |
+| JSON and URL-encoded requests | `100kb` ceiling |
+| Multipart CSV imports | `5mb` per uploaded CSV file |
 
 Requests that exceed the applicable limit are rejected before reaching any handler:
 
 ```json
 HTTP 413
-{ "error": "request entity too large" }
+{ "errors": [{ "field": "body", "message": "Request body exceeds the configured size limit" }], "code": "PAYLOAD_TOO_LARGE" }
 ```
 
-The global limit can be tuned via the `MAX_BODY_SIZE` environment variable (e.g. `MAX_BODY_SIZE=50kb`). The bulk import override is fixed at `1mb` regardless of `MAX_BODY_SIZE`.
+Set `MAX_BODY_SIZE` to lower the JSON and URL-encoded limit. Multipart CSV imports use a separate streaming file-size limit. The API strips harmless markup from parsed text fields and rejects disallowed markup with HTTP 400 before storage.
+
+## Cursor Pagination
+
+The paginated payment, student, audit-log and webhook lists accept `limit` and `cursor`. Omit `cursor` for the first page. Send either `nextCursor` or `prevCursor` as `cursor` with the same filters to navigate. `hasMore` indicates another page in the forward direction. The lists omit total record counts.
+
+Payment and student lists return pagination metadata in `pagination`. Audit and webhook lists return the same fields alongside the records.
+
+```json
+{
+  "pagination": {
+    "limit": 50,
+    "nextCursor": "<opaque token>",
+    "prevCursor": null,
+    "hasMore": true
+  }
+}
+```
+
+Cursors are signed with a key derived from `JWT_SECRET`, expire after one hour, and are scoped to the tenant, endpoint and filters. Malformed, expired, tampered and out-of-scope cursors return HTTP 400 with code `INVALID_CURSOR`. Numeric page and offset parameters no longer select a position.
 
 ---
 
@@ -247,6 +266,7 @@ X-School-ID: SCH-3F2A
 |---|---|---|---|
 | `page` | number | `1` | Page number |
 | `limit` | number | `50` | Results per page (max 200) |
+| `cursor` | string | — | Cursor from the previous response |
 | `class` | string | — | Filter by exact class name (e.g. `Grade 5A`) |
 | `status` | string | — | Filter by payment status: `paid`, `unpaid`, or `partial` |
 | `search` | string | — | Case-insensitive match on `name` or `studentId` |
@@ -257,7 +277,7 @@ Filters can be combined (e.g. `?class=Grade+5A&status=unpaid&search=ali`).
 ```json
 {
   "students": [{ "studentId": "STU001", "name": "Alice Johnson", "class": "Grade 5A", "feeAmount": 250, "feePaid": true }],
-  "total": 1, "page": 1, "limit": 50
+  "pagination": { "limit": 50, "nextCursor": null, "hasPreviousPage": false, "hasNextPage": false }
 }
 ```
 
@@ -585,10 +605,10 @@ Promotes `pending_confirmation` payments to `confirmed` once the ledger threshol
 
 ### Get all payments
 ```
-GET /api/payments
+GET /api/payments?limit=50
 X-School-ID: SCH-3F2A
 ```
-**Response `200`** — array of payment objects for the school.
+Use `cursor=<nextCursor>` from the preceding response to continue. **Response `200`** includes `payments` and cursor metadata without a total count.
 
 ### Get payment summary
 ```
@@ -1094,6 +1114,7 @@ Returns a paginated list of audit log entries for the school.
 |---|---|---|
 | `page` | number | Page number (default: `1`) |
 | `limit` | number | Results per page (default: `50`, max `200`) |
+| `cursor` | string | Opaque cursor from the previous response |
 | `action` | string | Filter by action type (e.g. `payment.verified`, `student.created`) |
 
 **Response `200`**
@@ -1102,7 +1123,10 @@ Returns a paginated list of audit log entries for the school.
   "logs": [
     { "_id": "...", "schoolId": "SCH-3F2A", "action": "payment.verified", "actor": "admin", "meta": {}, "createdAt": "2026-03-24T10:00:00.000Z" }
   ],
-  "total": 1, "page": 1, "limit": 50
+  "limit": 50,
+  "nextCursor": null,
+  "hasPreviousPage": false,
+  "hasNextPage": false
 }
 ```
 
@@ -1112,6 +1136,7 @@ GET /api/audit-logs/recent
 Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
+
 **Query parameters**
 
 | Parameter | Type | Description |
@@ -1119,6 +1144,18 @@ X-School-ID: SCH-3F2A
 | `limit` | number | Number of entries to return (default: `10`) |
 
 **Response `200`** — array of the most recent audit log entries.
+
+## Data Retention
+
+All endpoints require administrator authentication.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/admin/retention/preview` | Dry-run report of eligible records by category |
+| `POST /api/admin/retention/run` | Run a dry run or explicitly execute retention |
+| `GET /api/admin/retention/certificates?limit=50` | List recent immutable deletion certificates |
+
+`POST /api/admin/retention/run` accepts `{ "dryRun": true, "scopes": ["studentPii"] }`. `dryRun` defaults to `true`; set it to `false` only after reviewing the preview. Student PII is scrubbed after `STUDENT_PII_RETENTION_DAYS` (default 2555 days) following graduation, with soft-deleted legacy students measured from `deletedAt`. Payment memos are redacted after `PAYMENT_MEMO_RETENTION_DAYS` (default 1825 days), while payment history is retained. Audit logs are archived after `AUDIT_LOG_RETENTION_DAYS` (default 90 days) rather than deleted, preserving their hash chain.
 
 ---
 
@@ -1619,3 +1656,16 @@ Authorization: Bearer <token>
 | `401` | `MISSING_AUTH_TOKEN` | No Bearer token provided |
 | `401` | `INVALID_AUTH_TOKEN` | Token is invalid or expired |
 | `403` | `INSUFFICIENT_ROLE` | Token does not carry `role: admin` |
+
+### Payment summary date grouping
+
+`GET /api/reports?groupBy=confirmedAt` groups successful payments by their
+confirmation date in the school timezone. Pending and successful payments
+without a confirmation timestamp are shown under **Pending Confirmation**
+(`bucket: "__unconfirmed"` in JSON). Date filters use the creation date for
+that bucket. Its amounts and counts are excluded from the collected totals.
+CSV exports use the same label in the daily breakdown.
+
+`groupBy=createdAt` groups successful payments by creation date. Omitting
+`groupBy` preserves the existing successful-payment report and its date
+filters. Both options work for JSON and summary CSV, including queued reports.

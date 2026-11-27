@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { shutdownTracing } = require('./tracing/bootstrap');
 const config = require('./config');
 const express = require('express');
 const cors = require('cors');
@@ -21,6 +22,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const orphanedPaymentRoutes = require('./routes/orphanedPaymentRoutes');
 const feeRoutes = require('./routes/feeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
@@ -39,35 +41,39 @@ const webhookEndpointRoutes = require('./routes/webhookEndpointRoutes');
 const webhookDeliveryRoutes = require('./routes/webhookDeliveryRoutes');
 const paymentPlanRoutes = require('./routes/paymentPlanRoutes');
 const auditRoutes = require('./routes/auditRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const cspReportRoutes = require('./routes/cspReportRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
+const { registerNotificationSubscribers } = require('./services/notificationCreationSubscriber');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
 const retrySelector = require('./services/retryServiceSelector');
 const { startConsistencyScheduler, stopConsistencyScheduler } = require('./services/consistencyScheduler');
 const { startReminderScheduler, stopReminderScheduler } = require('./services/reminderService');
-const { startPiiAnonymizationScheduler, stopPiiAnonymizationScheduler } = require('./services/piiAnonymizationScheduler');
 const { startWorker: startTxQueueWorker, stopWorker: stopTxQueueWorker } = require('./services/transactionQueueService');
 const { startSessionCleanupScheduler, stopSessionCleanupScheduler } = require('./services/sessionCleanupService');
 const { startReconciliationScheduler, stopReconciliationScheduler } = require('./services/reconciliationService');
 const { startStuckPaymentReconciliationScheduler, stopStuckPaymentReconciliationScheduler } = require('./services/stuckPaymentReconciliation');
-const { startAuditLogCleanupScheduler, stopAuditLogCleanupScheduler } = require('./services/auditLogCleanupService');
+const { startRetentionScheduler, stopRetentionScheduler } = require('./services/retentionQueueService');
 const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./services/metricsRollupService');
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
+const { startWorker: startStudentImportWorker } = require('./services/studentImportQueueService');
 const { close: closeReportCacheInvalidator } = require('./services/reportCacheInvalidator');
 const { closeQueue } = require('./queue/transactionQueue');
 const bullMQRetryService = require('./services/bullMQRetryService');
 const { initializeRetryQueue, setupMonitoring } = require('./config/retryQueueSetup');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
+const { correlationIdMiddleware } = require('./middleware/correlationId');
 const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRequestHandler');
 const { requireAdminAuth } = require('./middleware/auth');
-const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
+const { jsonDepthGuard, sanitizeBody, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
 const { healthCheck, healthLive, healthReady } = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
@@ -89,9 +95,9 @@ try {
 
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-const { parseAllowedOrigins } = require('./utils/corsOrigins');
+const { createOriginPolicy } = require('./utils/corsOrigins');
 
-const allowedOrigins = parseAllowedOrigins();
+const originPolicy = createOriginPolicy();
 
 const app = express();
 
@@ -103,13 +109,33 @@ const app = express();
 // (see config/index.js) instead of silently becoming NaN here.
 app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
+// Correlation ID must be resolved before requestLogger so the logger uses the
+// same ID that will be reflected in the response header.
+app.use(correlationIdMiddleware);
+app.use((req, res, next) => {
+  const json = res.json;
+  res.json = function sendJson(body) {
+    if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+      return json.call(this, { ...body, requestId: req.requestId });
+    }
+    return json.call(this, body);
+  };
+  next();
+});
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use((req, res, next) => {
+  res.vary('Origin');
+  next();
+});
 app.use(cors({
-  origin: allowedOrigins,
+  origin: originPolicy,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID', 'traceparent', 'tracestate'],
+  exposedHeaders: ['X-Correlation-ID'],
   credentials: true,
+  maxAge: 86400,
 }));
+app.options('*', (_req, res) => res.sendStatus(204));
 app.use(cookieParser());
 // The backend serves only JSON API responses — no HTML, scripts, or styles.
 // CSP directives for HTML content (scriptSrc, styleSrc, imgSrc, etc.) are
@@ -132,15 +158,20 @@ app.use(express.json({
     req.rawBody = buf.toString('utf8');
   },
 }));
+const API_VERSION = process.env.API_VERSION || '1.0.0';
+app.use((req, res, next) => {
+  res.setHeader('X-API-Version', API_VERSION);
+  next();
+});
 app.use(requestLogger());
 
 // ── Cache-Control: no-store on auth and sensitive data routes ─────────────────
 // Prevents intermediaries (CDNs, shared proxies) from caching tokens,
 // payment data, audit logs, and other sensitive JSON responses.
-const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)\b/;
+const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)(?:\/|$)/i;
 app.use((req, res, next) => {
   if (SENSITIVE_PATH_RE.test(req.path)) {
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Pragma', 'no-cache');
   }
   next();
@@ -148,6 +179,7 @@ app.use((req, res, next) => {
 
 // ── JSON depth / array-bomb guard + query-param de-pollution ──────────────────
 app.use(jsonDepthGuard);
+app.use(sanitizeBody);
 app.use(deduplicateQueryParams);
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({
@@ -172,30 +204,57 @@ app.use(maintenanceMode);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
 app.use('/api/students', studentRoutes);
+app.use('/api/payments/orphaned', orphanedPaymentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
+app.use('/api/parent-pay', require('./routes/parentPaymentRoutes'));
 app.use('/api/reports', reportRoutes);
+app.get('/unsubscribe', require('./controllers/reminderController').unsubscribeViaToken);
 app.use('/api/reminders', reminderRoutes);
 app.use('/api/disputes', disputeRoutes);
+app.use('/api/sse', require('./routes/sse'));
 app.use('/api/source-rules', sourceValidationRuleRoutes);
 app.use('/api/receipts', receiptsRoutes);
 app.use('/api/fee-adjustments', feeAdjustmentRoutes);
 app.use('/api/email-deliveries', emailDeliveryRoutes);
 app.use('/api/email-provider-webhook', emailProviderWebhookRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/emergency', require('./routes/emergencyRoutes'));
 app.use('/api/auth', authRoutes);
 app.use('/api/webhook-endpoints', webhookEndpointRoutes);
 app.use('/api/webhook-deliveries', webhookDeliveryRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/superadmin', superAdminRoutes);
-app.use('/api/csp-report', cspReportRoutes);
+app.use('/api/csp-report', express.json({
+  type: ['application/csp-report', 'application/json'],
+  limit: config.MAX_BODY_SIZE,
+}), cspReportRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);
 app.get('/health/ready', healthReady);
+app.get('/worker/health', (req, res) => {
+  const { checkLiveness } = require('./services/workerHeartbeat');
+  const liveness = checkLiveness();
+  const now = Date.now();
+  const staleLimitMs = parseInt(process.env.WORKER_HEALTH_STALE_MS || '60000', 10);
+  const staleWorkers = Object.entries(liveness.workers).filter(([, worker]) => {
+    if (worker.lastBeatMs == null) return true;
+    return now - worker.lastBeatMs > staleLimitMs;
+  });
+  const healthy = staleWorkers.length === 0;
+  return res.status(healthy ? 200 : 503).json({
+    status: healthy ? 'healthy' : 'unhealthy',
+    timestamp: new Date().toISOString(),
+    staleLimitMs,
+    staleWorkers: staleWorkers.map(([name]) => name),
+    workers: liveness.workers,
+  });
+});
 
 // Issue #671: OpenAPI/Swagger documentation
 try {
@@ -244,6 +303,8 @@ connectDatabase().then(async () => {
     logger.error('[Startup] Failed to resolve signer master key from SIGNER_KEY_SOURCE', { error: err.message });
     throw err;
   }
+
+  await require('./services/providers/registry').initializePaymentProviders();
 
   // Start heap monitoring to detect memory leaks early
   startHeapMonitoring();
@@ -294,26 +355,30 @@ connectDatabase().then(async () => {
     logger.info('[Leader] Starting leader-only schedulers');
     startConsistencyScheduler();
     startReminderScheduler();
-    startPiiAnonymizationScheduler();
     startSessionCleanupScheduler();
     startReconciliationScheduler();
     startStuckPaymentReconciliationScheduler();
-    startAuditLogCleanupScheduler();
+    startRetentionScheduler();
     startWebhookRetryScheduler();
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
     startJobRecoveryScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').startSignerRotationWorker();
+    }
   };
 
   const stopLeaderSchedulers = () => {
     logger.info('[Leader] Stopping leader-only schedulers');
     stopConsistencyScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').stopSignerRotationWorker();
+    }
     stopReminderScheduler();
-    stopPiiAnonymizationScheduler();
     stopSessionCleanupScheduler();
     stopReconciliationScheduler();
     stopStuckPaymentReconciliationScheduler();
-    stopAuditLogCleanupScheduler();
+    stopRetentionScheduler().catch((err) => logger.error('Retention scheduler shutdown failed', { error: err.message }));
     stopWebhookRetryScheduler();
     stopReconciliationReportScheduler();
     stopMetricsRollupScheduler();
@@ -330,6 +395,7 @@ connectDatabase().then(async () => {
    registerPaymentSavedSubscribers();
    startOutboxDispatcher();
    startReportQueueWorker();
+  startStudentImportWorker();
 
   // Only initialise BullMQ when Redis is configured
   if (retrySelector.useBullMQ()) {
@@ -370,12 +436,20 @@ const PORT = config.PORT;
 const server = require.main === module
   ? app.listen(PORT, () => logger.info(`Server running on port ${PORT}`))
   : { close: (cb) => cb && cb() };
+const workerHealthServer = require.main === module
+  ? require('./workerHealthServer')
+      .createWorkerHealthServer()
+      .listen(parseInt(process.env.WORKER_HEALTH_PORT || '9090', 10), () => {
+        logger.info(`Worker health server running on port ${process.env.WORKER_HEALTH_PORT || '9090'}`);
+      })
+  : null;
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 const {
   setReady,
   isReady,
   isShutdownInProgress,
+  markShutdownStarted,
   drainWorkers,
   notifySSEClients,
   closeQueues,
@@ -388,6 +462,7 @@ async function shutdown(signal) {
     return;
   }
 
+  markShutdownStarted();
   logger.info(`Received ${signal} signal — starting graceful shutdown`);
 
   setReady(false);
@@ -395,30 +470,62 @@ async function shutdown(signal) {
   const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 30_000;
 
   const forceExitTimer = setTimeout(() => {
-    logger.error(`Forced exit after ${SHUTDOWN_TIMEOUT_MS}ms shutdown timeout`);
+    logger.error('Forced exit: shutdown deadline exceeded', {
+      reason: 'shutdown_timeout',
+      signal,
+      shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
+      elapsedMs: Date.now() - shutdownStartTime,
+    });
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   forceExitTimer.unref();
 
+  async function runStep(stepName, fn) {
+    const t0 = Date.now();
+    logger.info(`Shutdown step starting: ${stepName}`);
+    try {
+      await fn();
+      const durationMs = Date.now() - t0;
+      logger.info(`Shutdown step completed: ${stepName}`, { step: stepName, durationMs });
+    } catch (err) {
+      const durationMs = Date.now() - t0;
+      logger.error(`Shutdown step failed: ${stepName}`, { step: stepName, durationMs, error: err.message });
+    }
+  }
+
   try {
-    await stopAcceptingNewWork();
-    await drainWorkers();
-    await notifySSEClients();
-    await closeQueues();
+    await runStep('stopAcceptingNewWork', stopAcceptingNewWork);
+    await runStep('drainWorkers', drainWorkers);
+    await runStep('notifySSEClients', notifySSEClients);
+    await runStep('closeQueues', closeQueues);
   } catch (err) {
-    logger.error('Error during shutdown', { error: err.message });
+    logger.error('Error during shutdown steps', { error: err.message });
   }
 
   // (1) Stop accepting new connections; (2) wait for in-flight requests to finish;
   // (3) only then close the database connection.
+  const serverCloseStart = Date.now();
   server.close(async () => {
+    const serverDrainDurationMs = Date.now() - serverCloseStart;
+    logger.info('HTTP server drained in-flight requests and closed', { durationMs: serverDrainDurationMs });
+    const mongoCloseStart = Date.now();
+    if (workerHealthServer) {
+      workerHealthServer.close();
+    }
     try {
       await mongoose.disconnect();
-      logger.info('MongoDB disconnected — clean exit');
+      const mongoDurationMs = Date.now() - mongoCloseStart;
+      const totalShutdownDurationMs = Date.now() - shutdownStartTime;
+      logger.info('MongoDB disconnected — clean graceful shutdown completed', {
+        mongoDurationMs,
+        totalShutdownDurationMs,
+      });
+      await runStep('shutdownTracing', shutdownTracing);
       clearTimeout(forceExitTimer);
       process.exit(0);
     } catch (err) {
-      logger.error('Error closing MongoDB', { error: err.message });
+      const mongoDurationMs = Date.now() - mongoCloseStart;
+      logger.error('Error closing MongoDB', { error: err.message, mongoDurationMs });
       clearTimeout(forceExitTimer);
       process.exit(1);
     }

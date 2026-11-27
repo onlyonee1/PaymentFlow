@@ -1,0 +1,156 @@
+name: Deploy PaymentRegistry Contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/payment-registry/**'
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network (testnet or mainnet)'
+        required: true
+        default: testnet
+        type: choice
+        options:
+          - testnet
+          - mainnet
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SOROBAN_CLI_VERSION: '21.0.0'
+  RUST_TOOLCHAIN: 'stable'
+
+jobs:
+  build-contract:
+    name: Build Wasm
+    runs-on: ubuntu-latest
+    outputs:
+      wasm_hash: ${{ steps.hash.outputs.wasm_hash }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/payment-registry/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/payment-registry/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Wasm
+        working-directory: contracts/payment-registry
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Install Soroban CLI
+        run: |
+          cargo install soroban-cli --version ${{ env.SOROBAN_CLI_VERSION }} --locked
+
+      - name: Optimise Wasm
+        working-directory: contracts/payment-registry
+        run: |
+          soroban contract optimize \
+            --wasm target/wasm32-unknown-unknown/release/payment_registry.wasm \
+            --wasm-out payment_registry.optimized.wasm
+
+      - name: Compute Wasm hash
+        id: hash
+        working-directory: contracts/payment-registry
+        run: |
+          HASH=$(sha256sum payment_registry.optimized.wasm | awk '{print $1}')
+          echo "wasm_hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Wasm hash: $HASH"
+
+      - name: Upload optimised Wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: payment-registry-wasm
+          path: contracts/payment-registry/payment_registry.optimized.wasm
+          retention-days: 30
+
+  deploy-testnet:
+    name: Deploy to Testnet
+    needs: build-contract
+    runs-on: ubuntu-latest
+    if: >
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.network == 'testnet')
+    environment: testnet
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Soroban CLI
+        run: cargo install soroban-cli --version ${{ env.SOROBAN_CLI_VERSION }} --locked
+
+      - name: Download Wasm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: payment-registry-wasm
+
+      - name: Deploy contract to Testnet
+        id: deploy
+        env:
+          SOROBAN_SECRET_KEY: ${{ secrets.TESTNET_DEPLOY_SECRET_KEY }}
+        run: |
+          CONTRACT_ID=$(soroban contract deploy \
+            --network testnet \
+            --source "$SOROBAN_SECRET_KEY" \
+            --wasm payment_registry.optimized.wasm)
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+          echo "Deployed contract ID: $CONTRACT_ID"
+
+      - name: Update DEPLOYED.md
+        env:
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          WASM_HASH: ${{ needs.build-contract.outputs.wasm_hash }}
+          LEDGER: ${{ github.run_number }}
+        run: |
+          sed -i "s|CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX (pending CI deploy)|$CONTRACT_ID|g" contracts/payment-registry/DEPLOYED.md
+          sed -i "s|0000000000000000000000000000000000000000000000000000000000000000 (pending)|$WASM_HASH|g" contracts/payment-registry/DEPLOYED.md
+          sed -i "s|(pending — governance multisig)|${{ secrets.TESTNET_ADMIN_ADDRESS }}|g" contracts/payment-registry/DEPLOYED.md
+          sed -i "s|(pending CI deploy)/$CONTRACT_ID/g" contracts/payment-registry/DEPLOYED.md || true
+          DEPLOY_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          sed -i "s|(pending)|$DEPLOY_DATE|g" contracts/payment-registry/DEPLOYED.md || true
+
+      - name: Commit updated DEPLOYED.md
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update DEPLOYED.md with testnet contract ID and Wasm hash [skip ci]"
+          file_pattern: contracts/payment-registry/DEPLOYED.md
+
+  run-contract-tests:
+    name: Run contract tests against Testnet
+    needs: deploy-testnet
+    runs-on: ubuntu-latest
+    env:
+      MONGO_URI: ${{ secrets.TESTNET_MONGO_URI }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      STELLAR_NETWORK: testnet
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+
+      - uses: actions/cache@v6
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+
+      - run: npm ci
+
+      - name: Run contract event tests
+        run: npx jest tests/contractEventSchema.test.js --testTimeout=30000
+
+      - name: Run contract simulation tests
+        run: npx jest tests/contractSimulation.test.js --testTimeout=30000

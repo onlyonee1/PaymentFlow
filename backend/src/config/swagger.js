@@ -6,6 +6,7 @@
  */
 
 const swaggerJsdoc = require('swagger-jsdoc');
+const { TAXONOMY } = require('../errors/paymentErrorTaxonomy');
 
 const options = {
   definition: {
@@ -23,6 +24,7 @@ const options = {
         url: 'https://opensource.org/licenses/MIT',
       },
     },
+    'x-error-codes': TAXONOMY,
     servers: [
       {
         url: process.env.API_URL || 'http://localhost:5000/api',
@@ -36,6 +38,12 @@ const options = {
           scheme: 'bearer',
           bearerFormat: 'JWT',
           description: 'JWT token for admin authentication',
+        },
+        ApiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-School-ID',
+          description: 'School ID passed as a header for school-scoped endpoints (alternative to slug-based routing)',
         },
       },
       schemas: {
@@ -93,8 +101,8 @@ const options = {
     ],
   },
   apis: [
-    './backend/src/routes/*.js',
-    './backend/src/controllers/*.js',
+    `${__dirname}/../routes/*.js`,
+    `${__dirname}/../controllers/*.js`,
   ],
 };
 
