@@ -116,7 +116,7 @@ jobs:
       # On push to main there is no PR, so this step is skipped automatically.
       - name: Post mutation score comment
         if: always() && github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const score = '${{ steps.stryker.outputs.mutation_score }}';

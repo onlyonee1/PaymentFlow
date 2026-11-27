@@ -65,7 +65,7 @@ jobs:
       # acceptance criterion (#121).
       - name: Create failure issue on smoke test failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const env = '${{ inputs.environment }}';
