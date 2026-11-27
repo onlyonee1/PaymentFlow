@@ -54,6 +54,8 @@ const studentSchema = new mongoose.Schema(
     lastReminderSentAt: { type: Date, default: null },
     reminderCount: { type: Number, default: 0 },
     reminderOptOut: { type: Boolean, default: false },
+    paymentConfirmationOptOut: { type: Boolean, default: false },
+    disputeUpdateOptOut: { type: Boolean, default: false },
     parentEmailSuppressed: { type: Boolean, default: false },
     parentEmailSuppressionReason: { type: String, default: null },
     parentEmailSuppressedAt: { type: Date, default: null },
@@ -74,6 +76,7 @@ const studentSchema = new mongoose.Schema(
     disputeHold: { type: Boolean, default: false, index: true },
 
     // Audit fields
+    graduatedAt: { type: Date, default: null, index: true },
     dateOfBirth: { type: Date },
     gender: { type: String },
     parentName: { type: String },
@@ -126,6 +129,8 @@ studentSchema.index({ studentId: 1, version: 1 });
 studentSchema.index({ feePaid: 1, class: 1 });
 studentSchema.index({ totalPaid: 1 });
 studentSchema.index({ name: 'text', studentId: 'text' });
+// Issue #39 — getAllStudents list (not deleted, sorted by createdAt)
+studentSchema.index({ schoolId: 1, deletedAt: 1, createdAt: -1 });
 
 // ── Parent contact PII encryption at rest — Issue #1480 ─────────────────────
 // Encrypt parentEmail/parentPhone before persisting, then decrypt them back

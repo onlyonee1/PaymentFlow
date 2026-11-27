@@ -1,18 +1,13 @@
 /** @type {import('next').NextConfig} */
 
-// Bundle analyzer — enabled when ANALYZE=true (e.g. `ANALYZE=true npm run build`).
-// Generates an HTML treemap in .next/analyze/ showing every module's size.
-// @next/bundle-analyzer is listed in devDependencies and is never included in
-// the production bundle itself — it only wraps the Next.js config at build time.
-const withBundleAnalyzer = (() => {
-  try {
-    return require('@next/bundle-analyzer')({ enabled: process.env.ANALYZE === 'true' });
-  } catch {
-    // Package not installed (e.g. in a stripped-down environment); return a
-    // no-op wrapper so the rest of next.config.js continues to work normally.
-    return (cfg) => cfg;
-  }
-})();
+// Validate required public environment variables at build/startup time.
+try {
+  const { validateEnv } = require('./src/config/envValidation');
+  validateEnv();
+} catch (e) {
+  if (process.env.NODE_ENV === 'production') throw e;
+  console.warn('[next.config.js] Environment validation warning:', e.message);
+}
 
 // External-origin allow-lists are defined in a single shared module so that
 // both this file (runtime policy) and tests/csp.test.js (assertions) stay in
@@ -22,6 +17,20 @@ const {
   STYLE_SRC_ORIGINS,
   FONT_SRC_ORIGINS,
 } = require('./src/config/cspSources');
+
+// Bundle analysis: set ANALYZE=true to open an interactive Webpack bundle
+// visualiser after `npm run build`.  In CI the visualiser is disabled; the
+// bundle-budget.js script reads the build manifest directly instead.
+const withBundleAnalyzer = (() => {
+  try {
+    // eslint-disable-next-line import/no-extraneous-dependencies
+    return require('@next/bundle-analyzer')({ enabled: process.env.ANALYZE === 'true' });
+  } catch {
+    // @next/bundle-analyzer is an optional dev-dependency; if it is not
+    // installed (e.g. in a minimal Docker image) skip the wrapper entirely.
+    return (cfg) => cfg;
+  }
+})();
 
 const isDev = process.env.NODE_ENV !== 'production';
 
@@ -69,6 +78,8 @@ const CSP = [
 
 const securityHeaders = [
   { key: 'Content-Security-Policy', value: CSP },
+  { key: 'Content-Security-Policy-Report-Only', value: `${CSP}; report-uri /api/csp-report` },
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -82,15 +93,22 @@ const BACKEND_ORIGIN = process.env.BACKEND_PROXY_TARGET || 'http://localhost:500
 const nextConfig = {
   // Produces a self-contained build in .next/standalone — required for Docker
   output: 'standalone',
+  generateEtags: true,
   // Same-origin API proxy: browser → /api/* (this origin) → backend. Keeps
   // requests first-party so HttpOnly SameSite=Strict auth cookies are sent.
   async rewrites() {
     return [
+      { source: '/unsubscribe', destination: `${BACKEND_ORIGIN}/unsubscribe` },
       { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
     ];
   },
   async headers() {
     return [
+      // Next serves production build assets from hashed or build-scoped URLs.
+      ...(!isDev ? [{
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      }] : []),
       {
         // Apply security headers to all routes
         source: '/(.*)',
