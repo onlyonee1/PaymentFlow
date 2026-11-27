@@ -1,24 +1,12 @@
-import '../src/styles/globals.css';
-import '../src/styles/tokens.css';
+import "../src/styles/globals.css";
+import "../src/styles/redesign.css";
+import i18n from "../src/i18n";
 
-/** @type { import('@storybook/react').Preview } */
-const preview = {
+void i18n.changeLanguage("en");
+
+export default {
   parameters: {
-    actions: { argTypesRegex: '^on[A-Z].*' },
-    controls: {
-      matchers: {
-        color: /(background|color)$/i,
-        date: /Date$/i,
-      },
-    },
-    a11y: {
-      config: {},
-      options: {
-        checks: { 'color-contrast': { options: { noScroll: true } } },
-        restoreScroll: true,
-      },
-    },
+    layout: "padded",
+    chromatic: { disableSnapshot: false },
   },
 };
-
-export default preview;

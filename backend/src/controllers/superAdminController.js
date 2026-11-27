@@ -3,6 +3,7 @@
 const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const Payment = require('../models/paymentModel');
+const { withStudentQuotaLock } = require('../services/studentQuotaService');
 const { logAudit } = require('../services/auditService');
 
 // GET /api/superadmin/schools — every school, active or not, for platform operators.
@@ -45,16 +46,24 @@ async function getMetrics(req, res, next) {
 // PATCH /api/superadmin/schools/:schoolId/quota — adjust a school's student quota.
 async function updateQuota(req, res, next) {
   try {
-    const { maxStudents } = req.body;
-    if (typeof maxStudents !== 'number' || maxStudents < 1) {
-      return res.status(400).json({ error: 'maxStudents must be a number >= 1', code: 'VALIDATION_ERROR' });
+    const { subscriptionTier } = req.body;
+    const studentQuota = Object.hasOwn(req.body, 'studentQuota') ? req.body.studentQuota : req.body.maxStudents;
+    if ((studentQuota === undefined && subscriptionTier === undefined) ||
+        (studentQuota != null && (!Number.isSafeInteger(studentQuota) || studentQuota < 1)) ||
+        (subscriptionTier !== undefined && !['free', 'standard', 'enterprise'].includes(subscriptionTier))) {
+      return res.status(400).json({ error: 'Provide a valid subscription tier or student quota (positive integer or null).', code: 'VALIDATION_ERROR' });
     }
 
-    const school = await School.findOneAndUpdate(
+    const fields = {};
+    if (studentQuota !== undefined) fields.studentQuota = studentQuota;
+    if (subscriptionTier !== undefined) fields.subscriptionTier = subscriptionTier;
+    const update = { $set: fields };
+    if (studentQuota !== undefined) update.$unset = { maxStudents: 1 };
+    const school = await withStudentQuotaLock(req.params.schoolId, () => School.findOneAndUpdate(
       { schoolId: req.params.schoolId },
-      { maxStudents },
+      update,
       { new: true, runValidators: true }
-    );
+    ));
     if (!school) {
       return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
     }
@@ -66,7 +75,7 @@ async function updateQuota(req, res, next) {
         performedBy: req.auditContext.performedBy,
         targetId: school.schoolId,
         targetType: 'school',
-        details: { maxStudents },
+        details: fields,
         result: 'success',
         ipAddress: req.auditContext.ipAddress,
         userAgent: req.auditContext.userAgent,
