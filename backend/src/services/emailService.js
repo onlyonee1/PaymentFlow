@@ -12,6 +12,8 @@
 const logger = require('../utils/logger');
 const { sendEmail } = require('./email');
 const { renderEmailTemplate } = require('../utils/templateRenderer');
+const config = require('../config');
+const { emailUnsubscribeUrl } = require('../utils/unsubscribeToken');
 const School = require('../models/schoolModel');
 
 /**
@@ -47,6 +49,7 @@ async function sendPaymentReceipt(options) {
 
   const { text, html } = renderEmailTemplate('receiptEmail', {
     studentName,
+    unsubscribeUrl: options.studentId && schoolId ? emailUnsubscribeUrl(options.studentId, schoolId, 'payment_confirmation', config) : '',
     amount,
     txHash,
     confirmedAt: confirmedAt ? new Date(confirmedAt).toISOString() : '',
@@ -66,4 +69,15 @@ async function sendPaymentReceipt(options) {
   });
 }
 
-module.exports = { sendPaymentReceipt };
+async function sendDisputeUpdate({ student, schoolId, status }) {
+  if (!student?.parentEmail || student.disputeUpdateOptOut) return;
+  const unsubscribeUrl = emailUnsubscribeUrl(student.studentId, schoolId, 'dispute_update', config);
+  return sendEmail({
+    to: student.parentEmail,
+    subject: 'Payment dispute update',
+    text: `A payment dispute status changed to ${status}. Contact your school for details.\n\nUnsubscribe: ${unsubscribeUrl}`,
+    category: 'dispute_update',
+  });
+}
+
+module.exports = { sendPaymentReceipt, sendDisputeUpdate };
