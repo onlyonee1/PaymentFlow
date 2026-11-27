@@ -65,7 +65,7 @@ export default function PayFees() {
 
         {/* Main content grid */}
         <div className="payfees-grid">
-          <PaymentForm disabled={!isOnline} />
+          <PaymentForm disabled={!isOnline} tokenExp={tokenExp} />
           <div ref={verifyPaymentRef}>
             <VerifyPayment disabled={!isOnline} />
           </div>

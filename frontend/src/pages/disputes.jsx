@@ -11,8 +11,10 @@ import Pagination from "../components/Pagination";
 import RequireAdmin from "../components/RequireAdmin";
 import EmptyState from "../components/EmptyState";
 import AccessiblePagination from "../components/AccessiblePagination";
+import DisputeStatusTracker from "../components/DisputeStatusTracker";
 import { useTranslation } from "react-i18next";
 import TimestampDisplay, { DISPLAY_MODE } from "../components/TimestampDisplay";
+import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const STATUS_META = {
   open:         { cls: "badge-success", labelKey: "status.dispute.open" },
@@ -133,7 +135,14 @@ function ResolveForm({ dispute, onResolved }) {
 
 function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
   const { t } = useTranslation();
-  const canResolve = dispute.status === "open" || dispute.status === "under_review";
+  let isAdmin = false;
+  try {
+    const auth = useAdminAuthContext();
+    isAdmin = !!auth?.isAdmin;
+  } catch {
+    isAdmin = true;
+  }
+  const canResolve = (dispute.status === "open" || dispute.status === "under_review") && isAdmin;
 
   return (
     <div className="card" style={{ marginBottom: "0.75rem" }}>
@@ -174,6 +183,9 @@ function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
             ? dispute.reason.slice(0, 140) + "…"
             : dispute.reason}
         </p>
+
+        {/* Dispute Status Tracker */}
+        <DisputeStatusTracker status={dispute.status} />
 
         <button
           onClick={onToggle}
@@ -391,7 +403,6 @@ function DisputesContent() {
                 itemLabel={t("disputes.title")}
               />
             )}
-            )}
           </div>
         )}
       </div>
@@ -400,9 +411,5 @@ function DisputesContent() {
 }
 
 export default function DisputesPage() {
-  return (
-    <RequireAdmin>
-      <DisputesContent />
-    </RequireAdmin>
-  );
+  return <DisputesContent />;
 }

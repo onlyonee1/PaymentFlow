@@ -488,6 +488,8 @@ Your PR must meet these criteria before merging:
 
 ## 🏗 Architecture Guidelines
 
+Start with the [multi-tenancy guide](docs/architecture/multi-tenancy.md) and the [shared-schema ADR](docs/adr/ADR-001-multi-tenancy.md) before changing tenant-owned features.
+
 ### Service-Oriented Architecture
 
 We follow a strict **Service-Oriented Architecture**. To maintain the codebase:

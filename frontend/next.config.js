@@ -93,21 +93,22 @@ const BACKEND_ORIGIN = process.env.BACKEND_PROXY_TARGET || 'http://localhost:500
 const nextConfig = {
   // Produces a self-contained build in .next/standalone — required for Docker
   output: 'standalone',
+  generateEtags: true,
   // Same-origin API proxy: browser → /api/* (this origin) → backend. Keeps
   // requests first-party so HttpOnly SameSite=Strict auth cookies are sent.
   async rewrites() {
-    return {
-      beforeFiles: [
-        { source: '/robots.txt', destination: '/api/seo/robots' },
-        { source: '/sitemap.xml', destination: '/api/seo/sitemap' },
-      ],
-      fallback: [
-        { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
-      ],
-    };
+    return [
+      { source: '/unsubscribe', destination: `${BACKEND_ORIGIN}/unsubscribe` },
+      { source: '/api/:path*', destination: `${BACKEND_ORIGIN}/api/:path*` },
+    ];
   },
   async headers() {
     return [
+      // Next serves production build assets from hashed or build-scoped URLs.
+      ...(!isDev ? [{
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      }] : []),
       {
         // Apply security headers to all routes
         source: '/(.*)',

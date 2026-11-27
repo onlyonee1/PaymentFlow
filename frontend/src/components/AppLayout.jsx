@@ -30,6 +30,7 @@ const ADMIN_NAV = [
   { href: "/source-validation-rules", label: "Source Rules",  Icon: IconShield },
   { href: "/audit-logs",              label: "Audit Logs",    Icon: IconFileText },
   { href: "/retention",               i18nKey: "nav.retention", Icon: IconShield },
+  { href: "/admin/reconciliation",    label: "Reconciliation", Icon: IconCreditCard },
   { href: "/disputes",                label: "Disputes",      Icon: IconMessageCircle },
 ];
 
@@ -60,7 +61,7 @@ function AppLayoutInner({ children }) {
           {isAdmin && (
             <>
               <div className="app-sidebar-section">{t("nav.adminSection")}</div>
-              {ADMIN_NAV.map(({ href, i18nKey, Icon }) => (
+              {ADMIN_NAV.map(({ href, label, i18nKey, Icon }) => (
                 <Link
                   key={href}
                   href={href}
@@ -70,7 +71,7 @@ function AppLayoutInner({ children }) {
                   <span className="app-sidebar-icon">
                     <Icon size={15} />
                   </span>
-                  {t(i18nKey)}
+                  {label || t(i18nKey)}
                 </Link>
               ))}
             </>
