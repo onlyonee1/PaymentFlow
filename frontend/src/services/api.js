@@ -231,3 +231,22 @@ export const deleteSourceValidationRule = (id, schoolId) =>
 // Fee adjustment helpers
 export const getFeeAdjustmentAffectedCount = (ruleId, schoolId) =>
   api.get(`/fee-adjustments/${ruleId}/affected-count`, { headers: { "X-School-ID": schoolId } });
+
+// Student fee history (archived records)
+export const getFeeHistory = (studentId, params = {}) =>
+  api.get(`/students/${studentId}/fee-history`, { params });
+
+// Receipts — Issue #604
+// Returns the URL for streaming a PDF receipt from the backend.
+// Using a plain URL (rather than api.get) so callers can pass it to fetch()
+// or an <a href> and get the binary PDF stream directly.
+export const getReceiptDownloadUrl = (txHash) => {
+  const base =
+    typeof window !== "undefined"
+      ? (process.env.NEXT_PUBLIC_API_URL || "/api")
+      : "/api";
+  return `${base}/receipts/${txHash}?format=pdf`;
+};
+
+// Returns JSON receipt data (studentName, amount, signature, etc.)
+export const getReceiptData = (txHash) => api.get(`/receipts/${txHash}`);
