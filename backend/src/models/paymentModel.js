@@ -109,6 +109,7 @@ const paymentSchema = new mongoose.Schema(
     // Canonical status values are imported from constants/paymentStatus.js (Issue #72).
     status: { type: String, enum: PAYMENT_STATUS_VALUES, default: 'PENDING' },
     memo: { type: String },
+    memoHash: { type: String },
     senderAddress: { type: String, default: null },
     isSuspicious: { type: Boolean, default: false },
     suspicionReason: { type: String, default: null },
