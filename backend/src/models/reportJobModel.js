@@ -17,7 +17,7 @@ const reportJobSchema = new mongoose.Schema(
     jobId: { type: String, required: true, unique: true, index: true },
     type: {
       type: String,
-      enum: ['report', 'accounting_csv'],
+      enum: ['report', 'accounting_csv', 'student_export'],
       required: true,
     },
     status: {
@@ -29,6 +29,7 @@ const reportJobSchema = new mongoose.Schema(
     params: {
       startDate: { type: String, default: null },
       endDate: { type: String, default: null },
+      groupBy: { type: String, enum: ['confirmedAt', 'createdAt'], default: null },
       timezone: { type: String, default: 'UTC' },
       schemaVersion: { type: Number, default: null },
       format: { type: String, default: 'json' },
@@ -38,6 +39,11 @@ const reportJobSchema = new mongoose.Schema(
       csv: { type: String, default: null, select: false },
       schemaVersion: { type: Number, default: null },
       error: { type: String, default: null },
+    },
+    requestedBy: { type: String },
+    studentExport: {
+      columns: [String],
+      includeDeleted: Boolean,
     },
     artifactKey: { type: String, default: null },
     startedAt: { type: Date, default: null },

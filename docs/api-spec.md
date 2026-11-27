@@ -1656,3 +1656,16 @@ Authorization: Bearer <token>
 | `401` | `MISSING_AUTH_TOKEN` | No Bearer token provided |
 | `401` | `INVALID_AUTH_TOKEN` | Token is invalid or expired |
 | `403` | `INSUFFICIENT_ROLE` | Token does not carry `role: admin` |
+
+### Payment summary date grouping
+
+`GET /api/reports?groupBy=confirmedAt` groups successful payments by their
+confirmation date in the school timezone. Pending and successful payments
+without a confirmation timestamp are shown under **Pending Confirmation**
+(`bucket: "__unconfirmed"` in JSON). Date filters use the creation date for
+that bucket. Its amounts and counts are excluded from the collected totals.
+CSV exports use the same label in the daily breakdown.
+
+`groupBy=createdAt` groups successful payments by creation date. Omitting
+`groupBy` preserves the existing successful-payment report and its date
+filters. Both options work for JSON and summary CSV, including queued reports.
