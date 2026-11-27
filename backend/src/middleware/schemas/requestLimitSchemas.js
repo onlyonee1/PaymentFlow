@@ -1,4 +1,3 @@
-  cursor: Joi.string().min(1).max(2048).optional(),
 'use strict';
 
 /**

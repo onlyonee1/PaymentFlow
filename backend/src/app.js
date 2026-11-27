@@ -94,9 +94,9 @@ try {
 
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-const { parseAllowedOrigins } = require('./utils/corsOrigins');
+const { createOriginPolicy } = require('./utils/corsOrigins');
 
-const allowedOrigins = parseAllowedOrigins();
+const originPolicy = createOriginPolicy();
 
 const app = express();
 
@@ -109,13 +109,19 @@ const app = express();
 app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use((req, res, next) => {
+  res.vary('Origin');
+  next();
+});
 app.use(cors({
-  origin: allowedOrigins,
+  origin: originPolicy,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID', 'traceparent', 'tracestate'],
   exposedHeaders: ['X-Correlation-ID'],
   credentials: true,
+  maxAge: 86400,
 }));
+app.options('*', (_req, res) => res.sendStatus(204));
 app.use(cookieParser());
 // The backend serves only JSON API responses — no HTML, scripts, or styles.
 // CSP directives for HTML content (scriptSrc, styleSrc, imgSrc, etc.) are
