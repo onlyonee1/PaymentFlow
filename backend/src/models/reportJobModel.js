@@ -29,6 +29,7 @@ const reportJobSchema = new mongoose.Schema(
     params: {
       startDate: { type: String, default: null },
       endDate: { type: String, default: null },
+      groupBy: { type: String, enum: ['confirmedAt', 'createdAt'], default: null },
       timezone: { type: String, default: 'UTC' },
       schemaVersion: { type: Number, default: null },
       format: { type: String, default: 'json' },
