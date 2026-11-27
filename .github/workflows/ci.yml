@@ -685,3 +685,54 @@ jobs:
       - contract-simulation
     steps:
       - run: echo "All required checks passed."
+
+  # ── #653: Cross-browser smoke matrix ────────────────────────────────────────
+  # Runs login, pay-fee, view-receipt, and download-CSV smoke flows on
+  # Chrome, Firefox, Safari (WebKit), and Edge in parallel shards.
+  # Target: all 4 browsers complete within 10 minutes.
+  # Flaky quarantine: tests that fail in a single browser but pass within
+  # 3 retries are quarantined and reported separately (not a hard failure).
+  cross-browser-smoke:
+    name: Cross-browser smoke (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit, msedge]
+        include:
+          - browser: chromium
+            shard: 1/4
+          - browser: firefox
+            shard: 2/4
+          - browser: webkit
+            shard: 3/4
+          - browser: msedge
+            shard: 4/4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run cross-browser smoke tests
+        run: |
+          npx playwright test \
+            --config=playwright.cross-browser.config.js \
+            --project=${{ matrix.browser }} \
+            --shard=${{ matrix.shard }}
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        continue-on-error: false
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: playwright-report/cross-browser/
+          retention-days: 7
