@@ -54,6 +54,8 @@ const studentSchema = new mongoose.Schema(
     lastReminderSentAt: { type: Date, default: null },
     reminderCount: { type: Number, default: 0 },
     reminderOptOut: { type: Boolean, default: false },
+    paymentConfirmationOptOut: { type: Boolean, default: false },
+    disputeUpdateOptOut: { type: Boolean, default: false },
     parentEmailSuppressed: { type: Boolean, default: false },
     parentEmailSuppressionReason: { type: String, default: null },
     parentEmailSuppressedAt: { type: Date, default: null },
@@ -74,6 +76,7 @@ const studentSchema = new mongoose.Schema(
     disputeHold: { type: Boolean, default: false, index: true },
 
     // Audit fields
+    graduatedAt: { type: Date, default: null, index: true },
     dateOfBirth: { type: Date },
     gender: { type: String },
     parentName: { type: String },

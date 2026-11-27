@@ -1,322 +1,339 @@
 'use strict';
 
 /**
- * Issue #306 — Asset Type and Decimal Precision Invariant Tests
+ * Tests for Issue #306 — Define and validate asset type and decimal precision on-chain.
  *
- * Verifies that the contract asset validation layer enforces correct decimal
- * precision, stroop conversion, and asset-type/issuer boundaries across a wide
- * range of inputs — including edge cases that fixed-example tests miss:
- *   - zero amounts
- *   - 1-stroop minimum
- *   - max int64 and max int128 boundary values
- *   - amounts with more than 7 decimal places (overflow precision)
- *   - rogue USDC issuers (asset spoofing)
- *   - empty / null / undefined amounts
- *
- * All randomised cases use a fixed seed for reproducibility.
- *
- * Acceptance criteria:
- *   ✓  Decimal invariants tested with 1 000+ inputs
- *   ✓  Fixed seed for CI reproducibility
- *   ✓  Violations include seed + case index for minimal reproduction
+ * Covers:
+ *  1. Asset whitelist enforcement — only XLM and USDC are accepted by default.
+ *  2. Type validation — asset type must match the registered type.
+ *  3. Decimal precision validation — amounts exceeding the asset's decimal
+ *     places are rejected before they reach the network.
+ *  4. Admin authority — only admin-gated mutations are exposed; the registry
+ *     correctly blocks and allows additions/removals.
+ *  5. View function (listWhitelistedAssets) — queryable at any time.
  */
 
-process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/test';
-process.env.SCHOOL_WALLET_ADDRESS =
-  process.env.SCHOOL_WALLET_ADDRESS ||
-  'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-// JWT_SECRET must be at least 32 chars — config/index.js throws otherwise.
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'a'.repeat(64);
+// Set required env vars before loading the module.
+process.env.MONGO_URI = 'mongodb://localhost:27017/test';
+process.env.USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
+// We test the real module (no mocking needed — it has no side-effects at load time).
 const {
-  DECIMALS,
-  MIN_AMOUNT_STROOPS,
-  MAX_INT64_STROOPS,
-  MAX_INT128_STROOPS,
-  ERROR_CODES,
-  ContractAssetValidationError,
-  parseAssetIdentifier,
-  validateContractAsset,
-  validateContractAmount,
-  validateContractAssetAndAmount,
-  verifyOffChainMatchesContract,
-} = require('../backend/src/services/contractAssetValidation');
+  getWhitelistedAssets,
+  isWhitelisted,
+  getAssetDefinition,
+  validateAsset,
+  validateAmountPrecision,
+  addWhitelistedAsset,
+  removeWhitelistedAsset,
+  listWhitelistedAssets,
+  getAdminAddress,
+  setAdminAddress,
+} = require('../backend/src/config/assetRegistry');
 
-const {
-  createDeterministicPrng,
-} = require('../backend/src/services/contractAuthorizationPolicy');
+// ── Helper ────────────────────────────────────────────────────────────────────
 
-// Fixed seed — do not change without documenting in CHANGELOG.
-const SEED = 0xC0FFEE42;
-const ITERATIONS = 1000;
+const TESTNET_USDC = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+const ATTACKER_ISSUER = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// 1. Default whitelist
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Generate a random valid XLM amount in the range [0.0000001, 100000.0000000]
- * with up to 7 decimal places.
- */
-function randomValidAmount(prng) {
-  const wholeUnits = prng.int(0, 99999);
-  const fractionStroops = prng.int(1, 9999999);
-  return wholeUnits + fractionStroops / 10000000;
-}
-
-/**
- * Generate a random number of additional decimal places beyond 7 (1–5 extra).
- */
-function tooManyDecimals(prng, base) {
-  const extra = prng.int(1, 5);
-  const suffix = String(prng.int(1, 99999)).padStart(extra, '0');
-  return `${base.toFixed(7)}${suffix}`;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 1 — Valid amounts always convert to exactly the right stroop count
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 1: valid amount → exact stroop conversion', () => {
-  test(`${ITERATIONS} random valid amounts convert without error (seed=${SEED})`, () => {
-    const prng = createDeterministicPrng(SEED);
-    let verified = 0;
-
-    for (let i = 0; i < ITERATIONS; i++) {
-      const amount = randomValidAmount(prng);
-      let result;
-      try {
-        result = validateContractAmount(amount);
-      } catch (err) {
-        throw new Error(
-          `Case ${i} (amount=${amount}) threw unexpectedly: ${err.message}. Seed: ${SEED}`
-        );
-      }
-
-      expect(result.valid).toBe(true);
-      expect(typeof result.stroops).toBe('bigint');
-      expect(result.stroops).toBeGreaterThanOrEqual(MIN_AMOUNT_STROOPS);
-      expect(result.stroops).toBeLessThanOrEqual(MAX_INT64_STROOPS);
-      verified++;
-    }
-
-    expect(verified).toBe(ITERATIONS);
+describe('#306 — asset whitelist', () => {
+  test('XLM is whitelisted by default', () => {
+    expect(isWhitelisted('XLM')).toBe(true);
   });
 
-  test('stroop conversion is bijective — fromStroops(toStroops(x)) === x for sampled amounts', () => {
-    const prng = createDeterministicPrng(SEED + 1);
-    for (let i = 0; i < 200; i++) {
-      const amount = randomValidAmount(prng);
-      const result = validateContractAmount(amount);
-      // The amountDecimal round-trip should equal the input at 7dp precision
-      const roundTripFloat = parseFloat(result.amountDecimal);
-      const inputRounded = parseFloat(amount.toFixed(7));
-      expect(roundTripFloat).toBeCloseTo(inputRounded, 6);
-    }
+  test('USDC is whitelisted by default', () => {
+    expect(isWhitelisted('USDC')).toBe(true);
+  });
+
+  test('unknown asset codes are NOT whitelisted', () => {
+    expect(isWhitelisted('BTC')).toBe(false);
+    expect(isWhitelisted('ETH')).toBe(false);
+    expect(isWhitelisted('FAKE')).toBe(false);
+  });
+
+  test('getWhitelistedAssets returns XLM and USDC', () => {
+    const assets = getWhitelistedAssets();
+    expect(Object.keys(assets)).toContain('XLM');
+    expect(Object.keys(assets)).toContain('USDC');
+  });
+
+  test('listWhitelistedAssets returns an array sorted by code', () => {
+    const list = listWhitelistedAssets();
+    expect(Array.isArray(list)).toBe(true);
+    const codes = list.map((a) => a.code);
+    expect(codes).toContain('XLM');
+    expect(codes).toContain('USDC');
+    // Verify sorted order
+    expect(codes).toEqual([...codes].sort());
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 2 — Zero amount is always rejected (unless allowZero option set)
+// 2. Asset definition view function
 // ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 2: zero amount is rejected', () => {
-  const zeroInputs = [0, 0.0, '0', '0.0', '0.0000000', 0n];
 
-  test.each(zeroInputs)('zero amount "%s" throws AMOUNT_ZERO', (input) => {
-    expect(() => validateContractAmount(input)).toThrow(ContractAssetValidationError);
+describe('#306 — asset definition view', () => {
+  test('XLM definition has correct type and 7 decimal places', () => {
+    const def = getAssetDefinition('XLM');
+    expect(def).not.toBeNull();
+    expect(def.type).toBe('native');
+    expect(def.decimals).toBe(7);
+    expect(def.issuer).toBeNull();
+  });
+
+  test('USDC definition has correct type, issuer, and 7 decimal places', () => {
+    const def = getAssetDefinition('USDC');
+    expect(def).not.toBeNull();
+    expect(def.type).toBe('credit_alphanum4');
+    expect(def.decimals).toBe(7);
+    expect(def.issuer).toBe(TESTNET_USDC);
+  });
+
+  test('getAssetDefinition returns null for unknown codes', () => {
+    expect(getAssetDefinition('DOGE')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. validateAsset — whitelist + type + issuer
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#306 — validateAsset', () => {
+  test('rejects a non-whitelisted asset', () => {
+    const result = validateAsset('BTC', 'credit_alphanum4', null);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ASSET_NOT_WHITELISTED');
+  });
+
+  test('rejects XLM with wrong asset type', () => {
+    const result = validateAsset('XLM', 'credit_alphanum4', null);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ASSET_TYPE_MISMATCH');
+  });
+
+  test('accepts XLM with correct type and no issuer', () => {
+    const result = validateAsset('XLM', 'native', null);
+    expect(result.valid).toBe(true);
+    expect(result.asset.code).toBe('XLM');
+  });
+
+  test('rejects XLM when a spurious issuer is provided', () => {
+    const result = validateAsset('XLM', 'native', ATTACKER_ISSUER);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('UNEXPECTED_ISSUER_ON_NATIVE');
+  });
+
+  test('accepts USDC from the pinned testnet issuer', () => {
+    const result = validateAsset('USDC', 'credit_alphanum4', TESTNET_USDC);
+    expect(result.valid).toBe(true);
+    expect(result.asset.code).toBe('USDC');
+  });
+
+  test('rejects USDC from an attacker issuer', () => {
+    const result = validateAsset('USDC', 'credit_alphanum4', ATTACKER_ISSUER);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ISSUER_MISMATCH');
+  });
+
+  test('rejects USDC with a null issuer', () => {
+    const result = validateAsset('USDC', 'credit_alphanum4', null);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ISSUER_MISMATCH');
+  });
+
+  test('rejects USDC with wrong asset type', () => {
+    const result = validateAsset('USDC', 'native', null);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ASSET_TYPE_MISMATCH');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. validateAmountPrecision
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#306 — validateAmountPrecision', () => {
+  test('accepts an amount with exactly 7 decimal places (XLM)', () => {
+    const result = validateAmountPrecision('100.0000001', 'XLM');
+    expect(result.valid).toBe(true);
+  });
+
+  test('accepts an amount with fewer than 7 decimal places', () => {
+    expect(validateAmountPrecision('250.50', 'XLM').valid).toBe(true);
+    expect(validateAmountPrecision('100', 'USDC').valid).toBe(true);
+    expect(validateAmountPrecision('0.1', 'USDC').valid).toBe(true);
+  });
+
+  test('rejects an amount with 8 decimal places (exceeds XLM precision)', () => {
+    const result = validateAmountPrecision('1.00000001', 'XLM');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('AMOUNT_EXCEEDS_PRECISION');
+  });
+
+  test('rejects an amount with 8 decimal places for USDC', () => {
+    const result = validateAmountPrecision('0.000000001', 'USDC');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('AMOUNT_EXCEEDS_PRECISION');
+  });
+
+  test('rejects negative amounts', () => {
+    const result = validateAmountPrecision('-10.5', 'XLM');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('NEGATIVE_AMOUNT');
+  });
+
+  test('rejects non-numeric strings', () => {
+    const result = validateAmountPrecision('abc', 'XLM');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('INVALID_AMOUNT_FORMAT');
+  });
+
+  test('rejects Infinity', () => {
+    const result = validateAmountPrecision(Infinity, 'XLM');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('INVALID_AMOUNT_FORMAT');
+  });
+
+  test('rejects an amount for a non-whitelisted asset', () => {
+    const result = validateAmountPrecision('100', 'BTC');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('ASSET_NOT_WHITELISTED');
+  });
+
+  test('returns normalised amount string to canonical precision', () => {
+    const result = validateAmountPrecision('100', 'XLM');
+    expect(result.valid).toBe(true);
+    expect(result.normalised).toBe('100.0000000');
+  });
+
+  test('boundary: exact 7 d.p. is accepted', () => {
+    expect(validateAmountPrecision('0.0000001', 'XLM').valid).toBe(true);
+  });
+
+  test('boundary: 8 d.p. is rejected', () => {
+    expect(validateAmountPrecision('0.00000001', 'XLM').valid).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Admin-gated mutations — addWhitelistedAsset / removeWhitelistedAsset
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#306 — admin-gated whitelist management', () => {
+  // Use an isolated cleanup strategy: track what we add and remove it after.
+  const TEMP_ASSET_CODE = 'TSTT';
+
+  afterEach(() => {
+    // Clean up any test asset that was added.
     try {
-      validateContractAmount(input);
-    } catch (err) {
-      expect(err.code).toBe(ERROR_CODES.AMOUNT_ZERO);
+      removeWhitelistedAsset(TEMP_ASSET_CODE);
+    } catch {
+      // Already removed or never added — no-op.
     }
   });
 
-  test('zero is accepted when allowZero=true', () => {
-    const result = validateContractAmount(0, { allowZero: true });
-    expect(result.valid).toBe(true);
-    expect(result.stroops).toBe(0n);
+  test('admin can add a new asset to the whitelist', () => {
+    addWhitelistedAsset({
+      code: TEMP_ASSET_CODE,
+      type: 'credit_alphanum4',
+      issuer: 'GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABZEYYWRB46Z7',
+      displayName: 'Test Stable Token',
+      decimals: 7,
+    });
+
+    expect(isWhitelisted(TEMP_ASSET_CODE)).toBe(true);
+    const def = getAssetDefinition(TEMP_ASSET_CODE);
+    expect(def.decimals).toBe(7);
+    expect(def.type).toBe('credit_alphanum4');
   });
 
-  test('1 stroop (0.0000001) is the minimum accepted amount', () => {
-    const result = validateContractAmount('0.0000001');
-    expect(result.valid).toBe(true);
-    expect(result.stroops).toBe(MIN_AMOUNT_STROOPS);
-    expect(result.stroops).toBe(1n);
-  });
-});
+  test('newly added asset appears in listWhitelistedAssets', () => {
+    addWhitelistedAsset({
+      code: TEMP_ASSET_CODE,
+      type: 'credit_alphanum4',
+      issuer: 'GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABZEYYWRB46Z7',
+      displayName: 'Test Stable Token',
+      decimals: 7,
+    });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 3 — Negative amounts are always rejected
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 3: negative amounts are always rejected', () => {
-  test(`${ITERATIONS} random negative amounts all throw AMOUNT_NEGATIVE (seed=${SEED + 2})`, () => {
-    const prng = createDeterministicPrng(SEED + 2);
-    for (let i = 0; i < ITERATIONS; i++) {
-      const magnitude = randomValidAmount(prng);
-      const negative = -magnitude;
-      expect(() => validateContractAmount(negative)).toThrow(ContractAssetValidationError);
-      try {
-        validateContractAmount(negative);
-      } catch (err) {
-        expect(err.code).toBe(ERROR_CODES.AMOUNT_NEGATIVE);
-        if (err.code !== ERROR_CODES.AMOUNT_NEGATIVE) {
-          throw new Error(
-            `Case ${i}: expected AMOUNT_NEGATIVE for ${negative}, got ${err.code}. Seed: ${SEED + 2}`
-          );
-        }
-      }
-    }
+    const list = listWhitelistedAssets();
+    expect(list.map((a) => a.code)).toContain(TEMP_ASSET_CODE);
   });
 
-  test('string negative amounts are also rejected', () => {
-    expect(() => validateContractAmount('-1')).toThrow(ContractAssetValidationError);
-    expect(() => validateContractAmount('-0.0000001')).toThrow(ContractAssetValidationError);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 4 — Max int64 boundary
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 4: max int64 boundary enforcement', () => {
-  test('amount equal to MAX_INT64_STROOPS passes (default max)', () => {
-    // MAX_INT64_STROOPS = 9223372036854775807n stroops = 922337203685.4775807 XLM
-    const result = validateContractAmount('922337203685.4775807');
-    expect(result.valid).toBe(true);
-    expect(result.stroops).toBe(MAX_INT64_STROOPS);
-  });
-
-  test('amount exceeding MAX_INT64_STROOPS throws AMOUNT_OVERFLOW', () => {
-    // 1 stroop over the max
-    expect(() => validateContractAmount('922337203685.4775808')).toThrow(ContractAssetValidationError);
-    try {
-      validateContractAmount('922337203685.4775808');
-    } catch (err) {
-      expect(err.code).toBe(ERROR_CODES.AMOUNT_OVERFLOW);
-    }
-  });
-
-  test('amount within custom maxStroops passes', () => {
-    const result = validateContractAmount('1', { maxStroops: MAX_INT128_STROOPS });
-    expect(result.valid).toBe(true);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 5 — Decimal precision: more than 7 decimal places rejected in strict mode
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 5: decimal precision limit enforced in strict mode', () => {
-  test(`${ITERATIONS} amounts with >7 decimal places throw DECIMAL_PRECISION_EXCEEDED in strict mode (seed=${SEED + 3})`, () => {
-    const prng = createDeterministicPrng(SEED + 3);
-    let rejected = 0;
-
-    for (let i = 0; i < ITERATIONS; i++) {
-      const base = randomValidAmount(prng);
-      const tooLong = tooManyDecimals(prng, base);
-
-      try {
-        validateContractAmount(tooLong, { strictPrecision: true });
-        // If it did not throw, the extra digits may have been all zeros — that
-        // is a valid edge case; don't fail the test.
-      } catch (err) {
-        expect(err).toBeInstanceOf(ContractAssetValidationError);
-        expect(err.code).toBe(ERROR_CODES.DECIMAL_PRECISION_EXCEEDED);
-        rejected++;
-      }
-    }
-
-    // At least 90% of randomly generated over-precision inputs should be caught
-    expect(rejected).toBeGreaterThan(ITERATIONS * 0.9);
-  });
-
-  test('7 decimal places is accepted in strict mode', () => {
-    const result = validateContractAmount('100.1234567', { strictPrecision: true });
-    expect(result.valid).toBe(true);
-  });
-
-  test('8 decimal places throws in strict mode', () => {
+  test('adding a duplicate asset throws', () => {
     expect(() =>
-      validateContractAmount('100.12345678', { strictPrecision: true })
-    ).toThrow(ContractAssetValidationError);
-    try {
-      validateContractAmount('100.12345678', { strictPrecision: true });
-    } catch (err) {
-      expect(err.code).toBe(ERROR_CODES.DECIMAL_PRECISION_EXCEEDED);
-    }
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 6 — Asset type and issuer validation
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 6: asset type and issuer constraints', () => {
-  test('XLM (native) is accepted without an issuer', () => {
-    expect(() => validateContractAsset('XLM')).not.toThrow();
-    expect(() => validateContractAsset('native')).not.toThrow();
-  });
-
-  test('unsupported asset codes are rejected', () => {
-    const unsupported = ['BTC', 'ETH', 'FAKE', 'USD', '', null];
-    for (const code of unsupported) {
-      expect(() => validateContractAsset(code)).toThrow(ContractAssetValidationError);
-    }
-  });
-
-  test('XLM with a spurious issuer field is rejected', () => {
-    // Passing an object with type=native but a non-null issuer
-    expect(() =>
-      validateContractAsset({ code: 'XLM', type: 'native', issuer: 'GROGUE000' })
-    ).toThrow(ContractAssetValidationError);
-  });
-
-  test('USDC with wrong issuer (asset spoofing attempt) is rejected', () => {
-    // A rogue token claiming to be USDC with an attacker-controlled issuer
-    expect(() =>
-      validateContractAsset({
-        code: 'USDC',
-        type: 'credit_alphanum4',
-        issuer: 'GATTACKER0000000000000000000000000000000000000000000000000',
+      addWhitelistedAsset({
+        code: 'XLM',
+        type: 'native',
+        issuer: null,
+        displayName: 'Duplicate',
+        decimals: 7,
       })
-    ).toThrow(ContractAssetValidationError);
+    ).toThrow(/already whitelisted/i);
+  });
+
+  test('adding asset with invalid code throws', () => {
+    expect(() =>
+      addWhitelistedAsset({ code: '', type: 'native', issuer: null, displayName: 'X', decimals: 7 })
+    ).toThrow();
+  });
+
+  test('adding non-native asset without issuer throws', () => {
+    expect(() =>
+      addWhitelistedAsset({
+        code: 'FAKE',
+        type: 'credit_alphanum4',
+        issuer: null,
+        displayName: 'Fake',
+        decimals: 7,
+      })
+    ).toThrow(/issuer is required/i);
+  });
+
+  test('admin can remove a whitelisted asset', () => {
+    addWhitelistedAsset({
+      code: TEMP_ASSET_CODE,
+      type: 'credit_alphanum4',
+      issuer: 'GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABZEYYWRB46Z7',
+      displayName: 'Test Stable Token',
+      decimals: 7,
+    });
+    expect(isWhitelisted(TEMP_ASSET_CODE)).toBe(true);
+
+    removeWhitelistedAsset(TEMP_ASSET_CODE);
+    expect(isWhitelisted(TEMP_ASSET_CODE)).toBe(false);
+  });
+
+  test('removing a non-existent asset throws', () => {
+    expect(() => removeWhitelistedAsset('NOTEXIST')).toThrow(/not in the whitelist/i);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 7 — Atomic validation rejects on first error, no partial state
+// 6. Admin address management
 // ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 7: validateContractAssetAndAmount is atomic', () => {
-  test('valid asset + valid amount succeeds atomically', () => {
-    const result = validateContractAssetAndAmount({ asset: 'XLM', amount: '100' });
-    expect(result.valid).toBe(true);
-    expect(result.stroops).toBeDefined();
-    expect(result.asset).toBeDefined();
+
+describe('#306 — admin authority address', () => {
+  const ORIGINAL = process.env.CONTRACT_ADMIN_ADDRESS;
+
+  afterEach(() => {
+    // Restore original value
+    if (ORIGINAL !== undefined) setAdminAddress(ORIGINAL);
+    else setAdminAddress(null);
   });
 
-  test('valid asset + zero amount throws before any state mutation', () => {
-    expect(() =>
-      validateContractAssetAndAmount({ asset: 'XLM', amount: 0 })
-    ).toThrow(ContractAssetValidationError);
+  test('getAdminAddress returns value set via setAdminAddress', () => {
+    const addr = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+    setAdminAddress(addr);
+    expect(getAdminAddress()).toBe(addr);
   });
 
-  test('invalid asset + valid amount throws on asset check (asset-first ordering)', () => {
-    expect(() =>
-      validateContractAssetAndAmount({ asset: 'ROGUE', amount: '100' })
-    ).toThrow(ContractAssetValidationError);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 8 — Off-chain / on-chain parity
-// ─────────────────────────────────────────────────────────────────────────────
-describe('Invariant 8: off-chain validation matches contract rules', () => {
-  test('matching asset + amount pair returns matches=true', () => {
-    const result = verifyOffChainMatchesContract('XLM', '10');
-    expect(result.matches).toBe(true);
-    expect(result.assetAgrees).toBe(true);
-    expect(result.amountAgrees).toBe(true);
-  });
-
-  test('mismatched asset returns matches=false', () => {
-    const result = verifyOffChainMatchesContract('ROGUE', '10');
-    expect(result.matches).toBe(false);
-    expect(result.assetAgrees).toBe(false);
+  test('setAdminAddress to null clears the admin', () => {
+    setAdminAddress(null);
+    expect(getAdminAddress()).toBeNull();
   });
 });

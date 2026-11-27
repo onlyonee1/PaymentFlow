@@ -24,6 +24,7 @@ const {
   listDeadLetterJobs,
   getDeadLetterJobDetails,
   replayDeadLetterJob,
+  replayQueueDeadLetterJob,
 } = require('../controllers/bullMQAdminController');
 const {
   listDeadLetterEvents,
@@ -34,10 +35,22 @@ const {
 } = require('../controllers/outboxAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
-const { triggerRun, getDiscrepancies, reviewDiscrepancy } = require('../controllers/reconciliationAdminController');
+const { triggerRun, getDiscrepancies, reviewDiscrepancy, getPaymentReconciliationRuns } = require('../controllers/reconciliationAdminController');
+const { runRetentionHandler, previewRetentionHandler, listDeletionCertificates } = require('../controllers/retentionController');
 
 // POST /api/admin/log-level — change log level at runtime
 router.post('/log-level', requireAdminAuth, auditContext, setLogLevel);
+
+router.post('/rotate-signer', requireAdminAuth, async (req, res, next) => {
+  try {
+    const { initiateRotation } = require('../services/stellarSignerRotation');
+    const rotation = await initiateRotation(req.user?.userId || req.admin?.userId || 'super_admin');
+    return res.status(202).json(rotation);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
 
 // Webhook dead-letter queue admin endpoints
 router.get('/webhooks/dlq', requireAdminAuth, listDLQ);
@@ -66,6 +79,7 @@ router.get('/retry-queue/stats', requireAdminAuth, getQueueStats);
 router.get('/retry-queue/dlq', requireAdminAuth, listDeadLetterJobs);
 router.get('/retry-queue/dlq/:jobId', requireAdminAuth, getDeadLetterJobDetails);
 router.post('/retry-queue/dlq/:jobId/replay', requireAdminAuth, auditContext, replayDeadLetterJob);
+router.post('/retry-queue/dlq/:queue/:jobId/replay', requireAdminAuth, auditContext, replayQueueDeadLetterJob);
 
 // Outbox dead-letter queue admin endpoints (Issue #1339)
 router.get('/outbox/dead-letter', requireAdminAuth, listDeadLetterEvents);
@@ -74,9 +88,15 @@ router.post('/outbox/dead-letter/:eventId/replay', requireAdminAuth, auditContex
 router.delete('/outbox/dead-letter/:eventId', requireAdminAuth, auditContext, discardDeadLetterEvent);
 router.get('/outbox/stats', requireAdminAuth, getOutboxStats);
 
+// Data retention operations and immutable deletion certificates.
+router.post('/retention/run', requireAdminAuth, auditContext, runRetentionHandler);
+router.get('/retention/preview', requireAdminAuth, previewRetentionHandler);
+router.get('/retention/certificates', requireAdminAuth, listDeletionCertificates);
+
 // Provider reconciliation job — Issue #33
 // Trigger a bounded, idempotent reconciliation run and inspect discrepancy records.
 router.post('/reconciliation/run',  requireAdminAuth, auditContext, triggerRun);
+router.get('/reconciliation/runs', requireAdminAuth, getPaymentReconciliationRuns);
 router.get('/reconciliation',       requireAdminAuth, getDiscrepancies);
 router.patch('/reconciliation/:id', requireAdminAuth, auditContext, reviewDiscrepancy);
 

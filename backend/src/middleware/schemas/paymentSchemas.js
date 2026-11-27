@@ -14,7 +14,7 @@
  */
 
 const Joi = require('joi');
-const { decimalAmountJoi, CURRENCY_RULES } = require('../utils/decimalPrecision');
+const { decimalAmountJoi, CURRENCY_RULES } = require('../../utils/decimalPrecision');
 
 // ── Shared atomic rules ──────────────────────────────────────────────────────
 
@@ -47,7 +47,7 @@ const MIN_AMOUNT = 1.0;
  * Uses decimalAmountJoi() so the same rules apply to the fee controller and any
  * future endpoint that accepts monetary values.
  */
-const stellarAmount = decimalAmountJoi({ minValue: MIN_AMOUNT })
+const stellarAmount = decimalAmountJoi({ currency: 'XLM', minValue: MIN_AMOUNT })
   .messages({
     'any.required': '"amount" is required',
     'any.invalid':  '"amount" {{#reason}}',
@@ -90,10 +90,11 @@ const createPaymentIntentSchema = Joi.object({
  *                    and non-empty.
  */
 const submitTransactionSchema = Joi.object({
-  xdr: Joi.string().trim().min(1).required().messages({
+  xdr: Joi.string().trim().min(1).max(48 * 1024).required().messages({
     'string.base':  '"xdr" must be a string',
     'string.empty': '"xdr" must not be an empty string',
     'string.min':   '"xdr" must not be an empty string',
+    'string.max':   '"xdr" must not exceed 49152 characters',
     'any.required': '"xdr" is required',
   }),
 }).options({ allowUnknown: false, abortEarly: false });

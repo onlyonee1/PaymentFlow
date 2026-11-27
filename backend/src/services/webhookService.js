@@ -280,6 +280,20 @@ async function _writeDeliveryLog({
       error: error || null,
       lastAttemptAt: new Date(),
     });
+
+    if (endpointId) {
+      const WebhookEndpoint = require('../models/webhookEndpointModel');
+      const attemptedAt = new Date();
+      await WebhookEndpoint.updateOne(
+        { _id: endpointId, schoolId },
+        success
+          ? { $set: { consecutiveFailures: 0, lastDeliveredAt: attemptedAt, lastStatusCode: statusCode || null } }
+          : {
+            $inc: { consecutiveFailures: 1 },
+            $set: { lastFailedAt: attemptedAt, lastStatusCode: statusCode || null },
+          }
+      );
+    }
   } catch (err) {
     logger.error('Failed to write webhook delivery log', {
       deliveryId, endpointId, error: err.message,
@@ -356,9 +370,12 @@ async function _sendToUrl({
     headers['X-StellarEduPay-Signature-V2'] = `sha256=${generateSignatureV2(timestamp, deliveryId, rawBody, secret)}`;
   }
 
-  // Generic tracing header (#978); the vendor-specific correlation + signature
+  // Generic tracing header (#978, #275); the vendor-specific correlation + signature
   // headers are already set above.
-  if (correlationId) headers['X-Correlation-ID'] = correlationId;
+  if (correlationId) {
+    headers['X-Correlation-ID'] = correlationId;
+    headers['X-Request-ID'] = correlationId;
+  }
 
   const http = _buildAxiosInstance();
   const startTime = Date.now();
@@ -378,7 +395,8 @@ async function _sendToUrl({
     // #868: record success metric
     try {
       const { recordDeliverySuccess } = require('../metrics/webhookMetrics');
-      recordDeliverySuccess(event, durationMs, response.status);
+      if (schoolId) recordDeliverySuccess(event, durationMs, response.status, schoolId);
+      else recordDeliverySuccess(event, durationMs, response.status);
     } catch (_) {}
 
     if (endpointId) {
@@ -862,8 +880,8 @@ async function retryWebhook(retry) {
 
     // Record dead-letter metrics
     try {
-      const { recordDeliveryFailure, recordTerminalOutcome, refreshDeadLetterGauge } = require('../metrics/webhookMetrics');
-      recordDeliveryFailure(retry.event, 0, true, retry.schoolId || 'unknown', result.statusCode, result.error);
+      const { recordDeadLetter, recordTerminalOutcome, refreshDeadLetterGauge } = require('../metrics/webhookMetrics');
+      recordDeadLetter(retry.schoolId || 'unknown');
       recordTerminalOutcome(retry.event, 'dead_lettered');
       refreshDeadLetterGauge().catch(() => {});
     } catch (_) {}

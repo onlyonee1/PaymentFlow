@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
-const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleRevokeUserSessions, handleChangePassword } = require('../controllers/authController');
+const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleRevokeUserSessions, handleRevokeOwnSessions, handleChangePassword, handleResetPassword } = require('../controllers/authController');
 const {
   setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
@@ -20,31 +20,41 @@ const loginLimiter = rl(
 );
 
 // ── Core auth routes ──────────────────────────────────────────────────────────
+// #614 — Refresh token rotation: POST /refresh issues a new access + refresh
+// token pair, invalidates the old refresh token, and detects reuse (token theft).
+// Both tokens are delivered exclusively as HttpOnly, SameSite=Strict cookies.
 router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
-router.get('/me', requireAdminAuth, handleMe);
+router.get('/me', requireSchoolAuth(), handleMe);
 
 // ── Password management ───────────────────────────────────────────────────────
 // #1360 — Changing the password immediately invalidates all existing sessions
 // so stolen refresh tokens cannot outlive a password reset.
 router.post('/change-password', requireSchoolAuth(), handleChangePassword);
+router.post('/users/:userId/reset-password', requireAdminAuth, handleResetPassword);
 
 // ── Session management ────────────────────────────────────────────────────────
-router.get('/sessions', requireAdminAuth, handleListSessions);
-router.delete('/sessions/:sessionId', requireAdminAuth, handleRevokeSession);
+router.get('/sessions', requireSchoolAuth(), handleListSessions);
+router.delete('/sessions', requireSchoolAuth(), handleRevokeOwnSessions);
+router.delete('/sessions/:sessionId', requireSchoolAuth(), handleRevokeSession);
 // Admin revocation by userId — revokes ALL active sessions for the given user.
 // Requires admin auth. Used for account-takeover response and forced password
 // reset scenarios where all refresh tokens must be invalidated immediately.
 router.delete('/sessions/user/:userId', requireAdminAuth, handleRevokeUserSessions);
 
 // ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
+// #618 — /mfa/enroll is the documented entry-point; /mfa/setup kept as alias.
+router.post('/mfa/enroll',  requireAdminAuth, setupMfa);
 router.post('/mfa/setup',   requireAdminAuth, setupMfa);
 router.post('/mfa/verify',  requireAdminAuth, verifyAndEnableMfa);
 router.post('/mfa/disable', requireAdminAuth, disableMfa);
 router.post('/mfa/backup-codes/regenerate', requireAdminAuth, regenerateBackupCodes);
 
 // ── User-level TOTP / MFA routes (any authenticated user) ────────────────────
+// #618 — enroll is the canonical entry-point name from the issue spec; setup
+// is kept as an alias so existing integrations are not broken.
+router.post('/mfa/user/enroll',  requireSchoolAuth(), setupUserMfa);
 router.post('/mfa/user/setup',   requireSchoolAuth(), setupUserMfa);
 router.post('/mfa/user/verify',  requireSchoolAuth(), verifyAndEnableUserMfa);
 router.post('/mfa/user/disable', requireSchoolAuth(), disableUserMfa);

@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDisputes, resolveDispute } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
+import { useAbortController } from "../hooks/useAbortController";
 import {
-  IconAlertTriangle, IconExternalLink, IconSearch,
+  IconAlertTriangle, IconExternalLink,
+  IconSearch,
 } from "../components/Icons";
 import PageHero from "../components/PageHero";
 import Pagination from "../components/Pagination";
 import RequireAdmin from "../components/RequireAdmin";
+import EmptyState from "../components/EmptyState";
+import AccessiblePagination from "../components/AccessiblePagination";
+import DisputeStatusTracker from "../components/DisputeStatusTracker";
 import { useTranslation } from "react-i18next";
 import TimestampDisplay, { DISPLAY_MODE } from "../components/TimestampDisplay";
+import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const STATUS_META = {
   open:         { cls: "badge-success", labelKey: "status.dispute.open" },
@@ -129,7 +135,14 @@ function ResolveForm({ dispute, onResolved }) {
 
 function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
   const { t } = useTranslation();
-  const canResolve = dispute.status === "open" || dispute.status === "under_review";
+  let isAdmin = false;
+  try {
+    const auth = useAdminAuthContext();
+    isAdmin = !!auth?.isAdmin;
+  } catch {
+    isAdmin = true;
+  }
+  const canResolve = (dispute.status === "open" || dispute.status === "under_review") && isAdmin;
 
   return (
     <div className="card" style={{ marginBottom: "0.75rem" }}>
@@ -171,6 +184,9 @@ function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
             : dispute.reason}
         </p>
 
+        {/* Dispute Status Tracker */}
+        <DisputeStatusTracker status={dispute.status} />
+
         <button
           onClick={onToggle}
           aria-expanded={expanded}
@@ -211,6 +227,10 @@ function DisputesContent() {
 
   // Auth is cookie-based; the axios interceptor in api.js handles 401 → /login redirect.
 
+  // Issue #254 — abort in-flight requests when the component unmounts so we
+  // never call setState on an unmounted component or apply stale responses.
+  const { signal } = useAbortController();
+
   const fetchDisputes = useCallback(async (p = page) => {
     setLoading(true);
     setError(null);
@@ -218,16 +238,18 @@ function DisputesContent() {
       const params = { page: p, limit: pageSize };
       if (statusFilter) params.status = statusFilter;
       if (studentFilter.trim()) params.studentId = studentFilter.trim();
-      const res = await getDisputes(params);
+      const res = await getDisputes(params, { signal });
       setDisputes(res.data.disputes || []);
       setTotalPages(res.data.pagination?.totalPages || 1);
       setTotalCount(res.data.pagination?.total || 0);
     } catch (err) {
+      // Silently ignore requests cancelled on unmount.
+      if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
       setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("disputes.failedToLoad"));
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, statusFilter, studentFilter, t]);
+  }, [page, pageSize, statusFilter, studentFilter, t, signal]);
 
   useEffect(() => { fetchDisputes(page); }, [page, pageSize, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -336,12 +358,22 @@ function DisputesContent() {
             ))}
           </div>
         ) : disputes.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "4rem", color: "var(--text-muted)" }}>
-            <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("disputes.empty")}</p>
-            <p style={{ fontSize: "0.8125rem" }}>
-              {statusFilter || studentFilter ? t("disputes.emptyFilters") : t("disputes.emptyNone")}
-            </p>
-          </div>
+          <EmptyState
+            variant={statusFilter || studentFilter ? "filtered" : "empty"}
+            title={t("disputes.empty")}
+            description={statusFilter || studentFilter ? t("disputes.emptyFilters") : t("disputes.emptyNone")}
+            action={
+              statusFilter || studentFilter
+                ? {
+                    label: t("disputes.clearFilters"),
+                    onClick: () => {
+                      setStatusFilter("");
+                      setStudentFilter("");
+                    },
+                  }
+                : undefined
+            }
+          />
         ) : (
           <div>
             <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
@@ -358,16 +390,19 @@ function DisputesContent() {
               />
             ))}
 
-            <Pagination
-              page={page}
-              pages={totalPages}
-              total={totalCount}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 20, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              loading={loading}
-            />
+            {totalPages > 1 && (
+              <AccessiblePagination
+                currentPage={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                total={totalCount}
+                rangeStart={(page - 1) * 20 + 1}
+                rangeEnd={Math.min(page * 20, totalCount)}
+                loading={loading}
+                ariaLabel={t("disputes.title")}
+                itemLabel={t("disputes.title")}
+              />
+            )}
           </div>
         )}
       </div>
@@ -376,9 +411,5 @@ function DisputesContent() {
 }
 
 export default function DisputesPage() {
-  return (
-    <RequireAdmin>
-      <DisputesContent />
-    </RequireAdmin>
-  );
+  return <DisputesContent />;
 }
