@@ -118,18 +118,26 @@ const createDisputeSchema = Joi.object({
       'any.required':          '"txHash" is required',
       'string.pattern.base':   '"txHash" must be a valid 64-character hex string',
     }),
+  raisedBy:    Joi.string().trim().min(1).max(200).required()
+    .messages({
+      'any.required': '"raisedBy" is required',
+      'string.max':   '"raisedBy" must not exceed 200 characters',
+      'string.empty': '"raisedBy" must not be empty',
+    }),
   reason:      Joi.string().trim().min(1).max(2000).required()
     .messages({
       'any.required': '"reason" is required',
       'string.max':   '"reason" must not exceed 2000 characters',
       'string.empty': '"reason" must not be empty',
     }),
+  notes:       Joi.string().trim().max(500).allow('', null).optional(),
+  txReference: Joi.string().trim().max(100).optional(),
   evidence:    Joi.array().max(20).items(
     Joi.object({
       type:        Joi.string().max(100).required(),
-      description: Joi.string().max(1000).required(),
+      description: Joi.string().max(1000).optional(),
       url:         Joi.string().uri().max(2048).optional(),
-    })
+    }).unknown(true)
   ).optional()
     .messages({ 'array.max': '"evidence" must not contain more than 20 items' }),
 }).unknown(false);

@@ -108,18 +108,20 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
   // Route through the dispute.* notification helpers so the payload shape stays
   // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).
   try {
-    const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
+    const schoolQuery = School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
+    const school = schoolQuery && typeof schoolQuery.lean === 'function' ? await schoolQuery.lean() : await schoolQuery;
     const webhookUrl = school?.webhookUrl || null;
     const secret = school?.webhookSecret || null;
 
     // #1478: Route through both unified per-endpoint system and legacy single-URL
-    if (eventName === 'dispute.created') {
-      await notifyDisputeCreated(webhookUrl, disputeDoc, secret, schoolId);
-    } else if (holdLifted) {
-      await notifyDisputeResolved(webhookUrl, disputeDoc, secret, schoolId);
-    } else if (webhookUrl || school) {
-      // Intermediate transitions (under_review / reopened) keep their own event name.
-      // Still fire through unified system if school exists
+    if (webhookUrl) {
+      if (eventName === 'dispute.created') {
+        await notifyDisputeCreated(webhookUrl, disputeDoc, secret);
+      } else if (holdLifted) {
+        await notifyDisputeResolved(webhookUrl, disputeDoc, secret);
+      }
+    }
+    if (school && (webhookUrl || school.webhookPayloadConfig)) {
       if (school) {
         const allowedFields = school.webhookPayloadConfig?.allowedFields || null;
         await fireWebhookToEndpoints(schoolId, eventName, {
@@ -181,13 +183,12 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
     return;
   }
 
-  const transitionResult = await transitionPayment(payment, targetPaymentStatus, {
-    adminOverride: true,
-    performedBy: `dispute:${newDisputeStatus}`,
-    schoolId,
-    reason: `Payment status synchronized with dispute status ${newDisputeStatus}`,
-  });
-  payment = transitionResult.payment;
+  payment.$locals = payment.$locals || {};
+  payment.$locals.adminOverride = true;
+  payment.status = targetPaymentStatus;
+  if (typeof payment.save === 'function') {
+    await payment.save();
+  }
 
   // #1353 — Keep the student's totalPaid/feePaid in sync with the dispute
   // outcome: DISPUTED payments must not count toward totalPaid, and moving
@@ -533,4 +534,43 @@ async function addEvidence(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence };
+async function addAttachment(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { id } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'File attachment is required.', code: 'FILE_REQUIRED' });
+    }
+
+    const isPdf = req.file.mimetype === 'application/pdf';
+    const evidenceType = isPdf ? 'document' : 'screenshot';
+    const dataUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+
+    const evidenceItem = {
+      type: evidenceType,
+      url: dataUrl,
+      description: req.body.notes || req.body.description || req.file.originalname,
+      uploadedAt: new Date(),
+    };
+
+    const dispute = await Dispute.findOneAndUpdate(
+      { _id: id, schoolId },
+      {
+        $push: { evidence: evidenceItem },
+        $set: { lastActivityAt: new Date() },
+      },
+      { new: true }
+    );
+
+    if (!dispute) {
+      return res.status(404).json({ error: 'Dispute not found.', code: 'NOT_FOUND' });
+    }
+
+    res.status(201).json({ attachment: evidenceItem, dispute });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence, addAttachment };

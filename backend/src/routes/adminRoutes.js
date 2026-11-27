@@ -35,7 +35,7 @@ const {
 } = require('../controllers/outboxAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
-const { triggerRun, getDiscrepancies, reviewDiscrepancy } = require('../controllers/reconciliationAdminController');
+const { triggerRun, getDiscrepancies, reviewDiscrepancy, getPaymentReconciliationRuns } = require('../controllers/reconciliationAdminController');
 const { runRetentionHandler, previewRetentionHandler, listDeletionCertificates } = require('../controllers/retentionController');
 
 // POST /api/admin/log-level — change log level at runtime

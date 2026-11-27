@@ -172,6 +172,10 @@ export const getDisputes = (params = {}, { signal } = {}) => api.get("/disputes"
 export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
+export const uploadDisputeAttachment = (id, formData) =>
+  api.post(`/disputes/${id}/attachments`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 
 // Refunds
 export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
