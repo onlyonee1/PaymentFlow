@@ -25,6 +25,7 @@ const PUBLIC_NAV = [
 
 const ADMIN_NAV = [
   { href: "/fees",                    label: "Fees",          Icon: IconDollarSign },
+  { href: "/bulk-import",             label: "Bulk Import",   Icon: IconUsers },
   { href: "/analytics",               label: "Analytics",     Icon: IconTrendingUp },
   { href: "/fee-adjustments",         label: "Fee Rules",     Icon: IconLayers },
   { href: "/source-validation-rules", label: "Source Rules",  Icon: IconShield },

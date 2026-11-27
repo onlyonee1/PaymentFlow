@@ -54,10 +54,7 @@ const APP_LAYOUT_ROUTES = [
   "/disputes",
   "/admin/reconciliation",
   "/source-validation-rules",
-  "/audit-logs",
-  "/fee-adjustments",
-  "/fees",
-  "/reports",
+  "/bulk-import",
 ];
 
 const ROUTE_SECTION_NAMES = {
