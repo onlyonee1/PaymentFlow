@@ -42,8 +42,8 @@ jest.mock('@stellar/stellar-sdk', () => {
     build()        { return mockBuild(); }
   }
 
-  // Static buildFeeBump — replaced by tests via the module handle below
-  MockTransactionBuilder.buildFeeBump = jest.fn();
+  // Static buildFeeBumpTransaction — replaced by tests via the module handle below
+  MockTransactionBuilder.buildFeeBumpTransaction = jest.fn();
 
   const MockTransaction = class {
     constructor(_xdr, _passphrase) {}
@@ -113,7 +113,7 @@ beforeEach(() => {
   mockSubmitTransaction.mockResolvedValue(MOCK_TX);
 
   const fakeFeeBumpTx = { sign: jest.fn() };
-  StellarSdk.TransactionBuilder.buildFeeBump = jest.fn(() => fakeFeeBumpTx);
+  StellarSdk.TransactionBuilder.buildFeeBumpTransaction = jest.fn(() => fakeFeeBumpTx);
 });
 
 // ── Constructor ────────────────────────────────────────────────────────────
@@ -290,12 +290,12 @@ describe('buildAndSubmit', () => {
 // ── submitFeeBump ──────────────────────────────────────────────────────────
 
 describe('submitFeeBump', () => {
-  it('calls buildFeeBump with the inner transaction and submits', async () => {
+  it('calls buildFeeBumpTransaction with the inner transaction and submits', async () => {
     mockSubmitTransaction.mockResolvedValue({ hash: 'bump-hash', ledger: 99 });
     const kp  = makeKeypair();
     const mgr = new StellarTransactionManager({ signingKeypair: kp });
     const result = await mgr.submitFeeBump('inner-xdr', { feeMultiplier: 3 });
-    expect(StellarSdk.TransactionBuilder.buildFeeBump).toHaveBeenCalled();
+    expect(StellarSdk.TransactionBuilder.buildFeeBumpTransaction).toHaveBeenCalled();
     expect(result.hash).toBe('bump-hash');
     expect(result.ledger).toBe(99);
   });
