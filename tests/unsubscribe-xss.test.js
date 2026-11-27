@@ -13,7 +13,7 @@
 // Must be set before app is loaded
 process.env.MONGO_URI            = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
+process.env.JWT_SECRET = 'test-secret-32-chars-xxxxxxxxxxx';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ jest.mock('../backend/src/services/auditService', () => ({
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const request = require('supertest');
-const { generateUnsubscribeToken } = require('../backend/src/utils/unsubscribeToken');
+const { generateUnsubscribeToken, generateEmailUnsubscribeToken } = require('../backend/src/utils/unsubscribeToken');
 const app = require('../backend/src/app');
 
 const JWT_SECRET = 'test-secret-32-chars-xxxxxxxxxxx';
@@ -235,7 +235,7 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
 
     const token = makeToken();
     const res = await request(app)
-      .get(`/api/reminders/unsubscribe?token=${token}`)
+      .get(`/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`)
       .set('X-School-ID', SCHOOL_ID);
 
     expect(res.status).toBe(200);
@@ -256,7 +256,7 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
 
     const token = makeToken();
     const res = await request(app)
-      .get(`/api/reminders/unsubscribe?token=${token}`)
+      .get(`/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`)
       .set('X-School-ID', SCHOOL_ID);
 
     expect(res.status).toBe(200);
@@ -271,7 +271,7 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
 
     const token = makeToken();
     const res = await request(app)
-      .get(`/api/reminders/unsubscribe?token=${token}`)
+      .get(`/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`)
       .set('X-School-ID', SCHOOL_ID);
 
     expect(res.status).toBe(200);
@@ -286,7 +286,7 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
 
     const token = makeToken();
     const res = await request(app)
-      .get(`/api/reminders/unsubscribe?token=${token}`)
+      .get(`/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`)
       .set('X-School-ID', SCHOOL_ID);
 
     expect(res.status).toBe(200);
@@ -300,7 +300,7 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
 
     const token = makeToken();
     const res = await request(app)
-      .get(`/api/reminders/unsubscribe?token=${token}`)
+      .get(`/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`)
       .set('X-School-ID', SCHOOL_ID);
 
     expect(res.status).toBe(200);
@@ -314,6 +314,14 @@ describe('GET /api/reminders/unsubscribe — XSS regression (stored XSS via stud
       .set('X-School-ID', SCHOOL_ID);
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty('code', 'VALIDATION_ERROR');
+  });
+
+  test('a signed category cannot be changed in the public link', async () => {
+    const token = generateEmailUnsubscribeToken(STUDENT_ID, SCHOOL_ID, 'payment_confirmation', JWT_SECRET);
+    const res = await request(app).get('/unsubscribe').query({ token, type: 'dispute_update' });
+
+    expect(res.status).toBe(400);
+    expect(Student.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   test('invalid/tampered token returns 400', async () => {

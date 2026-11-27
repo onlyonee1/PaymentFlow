@@ -34,7 +34,8 @@ jest.mock('../backend/node_modules/mongoose', () => {
   return actual;
 });
 
-const DEFAULT_TTL_SECONDS = 90 * 24 * 60 * 60;
+const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
+const MIGRATION_028_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 /** The TTL index entry on a schema, if any. */
 function findTtlIndex(schema) {
@@ -64,7 +65,7 @@ describe('webhookDeliveryModel retention config', () => {
     return jest.requireActual('../backend/src/models/webhookDeliveryModel');
   }
 
-  test('defaults to 90 days', () => {
+  test('defaults to 7 days', () => {
     delete process.env.WEBHOOK_DELIVERY_RETENTION_DAYS;
     delete process.env.WEBHOOK_DELIVERY_TTL_SECONDS;
     expect(loadModel().resolveTtlSeconds()).toBe(DEFAULT_TTL_SECONDS);
@@ -128,7 +129,7 @@ describe('migration 028 — TTL index on webhookdeliveries', () => {
     await migration.up();
     expect(mockCollectionObj.createIndex).toHaveBeenCalledWith(
       { createdAt: 1 },
-      { expireAfterSeconds: DEFAULT_TTL_SECONDS },
+      { expireAfterSeconds: MIGRATION_028_TTL_SECONDS },
     );
   });
 
@@ -189,7 +190,7 @@ describe('documentation', () => {
   test('documents the retention policy and both variables', () => {
     expect(doc).toContain('WEBHOOK_DELIVERY_RETENTION_DAYS');
     expect(doc).toContain('WEBHOOK_DELIVERY_TTL_SECONDS');
-    expect(doc).toMatch(/90 days/);
+    expect(doc).toMatch(/7 days/);
   });
 
   test('names the migration operators must run', () => {
