@@ -3,6 +3,7 @@
 const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
 const tenantScope = require('../plugins/tenantScope');
+const { classAssignment } = require('../utils/studentClassHistory');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
 
 const feeCategorySchema = new mongoose.Schema(
@@ -17,12 +18,21 @@ const feeCategorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const classAssignmentSchema = new mongoose.Schema({
+  class: { type: String, required: true },
+  from: { type: Date, required: true },
+  to: { type: Date, default: null },
+  assignedBy: { type: String, default: null },
+}, { _id: false });
+
 const studentSchema = new mongoose.Schema(
   {
     schoolId: { type: String, required: true, index: true },
     studentId: { type: String, required: true, index: true, maxlength: [28, 'studentId must not exceed 28 characters (Stellar memo limit)'] },
     name: { type: String, required: true },
+    // Indexed projection of the open class assignment for existing roster queries.
     class: { type: String, required: true, index: true },
+    classHistory: { type: [classAssignmentSchema], default: [] },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
     fees: { type: [feeCategorySchema], default: [] },
@@ -132,6 +142,12 @@ studentSchema.index({ totalPaid: 1 });
 studentSchema.index({ name: 'text', studentId: 'text' });
 // Issue #39 — getAllStudents list (not deleted, sorted by createdAt)
 studentSchema.index({ schoolId: 1, deletedAt: 1, createdAt: -1 });
+
+studentSchema.pre('validate', function () {
+  if (this.isNew && this.class && !this.classHistory?.length) {
+    this.classHistory = [classAssignment(this.class, this.createdAt ?? new Date())];
+  }
+});
 
 // ── Parent contact PII encryption at rest — Issue #1480 ─────────────────────
 // Encrypt parentEmail/parentPhone before persisting, then decrypt them back

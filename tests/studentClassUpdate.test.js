@@ -11,6 +11,7 @@
  */
 
 jest.mock('../backend/src/models/studentModel');
+jest.mock('../backend/src/services/reportCacheInvalidator', () => ({ invalidate: jest.fn() }));
 jest.mock('../backend/src/models/feeStructureModel', () => ({ findOne: jest.fn() }));
 jest.mock('../backend/src/services/auditService', () => ({ logAudit: jest.fn() }));
 jest.mock('csv-parser', () => jest.fn());
@@ -32,6 +33,7 @@ const ORIGINAL = {
   class: '5A',
   feeAmount: 200,
   schoolId: 'SCH-001',
+  createdAt: new Date('2025-09-01T00:00:00Z'),
 };
 
 function makeReq(params, body) {
@@ -63,8 +65,15 @@ test('updates class and syncs feeAmount from fee structure', async () => {
 
   expect(FeeStructure.findOne).toHaveBeenCalledWith({ schoolId: 'SCH-001', className: '6B', isActive: true });
   expect(Student.findOneAndUpdate).toHaveBeenCalledWith(
-    { schoolId: 'SCH-001', studentId: 'STU001' },
-    expect.objectContaining({ class: '6B', feeAmount: 300 }),
+    { schoolId: 'SCH-001', studentId: 'STU001', class: '5A', 'classHistory.0': { $exists: false } },
+    expect.objectContaining({
+      class: '6B',
+      feeAmount: 300,
+      classHistory: [
+        { class: '5A', from: ORIGINAL.createdAt, to: expect.any(Date), assignedBy: null },
+        { class: '6B', from: expect.any(Date), to: null, assignedBy: null },
+      ],
+    }),
     expect.any(Object),
   );
   expect(res.json).toHaveBeenCalledWith(updated);

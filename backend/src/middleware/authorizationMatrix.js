@@ -80,6 +80,7 @@ const MATRIX = {
       { method: 'POST',   path: '/api/students' },
       { method: 'POST',   path: '/api/students/bulk' },
       { method: 'PUT',    path: '/api/students/:studentId' },
+      { method: 'PATCH',  path: '/api/students/:studentId' },
       { method: 'DELETE', path: '/api/students/:studentId' },
       { method: 'POST',   path: '/api/students/:studentId/restore' },
       { method: 'POST',   path: '/api/students/:studentId/reset-payment' },
@@ -100,6 +101,7 @@ const MATRIX = {
       { method: 'GET', path: '/api/students/:studentId' },
       { method: 'GET', path: '/api/students/:studentId/payments/audit' },
       { method: 'GET', path: '/api/students/:studentId/fee-history' },
+      { method: 'GET', path: '/api/students/:studentId/class-history' },
     ],
   },
 

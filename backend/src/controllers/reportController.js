@@ -40,6 +40,14 @@ async function generateRequestedReport(req, res, next) {
     const isSync = req.query.async === false || req.query.async === 'false';
     const isLargeReport = !startDate || !endDate || getDaysBetween(startDate, endDate) >= LARGE_REPORT_THRESHOLD_DAYS;
 
+    const { class: className, classAt } = req.query;
+    const classFilter = {
+      ...(className && { className }),
+      ...(classAt && { classAt }),
+    };
+    const reportRange = { startDate: startDate?.slice(0, 10), endDate: endDate?.slice(0, 10) };
+    const classCacheKey = className || classAt ? `:${JSON.stringify([className, classAt])}` : '';
+
     // Audit report exports — exports can contain PII so they are a privileged read
     if (req.auditContext) {
       const { logAudit } = require('../services/auditService');
@@ -54,6 +62,7 @@ async function generateRequestedReport(req, res, next) {
           startDate: startDate || null,
           endDate:   endDate   || null,
           async:     isAsync,
+          ...classFilter,
         },
         result:    'success',
         ipAddress: req.auditContext.ipAddress,
@@ -67,8 +76,7 @@ async function generateRequestedReport(req, res, next) {
           schoolId: req.schoolId,
           type: format === 'accounting_csv' ? 'accounting_csv' : 'report',
           format,
-          startDate,
-          endDate,
+          ...reportRange,
           timezone: (await School.findOne({ schoolId: req.schoolId }).lean())?.timezone || 'UTC',
           ...(groupBy ? { groupBy } : {}),
           schemaVersion: schema_version || (format === 'accounting_csv' ? ACCOUNTING_SCHEMA_VERSION : null),
@@ -115,7 +123,7 @@ async function generateRequestedReport(req, res, next) {
         return res.send(csv);
       }
 
-      const { csv, schemaVersion } = await generateAccountingCsv({ schoolId: req.schoolId, startDate, endDate, timezone });
+      const { csv, schemaVersion } = await generateAccountingCsv({ schoolId: req.schoolId, ...reportRange, timezone, ...classFilter });
       set(cacheKey, { csv, schemaVersion }, TTL.REPORT);
 
       const s = startDate || null;

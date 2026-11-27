@@ -11,6 +11,7 @@ const {
   getStudent,
   getPublicStudentInfo,
   updateStudent,
+  getStudentClassHistory,
   deleteStudent,
   restoreStudent,
   getDeletedStudentPayments,
@@ -287,5 +288,8 @@ router.get('/:studentId/fee-history', requireAdminAuth, validateStudentIdParam, 
 router.post('/:studentId/credit-adjustments', requireAdminAuth, validateStudentIdParam, auditContext, contractPaused, adjustStudentCredit);
 router.delete('/:studentId/pii', requireAdminAuth, validateStudentIdParam, auditContext, eraseStudentPiiHandler);
 router.get('/:studentId/data-export', requireAdminAuth, validateStudentIdParam, exportStudentDataHandler);
+
+router.patch('/:studentId', requireAdminAuth, auditContext, validateStudentIdParam, validateUpdateStudent, updateStudent);
+router.get('/:studentId/class-history', requireAdminAuth, validateStudentIdParam, getStudentClassHistory);
 
 module.exports = router;

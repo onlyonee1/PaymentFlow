@@ -17,7 +17,8 @@ const logger = require('../utils/logger');
 const { storeReportArtifact } = require('./reportArtifactStorage');
 
 async function processReportJob(job) {
-  const { jobId, schoolId, type, startDate, endDate, timezone, schemaVersion, format = 'json' } = job.data;
+  const { jobId, schoolId, type, startDate, endDate, timezone, schemaVersion, className, classAt, format = 'json' } = job.data;
+  const options = { schoolId, startDate, endDate, timezone, className, classAt };
 
   await setJobProcessing(jobId);
   logger.info('[ReportQueueService] Processing report job', { jobId, type, schoolId });

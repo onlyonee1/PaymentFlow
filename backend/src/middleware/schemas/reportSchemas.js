@@ -33,6 +33,9 @@ const reportQuerySchema = Joi.object({
     }
   }
   return value;
-}).messages({ 'any.invalid': '{{#message}}' });
+}).messages({ 'any.invalid': '{{#message}}' }).keys({
+  class: Joi.string().trim().min(1).max(100).optional(),
+  classAt: Joi.string().isoDate().strict().optional(),
+});
 
 module.exports = { reportQuerySchema, MAX_RANGE_DAYS };

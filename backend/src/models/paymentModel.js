@@ -26,6 +26,7 @@ const paymentSchema = new mongoose.Schema(
   {
     schoolId: { type: String, required: true, index: true },
     studentId: { type: String, required: true, index: true },
+    classAtPaymentTime: { type: String, default: null },
 
     // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash } below
     txHash: { type: String, required: true, index: true },
@@ -249,6 +250,24 @@ paymentSchema.virtual('explorerUrl').get(function () {
 
 paymentSchema.virtual('stellarExplorerUrl').get(function () {
   return this.explorerUrl;
+});
+
+paymentSchema.pre('save', async function () {
+  if (this.classAtPaymentTime != null || !this.schoolId || !this.studentId || this.studentId === 'unknown') return;
+  if (!this.isNew && !this.isModified('confirmedAt') && !this.isModified('status')) return;
+
+  // A submitted payment without a ledger timestamp gets its snapshot when it
+  // succeeds. Polled payments can already have the ledger timestamp.
+  const date = this.confirmedAt ?? (this.status === 'SUCCESS' ? (this.createdAt ?? new Date()) : null);
+  if (!date) return;
+
+  const Student = require('./studentModel');
+  const { classAtDate } = require('../utils/studentClassHistory');
+  const student = await Student.findOne(
+    { schoolId: this.schoolId, studentId: this.studentId },
+    { class: 1, classHistory: 1, createdAt: 1 },
+  ).includeDeleted().session(this.$session()).lean();
+  this.classAtPaymentTime = classAtDate(student, date);
 });
 
 /**
