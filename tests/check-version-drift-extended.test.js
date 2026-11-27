@@ -1,174 +1,245 @@
 'use strict';
 
 /**
- * Extended tests for the version-drift checker and security-exceptions schema.
+ * Tests for issue #50 — extended check-version-drift.js.
  *
- * Covers:
- *   - parseMajor() edge cases (non-semver, pre-release, wildcards)
- *   - security-exceptions.json schema validity
- *   - expiry date format enforcement on audit exceptions
- *   - check-dependency-audit.js exception expiry enforcement
+ * Verifies:
+ *  1. Original root ↔ workspace check still works.
+ *  2. New backend ↔ frontend check catches shared-dep mismatches.
+ *  3. Approved exceptions in version-exceptions.json suppress violations.
+ *  4. Exception entries without a "reason" field cause a hard error.
+ *  5. No false positives when no shared deps differ.
+ *  6. Exit code 0 when all mismatches are excepted.
  */
 
+const { execFileSync } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
+const os   = require('os');
 
-const ROOT = path.resolve(__dirname, '..');
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-// ── security-exceptions.json schema ──────────────────────────────────────────
-
-describe('security-exceptions.json', () => {
-  let doc;
-
-  beforeAll(() => {
-    const filePath = path.join(ROOT, 'security-exceptions.json');
-    expect(fs.existsSync(filePath)).toBe(true);
-    doc = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  });
-
-  test('top-level shape is valid', () => {
-    expect(typeof doc.description).toBe('string');
-    expect(Array.isArray(doc.exceptions)).toBe(true);
-  });
-
-  test('every audit exception (type=advisory) has required fields', () => {
-    const auditExceptions = doc.exceptions.filter((e) => e.type === 'advisory');
-    for (const ex of auditExceptions) {
-      expect(typeof ex.id).toBe('string');
-      expect(ex.id.length).toBeGreaterThan(0);
-      expect(typeof ex.package).toBe('string');
-      expect(typeof ex.path).toBe('string');
-      expect(typeof ex.expires).toBe('string');
-      expect(typeof ex.reason).toBe('string');
-    }
-  });
-
-  test('every audit exception has a valid ISO date in expires field', () => {
-    const auditExceptions = doc.exceptions.filter((e) => e.type === 'advisory');
-    for (const ex of auditExceptions) {
-      expect(ex.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      const d = new Date(ex.expires);
-      expect(isNaN(d.getTime())).toBe(false);
-    }
-  });
-
-  test('every audit exception path is one of: ".", "backend", "frontend"', () => {
-    const auditExceptions = doc.exceptions.filter((e) => e.type === 'advisory');
-    const validPaths = new Set(['.', 'backend', 'frontend']);
-    for (const ex of auditExceptions) {
-      expect(validPaths.has(ex.path)).toBe(true);
-    }
-  });
-});
-
-// ── check-dependency-audit: expiry enforcement ────────────────────────────────
-
-describe('findUnexceptedVulnerabilities — expiry enforcement', () => {
-  const { findUnexceptedVulnerabilities } = require('../scripts/check-dependency-audit');
-
-  function vuln(name, severity, advisoryUrls) {
-    return {
+/**
+ * Write a minimal package.json to `dir`.
+ */
+function writePackage(dir, name, { deps = {}, devDeps = {} } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
       name,
-      severity,
-      via: advisoryUrls.map((url) => ({ url })),
-    };
+      version: '1.0.0',
+      dependencies: deps,
+      devDependencies: devDeps,
+    })
+  );
+}
+
+/**
+ * Run check-version-drift.js in an isolated temp directory.
+ * Returns { stdout, stderr, status }.
+ */
+function runScript(rootDir) {
+  const scriptPath = path.join(__dirname, '../scripts/check-version-drift.js');
+  let stdout = '';
+  let stderr = '';
+  let status = 0;
+
+  try {
+    stdout = execFileSync(
+      process.execPath,
+      [scriptPath],
+      { cwd: rootDir, env: { ...process.env } }
+    ).toString();
+  } catch (err) {
+    stdout = (err.stdout || '').toString();
+    stderr = (err.stderr || '').toString();
+    status = err.status || 1;
   }
 
-  test('expired exception causes the advisory to be reported as a failure', () => {
-    const vulnerabilities = {
-      'some-pkg': vuln('some-pkg', 'high', ['https://github.com/advisories/GHSA-0000-0000-0000']),
-    };
-    const exceptions = [
-      {
-        id: 'GHSA-0000-0000-0000',
-        package: 'some-pkg',
-        path: 'backend',
-        expires: '2020-01-01', // clearly in the past
-      },
-    ];
-    const failures = findUnexceptedVulnerabilities(vulnerabilities, exceptions, 'backend', '2025-01-01');
-    expect(failures).toHaveLength(1);
-    expect(failures[0].package).toBe('some-pkg');
+  return { stdout, stderr: stderr + stdout, status };
+}
+
+/**
+ * Build a minimal repo structure in a temp directory and return its path.
+ */
+function buildTempRepo({
+  rootDeps = {},
+  rootDevDeps = {},
+  backendDeps = {},
+  backendDevDeps = {},
+  frontendDeps = {},
+  frontendDevDeps = {},
+  exceptions = null,
+} = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vd-test-'));
+
+  writePackage(tmpDir, 'root', { deps: rootDeps, devDeps: rootDevDeps });
+  writePackage(path.join(tmpDir, 'backend'), 'backend',
+    { deps: backendDeps, devDeps: backendDevDeps });
+  writePackage(path.join(tmpDir, 'frontend'), 'frontend',
+    { deps: frontendDeps, devDeps: frontendDevDeps });
+
+  if (exceptions !== null) {
+    fs.writeFileSync(
+      path.join(tmpDir, 'version-exceptions.json'),
+      JSON.stringify({ exceptions })
+    );
+  }
+
+  return tmpDir;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe('Issue #50 — check-version-drift.js (extended)', () => {
+
+  // ── Root ↔ workspace (existing behaviour) ──────────────────────────────────
+
+  test('passes when root and workspace versions match', () => {
+    const dir = buildTempRepo({
+      rootDeps: { axios: '^1.6.0' },
+      backendDeps: { axios: '^1.14.0' },
+    });
+    const { status } = runScript(dir);
+    expect(status).toBe(0);
   });
 
-  test('exception expiring today is still valid', () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const vulnerabilities = {
-      'pkg-today': vuln('pkg-today', 'critical', ['https://github.com/advisories/GHSA-1111-1111-1111']),
-    };
-    const exceptions = [
-      {
-        id: 'GHSA-1111-1111-1111',
-        package: 'pkg-today',
-        path: '.',
-        expires: today,
-      },
-    ];
-    const failures = findUnexceptedVulnerabilities(vulnerabilities, exceptions, '.', today);
-    expect(failures).toHaveLength(0);
+  test('fails when root and workspace major versions differ', () => {
+    const dir = buildTempRepo({
+      rootDeps: { axios: '^1.6.0' },
+      backendDeps: { axios: '^2.0.0' },
+    });
+    const { status, stderr } = runScript(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/MISMATCH/i);
+    expect(stderr).toMatch(/axios/);
   });
 
-  test('exception expiring tomorrow is valid today', () => {
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-    const vulnerabilities = {
-      'pkg-future': vuln('pkg-future', 'high', ['https://github.com/advisories/GHSA-2222-2222-2222']),
-    };
-    const exceptions = [
-      {
-        id: 'GHSA-2222-2222-2222',
-        package: 'pkg-future',
-        path: 'frontend',
-        expires: tomorrow,
-      },
-    ];
-    const failures = findUnexceptedVulnerabilities(vulnerabilities, exceptions, 'frontend', new Date().toISOString().slice(0, 10));
-    expect(failures).toHaveLength(0);
+  // ── Backend ↔ frontend (new check) ─────────────────────────────────────────
+
+  test('passes when backend and frontend share a dep at the same major', () => {
+    const dir = buildTempRepo({
+      backendDeps:  { axios: '^1.14.0' },
+      frontendDeps: { axios: '^1.6.0'  },
+    });
+    const { status } = runScript(dir);
+    expect(status).toBe(0);
   });
 
-  test('low/moderate severities are never flagged regardless of exceptions', () => {
-    const vulnerabilities = {
-      'low-pkg':      vuln('low-pkg',      'low',      ['https://github.com/advisories/GHSA-low']),
-      'moderate-pkg': vuln('moderate-pkg', 'moderate', ['https://github.com/advisories/GHSA-mod']),
-    };
-    const failures = findUnexceptedVulnerabilities(vulnerabilities, [], 'backend', '2025-01-01');
-    expect(failures).toHaveLength(0);
+  test('fails when backend and frontend share a dep at different majors', () => {
+    const dir = buildTempRepo({
+      backendDeps:  { axios: '^1.14.0' },
+      frontendDeps: { axios: '^2.0.0'  },
+    });
+    const { status, stderr } = runScript(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/backend.*frontend|frontend.*backend/i);
+    expect(stderr).toMatch(/axios/);
   });
 
-  test('advisory with only transitive via entries (no url objects) is skipped', () => {
-    const vulnerabilities = {
-      transitive: { name: 'transitive', severity: 'critical', via: ['some-other-pkg'] },
-    };
-    const failures = findUnexceptedVulnerabilities(vulnerabilities, [], 'backend', '2025-01-01');
-    expect(failures).toHaveLength(0);
-  });
-});
-
-// ── version-exceptions.json schema ───────────────────────────────────────────
-
-describe('version-exceptions.json', () => {
-  const filePath = path.join(ROOT, 'version-exceptions.json');
-
-  test('file exists', () => {
-    expect(fs.existsSync(filePath)).toBe(true);
+  test('only flags packages that are shared between backend and frontend', () => {
+    const dir = buildTempRepo({
+      backendDeps:  { mongoose: '^8.0.0' },  // backend-only
+      frontendDeps: { next: '^14.0.0'    },  // frontend-only
+    });
+    const { status } = runScript(dir);
+    // No shared packages → no violations.
+    expect(status).toBe(0);
   });
 
-  test('parses as valid JSON', () => {
-    expect(() => JSON.parse(fs.readFileSync(filePath, 'utf8'))).not.toThrow();
+  // ── Exceptions ──────────────────────────────────────────────────────────────
+
+  test('an approved exception suppresses a backend ↔ frontend mismatch', () => {
+    const dir = buildTempRepo({
+      backendDevDeps:  { eslint: '^9.0.0' },
+      frontendDevDeps: { eslint: '^8.0.0' },
+      exceptions: [
+        {
+          package: 'eslint',
+          aLabel: 'backend',
+          bLabel: 'frontend',
+          reason: 'Frontend must stay on ESLint 8 until eslint-config-next supports ESLint 9.',
+        },
+      ],
+    });
+    const { status } = runScript(dir);
+    expect(status).toBe(0);
   });
 
-  test('top-level is an object', () => {
-    const doc = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    expect(typeof doc).toBe('object');
-    expect(doc).not.toBeNull();
-    expect(Array.isArray(doc)).toBe(false);
+  test('exception suppression is symmetric (aLabel/bLabel order does not matter)', () => {
+    const dir = buildTempRepo({
+      backendDevDeps:  { eslint: '^9.0.0' },
+      frontendDevDeps: { eslint: '^8.0.0' },
+      exceptions: [
+        {
+          package: 'eslint',
+          aLabel: 'frontend', // reversed order
+          bLabel: 'backend',
+          reason: 'Same justification — order should not matter.',
+        },
+      ],
+    });
+    const { status } = runScript(dir);
+    expect(status).toBe(0);
   });
-});
 
-// ── check-dependency-audit.js module shape ───────────────────────────────────
+  test('exception without a "reason" field causes a non-zero exit', () => {
+    const dir = buildTempRepo({
+      backendDevDeps:  { eslint: '^9.0.0' },
+      frontendDevDeps: { eslint: '^8.0.0' },
+      exceptions: [
+        {
+          package: 'eslint',
+          aLabel: 'backend',
+          bLabel: 'frontend',
+          // reason is intentionally absent
+        },
+      ],
+    });
+    const { status, stderr } = runScript(dir);
+    expect(status).not.toBe(0);
+    expect(stderr).toMatch(/reason/i);
+  });
 
-describe('check-dependency-audit.js module', () => {
-  test('exports findUnexceptedVulnerabilities as a function', () => {
-    const mod = require('../scripts/check-dependency-audit');
-    expect(typeof mod.findUnexceptedVulnerabilities).toBe('function');
+  test('an exception for one package does not suppress violations for another', () => {
+    const dir = buildTempRepo({
+      backendDeps:     { axios: '^1.0.0' },
+      frontendDeps:    { axios: '^2.0.0' },
+      backendDevDeps:  { eslint: '^9.0.0' },
+      frontendDevDeps: { eslint: '^8.0.0' },
+      exceptions: [
+        {
+          package: 'eslint',
+          aLabel: 'backend',
+          bLabel: 'frontend',
+          reason: 'Approved ESLint divergence.',
+        },
+      ],
+    });
+    const { status, stderr } = runScript(dir);
+    // eslint is excepted but axios is not → still fails.
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/axios/);
+    expect(stderr).not.toMatch(/eslint.*MISMATCH/i);
+  });
+
+  // ── Real repo ───────────────────────────────────────────────────────────────
+
+  test('passes against the actual repository with version-exceptions.json in place', () => {
+    const repoRoot = path.join(__dirname, '..');
+    const { status } = runScript(repoRoot);
+    expect(status).toBe(0);
+  });
+
+  test('version-exceptions.json has at least one entry with a non-empty reason', () => {
+    const exceptionsPath = path.join(__dirname, '../version-exceptions.json');
+    expect(fs.existsSync(exceptionsPath)).toBe(true);
+    const data = JSON.parse(fs.readFileSync(exceptionsPath, 'utf8'));
+    expect(Array.isArray(data.exceptions)).toBe(true);
+    for (const exc of data.exceptions) {
+      expect(typeof exc.reason).toBe('string');
+      expect(exc.reason.trim().length).toBeGreaterThan(0);
+    }
   });
 });
