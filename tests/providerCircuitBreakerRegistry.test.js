@@ -1,222 +1,208 @@
 'use strict';
 
 /**
- * Tests for the provider circuit breaker registry pattern — issue #651
+ * Tests for providerCircuitBreakerRegistry (Issue #31).
  *
- * Verifies that circuit breakers for external providers (Horizon, email,
- * Redis) correctly:
- *   - open after repeated failures
- *   - half-open after the reset timeout
- *   - close again after a successful probe
- *   - report their state accurately to the health endpoint
+ * Verifies:
+ *   - Each pre-registered provider starts in CLOSED state
+ *   - Open circuits fail fast with a stable error
+ *   - Successful probes close the circuit (OPEN → HALF_OPEN → CLOSED)
+ *   - State transitions are observable via getAllStatuses()
+ *   - withBreaker() delegates success/failure recording correctly
+ *   - New providers can be registered at runtime
  */
 
-// ── Circuit breaker state machine ────────────────────────────────────────────
+// Stub metrics to avoid prom-client registry collisions in tests
+jest.mock('../../backend/src/metrics', () => ({
+  registry: { registerMetric: jest.fn() },
+}));
 
-function makeCircuitBreaker({ failureThreshold = 3, resetTimeoutMs = 1000, halfOpenSuccessThreshold = 1 } = {}) {
-  let state = 'closed'; // closed | open | half-open
-  let failureCount = 0;
-  let successCount = 0;
-  let openedAt = null;
+// Stub logger to keep output clean
+jest.mock('../../backend/src/utils/logger', () => {
+  const base = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
+  return { ...base, child: () => base };
+});
 
-  return {
-    getState() { return state; },
-    getFailureCount() { return failureCount; },
+// ── Re-import after mocks ─────────────────────────────────────────────────────
+// Use jest.isolateModules so each test suite gets its own registry instance
+// and breakers do not bleed state between test files.
 
-    recordSuccess() {
-      if (state === 'half-open') {
-        successCount++;
-        if (successCount >= halfOpenSuccessThreshold) {
-          state = 'closed';
-          failureCount = 0;
-          successCount = 0;
-        }
-      } else if (state === 'closed') {
-        failureCount = Math.max(0, failureCount - 1);
-      }
-    },
+let registry;
 
-    recordFailure() {
-      if (state === 'half-open') {
-        state = 'open';
-        openedAt = Date.now();
-        successCount = 0;
-        return;
-      }
-      if (state === 'closed') {
-        failureCount++;
-        if (failureCount >= failureThreshold) {
-          state = 'open';
-          openedAt = Date.now();
-        }
-      }
-    },
+beforeEach(() => {
+  jest.resetModules();
+  registry = require('../../backend/src/services/providerCircuitBreakerRegistry');
+});
 
-    tryHalfOpen() {
-      if (state === 'open' && openedAt !== null) {
-        const elapsed = Date.now() - openedAt;
-        if (elapsed >= resetTimeoutMs) {
-          state = 'half-open';
-          successCount = 0;
-        }
-      }
-      return state;
-    },
+const { CB_STATE } = require('../../backend/src/utils/circuitBreaker');
 
-    isAvailable() {
-      if (state === 'closed') return true;
-      if (state === 'open') {
-        this.tryHalfOpen();
-        return state === 'half-open';
-      }
-      return true; // half-open: allow probe request
-    },
-  };
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Initial state
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('Circuit breaker — basic state transitions', () => {
-  test('starts in closed state', () => {
-    const cb = makeCircuitBreaker();
-    expect(cb.getState()).toBe('closed');
+describe('providerCircuitBreakerRegistry — initial state', () => {
+  test('all pre-registered providers start in CLOSED state', () => {
+    const { PROVIDER_NAMES } = registry;
+    for (const name of PROVIDER_NAMES) {
+      const cb = registry.getBreaker(name);
+      expect(cb.getState()).toBe(CB_STATE.CLOSED);
+    }
   });
 
-  test('opens after reaching failure threshold', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 3 });
-    cb.recordFailure();
-    cb.recordFailure();
-    expect(cb.getState()).toBe('closed');
-    cb.recordFailure();
-    expect(cb.getState()).toBe('open');
-  });
-
-  test('transitions to half-open after reset timeout', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 0 });
-    cb.recordFailure();
-    expect(cb.getState()).toBe('open');
-
-    cb.tryHalfOpen();
-    expect(cb.getState()).toBe('half-open');
-  });
-
-  test('closes after a successful probe in half-open state', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 0, halfOpenSuccessThreshold: 1 });
-    cb.recordFailure();
-    cb.tryHalfOpen();
-    expect(cb.getState()).toBe('half-open');
-
-    cb.recordSuccess();
-    expect(cb.getState()).toBe('closed');
-  });
-
-  test('reopens on failure during half-open state', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 0 });
-    cb.recordFailure();
-    cb.tryHalfOpen();
-    cb.recordFailure(); // Probe failed — reopen
-    expect(cb.getState()).toBe('open');
+  test('getAllStatuses() returns one entry per provider', () => {
+    const statuses = registry.getAllStatuses();
+    const { PROVIDER_NAMES } = registry;
+    expect(statuses.length).toBe(PROVIDER_NAMES.length);
+    for (const s of statuses) {
+      expect(s).toMatchObject({
+        provider: expect.any(String),
+        state:    'closed',
+        failures: 0,
+      });
+    }
   });
 });
 
-describe('Circuit breaker — availability', () => {
-  test('isAvailable() returns true in closed state', () => {
-    const cb = makeCircuitBreaker();
+// ─────────────────────────────────────────────────────────────────────────────
+// Open circuit fails fast
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('providerCircuitBreakerRegistry — open circuit fails fast', () => {
+  test('open circuit throws with stable CIRCUIT_OPEN code', async () => {
+    const cb = registry.getBreaker('email_smtp');
+    // Force threshold failures to open the breaker
+    const threshold = cb.failureThreshold;
+    for (let i = 0; i < threshold; i++) cb.recordFailure();
+
+    expect(cb.getState()).toBe(CB_STATE.OPEN);
+
+    await expect(
+      registry.withBreaker('email_smtp', () => Promise.resolve('should not run'))
+    ).rejects.toMatchObject({ code: 'CIRCUIT_OPEN' });
+  });
+
+  test('open circuit does not call the wrapped function', async () => {
+    const cb = registry.getBreaker('coingecko');
+    for (let i = 0; i < cb.failureThreshold; i++) cb.recordFailure();
+
+    const fn = jest.fn().mockResolvedValue('ok');
+    await expect(registry.withBreaker('coingecko', fn)).rejects.toThrow();
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Successful probes close the circuit
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('providerCircuitBreakerRegistry — probe closes circuit', () => {
+  test('HALF_OPEN → CLOSED after successThreshold successes', async () => {
+    const cb = registry.registerBreaker('test_probe', {
+      failureThreshold: 2,
+      resetTimeoutMs:   1,   // 1ms so timeout elapses immediately in tests
+      successThreshold: 2,
+    });
+
+    // Open it
+    cb.recordFailure();
+    cb.recordFailure();
+    expect(cb.getState()).toBe(CB_STATE.OPEN);
+
+    // Wait 2ms so the reset timeout elapses
+    await new Promise((r) => setTimeout(r, 5));
+
+    // First isAvailable() call transitions to HALF_OPEN
     expect(cb.isAvailable()).toBe(true);
-  });
+    expect(cb.getState()).toBe(CB_STATE.HALF_OPEN);
 
-  test('isAvailable() returns false immediately after opening (before reset timeout)', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 60000 });
-    cb.recordFailure();
-    expect(cb.isAvailable()).toBe(false);
-  });
-
-  test('isAvailable() returns true after reset timeout (probe allowed)', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 0 });
-    cb.recordFailure();
-    expect(cb.isAvailable()).toBe(true); // reset timeout = 0 → immediately half-open
-  });
-});
-
-describe('Circuit breaker registry — multiple providers', () => {
-  function makeRegistry(providers) {
-    const registry = {};
-    for (const name of providers) {
-      registry[name] = makeCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 30000 });
-    }
-    return {
-      get(name) { return registry[name]; },
-      getStatus() {
-        return Object.fromEntries(
-          Object.entries(registry).map(([name, cb]) => [name, cb.getState()])
-        );
-      },
-    };
-  }
-
-  test('independent providers have independent circuit states', () => {
-    const reg = makeRegistry(['horizon', 'email', 'redis']);
-
-    reg.get('horizon').recordFailure();
-    reg.get('horizon').recordFailure();
-    reg.get('horizon').recordFailure(); // opens horizon
-
-    expect(reg.get('horizon').getState()).toBe('open');
-    expect(reg.get('email').getState()).toBe('closed');
-    expect(reg.get('redis').getState()).toBe('closed');
-  });
-
-  test('getStatus() reports all provider states', () => {
-    const reg = makeRegistry(['horizon', 'email']);
-    for (let i = 0; i < 3; i++) reg.get('horizon').recordFailure();
-
-    const status = reg.getStatus();
-    expect(status.horizon).toBe('open');
-    expect(status.email).toBe('closed');
-  });
-
-  test('a single provider recovering does not affect others', () => {
-    const reg = makeRegistry(['horizon', 'email']);
-    for (let i = 0; i < 3; i++) {
-      reg.get('horizon').recordFailure();
-      reg.get('email').recordFailure();
-    }
-    expect(reg.get('horizon').getState()).toBe('open');
-    expect(reg.get('email').getState()).toBe('open');
-
-    // Only email recovers
-    const cb = makeCircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 0 });
-    cb.recordFailure();
-    cb.tryHalfOpen();
+    // Two successes (successThreshold=2) close the circuit
     cb.recordSuccess();
-    expect(cb.getState()).toBe('closed');
+    expect(cb.getState()).toBe(CB_STATE.HALF_OPEN);
+    cb.recordSuccess();
+    expect(cb.getState()).toBe(CB_STATE.CLOSED);
+  });
 
-    // Horizon still open
-    expect(reg.get('horizon').getState()).toBe('open');
+  test('HALF_OPEN → OPEN on failure during probe', async () => {
+    const cb = registry.registerBreaker('test_probe_fail', {
+      failureThreshold: 1,
+      resetTimeoutMs:   1,
+      successThreshold: 2,
+    });
+
+    cb.recordFailure();
+    await new Promise((r) => setTimeout(r, 5));
+    cb.isAvailable(); // transition to HALF_OPEN
+
+    cb.recordFailure(); // back to OPEN
+    expect(cb.getState()).toBe(CB_STATE.OPEN);
   });
 });
 
-describe('Circuit breaker — Horizon-specific scenarios', () => {
-  test('Horizon payment submission enters retry queue when circuit is open', () => {
-    const cb = makeCircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 30000 });
+// ─────────────────────────────────────────────────────────────────────────────
+// withBreaker records outcomes
+// ─────────────────────────────────────────────────────────────────────────────
 
-    function submitPayment(cb) {
-      if (!cb.isAvailable()) {
-        return { status: 'queued_for_retry', reason: 'horizon_circuit_open' };
-      }
-      return { status: 'submitted' };
-    }
+describe('providerCircuitBreakerRegistry — withBreaker records outcomes', () => {
+  test('records success when fn resolves', async () => {
+    const cb = registry.getBreaker('stellar_horizon');
+    const before = cb.getFailures();
 
-    cb.recordFailure();
-    cb.recordFailure(); // Opens the circuit
+    await registry.withBreaker('stellar_horizon', () => Promise.resolve('ok'));
 
-    const result = submitPayment(cb);
-    expect(result.status).toBe('queued_for_retry');
-    expect(result.reason).toBe('horizon_circuit_open');
+    // failures counter resets on success when in CLOSED state
+    expect(cb.getFailures()).toBe(0);
+    expect(cb.getState()).toBe(CB_STATE.CLOSED);
   });
 
-  test('user sees processing state when payment is queued', () => {
-    const result = { status: 'queued_for_retry', userState: 'payment_processing' };
-    expect(result.userState).toBe('payment_processing');
+  test('records failure when fn rejects', async () => {
+    const cb = registry.getBreaker('coinbase');
+    const before = cb.getFailures();
+
+    await expect(
+      registry.withBreaker('coinbase', () => Promise.reject(new Error('upstream down')))
+    ).rejects.toThrow('upstream down');
+
+    expect(cb.getFailures()).toBeGreaterThan(before);
+  });
+
+  test('returns the fn result on success', async () => {
+    const result = await registry.withBreaker('email_ses', () => Promise.resolve({ messageId: 'msg-1' }));
+    expect(result).toEqual({ messageId: 'msg-1' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dynamic registration
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('providerCircuitBreakerRegistry — dynamic registration', () => {
+  test('getBreaker on unknown provider creates one with defaults', () => {
+    const cb = registry.getBreaker('unknown_provider_xyz');
+    expect(cb).toBeDefined();
+    expect(cb.getState()).toBe(CB_STATE.CLOSED);
+  });
+
+  test('registerBreaker overrides existing breaker', () => {
+    const cb1 = registry.registerBreaker('custom_provider', { failureThreshold: 3 });
+    const cb2 = registry.getBreaker('custom_provider');
+    expect(cb1).toBe(cb2);
+    expect(cb2.failureThreshold).toBe(3);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Observable state transitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('providerCircuitBreakerRegistry — observable transitions', () => {
+  test('getAllStatuses() reflects open state after failures', () => {
+    const cb = registry.getBreaker('email_sendgrid');
+    for (let i = 0; i < cb.failureThreshold; i++) cb.recordFailure();
+
+    const statuses = registry.getAllStatuses();
+    const entry = statuses.find((s) => s.provider === 'email_sendgrid');
+    expect(entry.state).toBe(CB_STATE.OPEN);
+    expect(entry.failures).toBeGreaterThan(0);
+    expect(entry.timeUntilRetryMs).toBeGreaterThan(0);
   });
 });

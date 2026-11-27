@@ -7,7 +7,7 @@ import { getErrorMessage } from "../utils/errorMessages";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default function StudentForm({ student, onClose, onSave }) {
+export default function StudentForm({ student, onClose, onSave, onOptimisticUpdate, onRollback }) {
   const { t } = useTranslation();
   const [formData, setFormData] = useState({
     name: "",
@@ -15,6 +15,8 @@ export default function StudentForm({ student, onClose, onSave }) {
     parentEmail: "",
     parentPhone: "",
     reminderOptOut: false,
+    paymentConfirmationOptOut: false,
+    disputeUpdateOptOut: false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -28,7 +30,9 @@ export default function StudentForm({ student, onClose, onSave }) {
         class: student.class || "",
         parentEmail: student.parentEmail || "",
         parentPhone: student.parentPhone || "",
-        reminderOptOut: student.reminderOptOut || false,
+        reminderOptOut: Boolean(student.reminderOptOut),
+        paymentConfirmationOptOut: Boolean(student.paymentConfirmationOptOut),
+        disputeUpdateOptOut: Boolean(student.disputeUpdateOptOut),
       });
     }
   }, [student]);
@@ -56,7 +60,12 @@ export default function StudentForm({ student, onClose, onSave }) {
     setLoading(true);
 
     try {
-      await updateStudent(student.studentId, formData);
+      const updates = { ...formData };
+      for (const field of ["reminderOptOut", "paymentConfirmationOptOut", "disputeUpdateOptOut"]) {
+        if (updates[field] === Boolean(student[field])) delete updates[field];
+      }
+      onOptimisticUpdate?.(student.studentId, updates);
+      await updateStudent(student.studentId, updates);
       setSuccess(t("studentForm.updateSuccess"));
       setTimeout(() => {
         if (onSave) onSave();
@@ -64,7 +73,9 @@ export default function StudentForm({ student, onClose, onSave }) {
       }, 1000);
     } catch (err) {
       const data = err.response?.data;
-      setError(getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed"));
+      const message = getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed");
+      setError(message);
+      onRollback?.(message);
     } finally {
       setLoading(false);
     }
@@ -324,6 +335,18 @@ export default function StudentForm({ student, onClose, onSave }) {
               </span>
             </label>
           </div>
+
+          <fieldset style={{ marginBottom: "1rem" }}>
+            <legend>Email preferences</legend>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="paymentConfirmationOptOut" checked={formData.paymentConfirmationOptOut} onChange={handleChange} />
+              Disable payment confirmation emails
+            </label>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="disputeUpdateOptOut" checked={formData.disputeUpdateOptOut} onChange={handleChange} />
+              Disable dispute update emails
+            </label>
+          </fieldset>
 
           <PaymentPlanForm
             student={student}

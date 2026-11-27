@@ -1,222 +1,293 @@
 'use strict';
 
 /**
- * Tests for Redis health degradation behaviour — issue #651
- *
- * Verifies that the system degrades gracefully across four Redis states:
- *   - not configured (no REDIS_HOST) — full pass-through
- *   - configured + ready             — normal operation
- *   - configured + error/down        — health shows "degraded"; fail-open paths work
- *   - configured + reconnecting      — treated the same as "error" until ready
- *
- * These are unit-level tests that do NOT require a real Redis connection.
- * All Redis interaction is simulated via the getRedisStatus() mock.
+ * Tests for Issue #38: Redis dependency health and degradation policy.
+ * Covers:
+ *   1. Readiness reflects required dependencies (REDIS_REQUIRED)
+ *   2. Cache misses degrade safely to local tier on outage
+ *   3. Queue-dependent mutations return actionable errors (503 QUEUE_UNAVAILABLE)
+ *   4. Metrics distinguish outage from normal misses
  */
 
-// ── Health endpoint Redis degradation tests ──────────────────────────────────
+process.env.MONGO_URI = 'mongodb://localhost:27017/test';
+process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
-describe('Redis health status transitions', () => {
-  /**
-   * Simulate the health-check logic that maps Redis state → HTTP status.
-   * This mirrors the logic in healthController.js without importing the full app.
-   */
-  function computeHealthStatus({ dbHealthy, redisConfigured, redisStatus, stellarOk = true }) {
-    let overallStatus = 'healthy';
-    let statusCode = 200;
+const redisClient = require('../backend/src/config/redisClient');
+const cache = require('../backend/src/cache');
+const metrics = require('../backend/src/metrics');
+const healthController = require('../backend/src/controllers/healthController');
+const database = require('../backend/src/config/database');
+const stellarConfig = require('../backend/src/config/stellarConfig');
 
-    if (!dbHealthy) {
-      overallStatus = 'unhealthy';
-      statusCode = 503;
-    } else if (redisConfigured && redisStatus !== 'ready') {
-      overallStatus = 'degraded';
-      statusCode = 200;
-    } else if (!stellarOk) {
-      overallStatus = 'degraded';
-      statusCode = 200;
-    }
+// Mock dependencies for healthController
+jest.mock('../backend/src/config/database', () => ({
+  healthCheck: jest.fn().mockResolvedValue({ healthy: true, latency: 2, readyState: 1 }),
+}));
 
-    return { overallStatus, statusCode };
-  }
+jest.mock('../backend/src/config/stellarConfig', () => ({
+  horizonClient: {
+    call: jest.fn().mockResolvedValue({}),
+    activeUrl: 'https://horizon-testnet.stellar.org',
+    getCircuitBreakerStatus: jest.fn().mockReturnValue([]),
+  },
+  CB_FAILURE_THRESHOLD: 5,
+  CB_RESET_TIMEOUT_MS: 30000,
+  CB_HALF_OPEN_SUCCESS_THRESHOLD: 2,
+}));
 
-  test('healthy when Redis is not configured', () => {
-    const { overallStatus, statusCode } = computeHealthStatus({
-      dbHealthy: true, redisConfigured: false, redisStatus: null,
-    });
-    expect(overallStatus).toBe('healthy');
-    expect(statusCode).toBe(200);
+describe('Issue #38: Redis Dependency Health and Degradation Policy', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...originalEnv };
   });
 
-  test('healthy when Redis is configured and ready', () => {
-    const { overallStatus, statusCode } = computeHealthStatus({
-      dbHealthy: true, redisConfigured: true, redisStatus: 'ready',
-    });
-    expect(overallStatus).toBe('healthy');
-    expect(statusCode).toBe(200);
+  afterAll(() => {
+    process.env = originalEnv;
   });
 
-  test('degraded (200) when Redis is configured but in error state', () => {
-    const { overallStatus, statusCode } = computeHealthStatus({
-      dbHealthy: true, redisConfigured: true, redisStatus: 'error',
-    });
-    expect(overallStatus).toBe('degraded');
-    expect(statusCode).toBe(200); // Not 503 — DB is still up
-  });
+  describe('1. Readiness reflects required dependencies', () => {
+    test('when REDIS_REQUIRED=true and Redis is unreachable, healthReady returns 503 not_ready', async () => {
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_REQUIRED = 'true';
 
-  test('degraded (200) when Redis is reconnecting', () => {
-    const { overallStatus, statusCode } = computeHealthStatus({
-      dbHealthy: true, redisConfigured: true, redisStatus: 'reconnecting',
-    });
-    expect(overallStatus).toBe('degraded');
-    expect(statusCode).toBe(200);
-  });
-
-  test('unhealthy (503) when DB is down regardless of Redis state', () => {
-    for (const redisStatus of ['ready', 'error', 'reconnecting']) {
-      const { overallStatus, statusCode } = computeHealthStatus({
-        dbHealthy: false, redisConfigured: true, redisStatus,
+      jest.spyOn(redisClient, 'checkRedis').mockResolvedValue({
+        configured: true,
+        status: 'unreachable',
+        error: 'Connection refused',
+        required: true,
       });
-      expect(overallStatus).toBe('unhealthy');
-      expect(statusCode).toBe(503);
-    }
+
+      const req = {};
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+
+      await healthController.healthReady(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'not_ready',
+          reason: 'required_dependency_unhealthy',
+          unhealthyDependency: 'redis',
+          checks: expect.objectContaining({
+            redis: expect.objectContaining({
+              status: 'unreachable',
+              required: true,
+            }),
+          }),
+        })
+      );
+    });
+
+    test('when REDIS_REQUIRED=false and Redis is unreachable, healthReady returns 200 ready (degraded safely)', async () => {
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_REQUIRED = 'false';
+
+      jest.spyOn(redisClient, 'checkRedis').mockResolvedValue({
+        configured: true,
+        status: 'unreachable',
+        error: 'Connection refused',
+        required: false,
+      });
+
+      const req = {};
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+
+      await healthController.healthReady(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'ready',
+          checks: expect.objectContaining({
+            redis: expect.objectContaining({
+              status: 'unreachable',
+              required: false,
+            }),
+          }),
+        })
+      );
+    });
+
+    test('when REDIS_REQUIRED=true and Redis is ok, healthReady returns 200 ready', async () => {
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_REQUIRED = 'true';
+
+      jest.spyOn(redisClient, 'checkRedis').mockResolvedValue({
+        configured: true,
+        status: 'ok',
+        latencyMs: 3,
+        required: true,
+      });
+
+      const req = {};
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+
+      await healthController.healthReady(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'ready',
+          checks: expect.objectContaining({
+            redis: expect.objectContaining({
+              status: 'ok',
+              required: true,
+            }),
+          }),
+        })
+      );
+    });
+
+    test('detailed healthCheck reflects checks.redis and returns 503 when required Redis is down', async () => {
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_REQUIRED = 'true';
+
+      jest.spyOn(redisClient, 'checkRedis').mockResolvedValue({
+        configured: true,
+        status: 'unreachable',
+        error: 'Timeout',
+        required: true,
+      });
+
+      const req = {};
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+
+      await healthController.healthCheck(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'unhealthy',
+          checks: expect.objectContaining({
+            redis: expect.objectContaining({
+              status: 'unreachable',
+              required: true,
+            }),
+          }),
+        })
+      );
+    });
   });
 
-  test('recovers to healthy when Redis reconnects', () => {
-    // Start: degraded
-    const degraded = computeHealthStatus({ dbHealthy: true, redisConfigured: true, redisStatus: 'error' });
-    expect(degraded.overallStatus).toBe('degraded');
+  describe('2. Cache misses degrade safely to in-memory tier', () => {
+    test('asyncGet falls back to local cache without throwing when Redis fails', async () => {
+      jest.spyOn(redisClient, 'isRedisReady').mockReturnValue(true);
+      jest.spyOn(redisClient, 'getRedisClient').mockReturnValue({
+        get: jest.fn().mockRejectedValue(new Error('Redis connection lost')),
+      });
 
-    // After recovery
-    const recovered = computeHealthStatus({ dbHealthy: true, redisConfigured: true, redisStatus: 'ready' });
-    expect(recovered.overallStatus).toBe('healthy');
-  });
-});
+      // Populate local cache
+      cache.set('test-degradation-key', { foo: 'bar' }, 60);
 
-// ── Rate limiter fail-open behaviour ─────────────────────────────────────────
+      const val = await cache.asyncGet('test-degradation-key', { cacheName: 'test' });
+      expect(val).toEqual({ foo: 'bar' });
+    });
 
-describe('Rate limiter fail-open when Redis is unavailable', () => {
-  /**
-   * The rate limiter should allow requests through (fail-open) when Redis
-   * is unavailable, rather than blocking all traffic with a 429 or 500.
-   */
-  function rateLimiterResult({ redisAvailable, requestCount, limit }) {
-    if (!redisAvailable) {
-      // Fail-open: use in-memory counter with a generous limit
-      return requestCount <= limit * 10 ? 'allowed' : 'rate_limited';
-    }
-    return requestCount <= limit ? 'allowed' : 'rate_limited';
-  }
+    test('getSafe invokes fallback loader and caches result when Redis errors', async () => {
+      jest.spyOn(redisClient, 'isRedisReady').mockReturnValue(true);
+      jest.spyOn(redisClient, 'getRedisClient').mockReturnValue({
+        get: jest.fn().mockRejectedValue(new Error('Redis timeout')),
+        set: jest.fn().mockRejectedValue(new Error('Redis write failed')),
+      });
 
-  test('allows requests when Redis is down (fail-open)', () => {
-    expect(rateLimiterResult({ redisAvailable: false, requestCount: 50, limit: 10 })).toBe('allowed');
-  });
+      const loader = jest.fn().mockResolvedValue({ fresh: 'data' });
+      const result = await cache.getSafe('test-loader-key', loader, { ttl: 60, cacheName: 'test-loader' });
 
-  test('enforces limit when Redis is available', () => {
-    expect(rateLimiterResult({ redisAvailable: true, requestCount: 11, limit: 10 })).toBe('rate_limited');
-  });
+      expect(result).toEqual({ fresh: 'data' });
+      expect(loader).toHaveBeenCalledTimes(1);
 
-  test('never returns 500 when Redis is unavailable', () => {
-    // The rate limiter must not throw when Redis is unreachable
-    expect(() => rateLimiterResult({ redisAvailable: false, requestCount: 1, limit: 100 })).not.toThrow();
-  });
-});
-
-// ── Session validation degradation ──────────────────────────────────────────
-
-describe('Session validation degrades to stateless JWT when Redis is down', () => {
-  const crypto = require('crypto');
-
-  /**
-   * Simulate JWT validation that falls back to stateless verification when
-   * the Redis session store is unavailable.
-   */
-  function validateSession({ redisAvailable, tokenValid, sessionExistsInRedis }) {
-    if (!redisAvailable) {
-      // Degrade to stateless JWT check — only verify the token signature
-      return tokenValid ? { valid: true, mode: 'stateless' } : { valid: false, reason: 'invalid_token' };
-    }
-    if (!sessionExistsInRedis) {
-      return { valid: false, reason: 'session_not_found' };
-    }
-    return { valid: true, mode: 'session' };
-  }
-
-  test('validates via stateless JWT when Redis is unavailable', () => {
-    const result = validateSession({ redisAvailable: false, tokenValid: true, sessionExistsInRedis: false });
-    expect(result.valid).toBe(true);
-    expect(result.mode).toBe('stateless');
+      // Subsequent local get returns the cached value
+      const localCached = cache.get('test-loader-key');
+      expect(localCached).toEqual({ fresh: 'data' });
+    });
   });
 
-  test('rejects invalid JWT even when Redis is unavailable', () => {
-    const result = validateSession({ redisAvailable: false, tokenValid: false, sessionExistsInRedis: false });
-    expect(result.valid).toBe(false);
+  describe('3. Queue-dependent mutations return actionable errors', () => {
+    test('async report request returns 503 with QUEUE_UNAVAILABLE and retry guidance on queue failure', async () => {
+      const reportController = require('../backend/src/controllers/reportController');
+      const reportQueue = require('../backend/src/queue/reportQueue');
+
+      const unavailableErr = new Error('Report queue unavailable — Redis not configured');
+      unavailableErr.code = 'QUEUE_UNAVAILABLE';
+      jest.spyOn(reportQueue, 'enqueueReportJob').mockRejectedValue(unavailableErr);
+
+      const req = {
+        query: {
+          startDate: '2026-01-01',
+          endDate: '2026-03-01', // > 30 days to trigger isLargeReport
+          async: 'true',
+        },
+        schoolId: 'school-123',
+      };
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      const next = jest.fn();
+
+      await reportController.getReport(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 'QUEUE_UNAVAILABLE',
+          actionable: true,
+          retryAfterSeconds: 30,
+        })
+      );
+    });
   });
 
-  test('uses Redis session store when Redis is available', () => {
-    const result = validateSession({ redisAvailable: true, tokenValid: true, sessionExistsInRedis: true });
-    expect(result.valid).toBe(true);
-    expect(result.mode).toBe('session');
-  });
+  describe('4. Metrics distinguish outage from normal misses', () => {
+    test('normal miss increments cache_misses_total and cache_operations_total with result="miss"', () => {
+      const incOpSpy = jest.spyOn(metrics.cacheOperationsTotal, 'inc');
+      const incMissSpy = jest.spyOn(metrics.cacheMissesTotal, 'inc');
 
-  test('rejects session that does not exist in Redis when Redis is healthy', () => {
-    const result = validateSession({ redisAvailable: true, tokenValid: true, sessionExistsInRedis: false });
-    expect(result.valid).toBe(false);
-    expect(result.reason).toBe('session_not_found');
-  });
-});
+      cache.get('non-existent-key-123', 'unit-test');
 
-// ── Idempotency store Redis degradation ──────────────────────────────────────
+      expect(incMissSpy).toHaveBeenCalledWith({ cache: 'unit-test' });
+      expect(incOpSpy).toHaveBeenCalledWith({ cache: 'unit-test', result: 'miss' });
+    });
 
-describe('Idempotency store falls back to Mongo when Redis is unavailable', () => {
-  /**
-   * Simulate the idempotency store's two-tier lookup: Redis first, then Mongo.
-   * When Redis is down, it should fall back to Mongo without throwing.
-   */
-  async function idempotencyLookup({ redisFails, mongoRecord }) {
-    // Redis tier
-    if (!redisFails) {
-      return { source: 'redis', record: null }; // cache miss for simplicity
-    }
-    // Fall through to Mongo on Redis error
-    return { source: 'mongo', record: mongoRecord };
-  }
+    test('Redis outage increments cache_outages_total and cache_operations_total with result="outage"', async () => {
+      jest.spyOn(redisClient, 'isRedisReady').mockReturnValue(true);
+      jest.spyOn(redisClient, 'getRedisClient').mockReturnValue({
+        get: jest.fn().mockRejectedValue(new Error('ETIMEDOUT: Redis ping timed out')),
+      });
 
-  test('falls back to Mongo when Redis lookup throws', async () => {
-    const result = await idempotencyLookup({ redisFails: true, mongoRecord: { responseStatus: 200 } });
-    expect(result.source).toBe('mongo');
-    expect(result.record.responseStatus).toBe(200);
-  });
+      const incOpSpy = jest.spyOn(metrics.cacheOperationsTotal, 'inc');
+      const incOutageSpy = jest.spyOn(metrics.cacheOutagesTotal, 'inc');
 
-  test('uses Redis cache when available (fast path)', async () => {
-    const result = await idempotencyLookup({ redisFails: false, mongoRecord: null });
-    expect(result.source).toBe('redis');
-  });
+      await cache.asyncGet('outage-key', { cacheName: 'unit-test' });
 
-  test('no exception propagates when Redis is unavailable', async () => {
-    await expect(idempotencyLookup({ redisFails: true, mongoRecord: null })).resolves.toBeDefined();
-  });
-});
+      expect(incOutageSpy).toHaveBeenCalledWith({ cache: 'unit-test' });
+      expect(incOpSpy).toHaveBeenCalledWith({ cache: 'unit-test', result: 'outage' });
+    });
 
-// ── No panic exits ───────────────────────────────────────────────────────────
+    test('cache hit increments cache_hits_total and cache_operations_total with result="hit"', () => {
+      const incOpSpy = jest.spyOn(metrics.cacheOperationsTotal, 'inc');
+      const incHitSpy = jest.spyOn(metrics.cacheHitsTotal, 'inc');
 
-describe('No panic exits or unhandled rejections under any chaos condition', () => {
-  test('error objects are plain Error instances — not process.exit calls', () => {
-    const errors = [
-      new Error('Redis connection refused'),
-      new Error('MongoDB not primary'),
-      new Error('Horizon timeout'),
-      new Error('SMTP connection refused'),
-    ];
-    for (const err of errors) {
-      expect(err).toBeInstanceOf(Error);
-      expect(typeof err.message).toBe('string');
-    }
-  });
+      cache.set('hit-key', 'value-123', 60);
+      const val = cache.get('hit-key', 'unit-test');
 
-  test('all chaos error codes are handled gracefully (no undefined code)', () => {
-    const handled = ['REDIS_UNAVAILABLE', 'MONGO_UNAVAILABLE', 'HORIZON_TIMEOUT', 'EMAIL_OUTAGE', 'RATE_LIMIT_DEGRADED'];
-    for (const code of handled) {
-      expect(typeof code).toBe('string');
-      expect(code.length).toBeGreaterThan(0);
-    }
+      expect(val).toBe('value-123');
+      expect(incHitSpy).toHaveBeenCalledWith({ cache: 'unit-test' });
+      expect(incOpSpy).toHaveBeenCalledWith({ cache: 'unit-test', result: 'hit' });
+    });
   });
 });
