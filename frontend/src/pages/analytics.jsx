@@ -435,7 +435,7 @@ function Analytics() {
                 </table>
               </div>
             ) : (
-              <p style={{ color: "var(--text-muted)" }}>{t("analytics.noData")}</p>
+              <EmptyState variant="payments" title={t("analytics.noData")} />
             )}
           </div>
         </div>
@@ -485,7 +485,7 @@ function Analytics() {
                 </table>
               </div>
             ) : (
-              <p style={{ color: "var(--text-muted)" }}>{t("analytics.noData")}</p>
+              <EmptyState variant="payments" title={t("analytics.noData")} />
             )}
           </div>
         </div>
@@ -518,7 +518,7 @@ function Analytics() {
                 </table>
               </div>
             ) : (
-              <p style={{ color: "var(--text-muted)" }}>{t("analytics.noUnpaid")}</p>
+              <EmptyState variant="payments" title={t("analytics.noUnpaid")} />
             )}
           </div>
         </div>

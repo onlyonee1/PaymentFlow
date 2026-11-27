@@ -406,18 +406,19 @@ document per attempt, per endpoint, per school. A busy deployment produces
 these continuously, so the collection is bounded by a TTL index on `createdAt`
 rather than kept forever.
 
-**Default retention is 30 days.** After that MongoDB removes the record
+**Default retention is 7 days.** After that MongoDB removes the record
 automatically; the background TTL monitor runs about once a minute, so deletion
 is prompt but not instant.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `WEBHOOK_DELIVERY_RETENTION_DAYS` | Retention in days | `30` |
+| `WEBHOOK_DELIVERY_RETENTION_DAYS` | Retention in days | `7` |
 | `WEBHOOK_DELIVERY_TTL_SECONDS` | Retention in seconds; **takes precedence** when set | — |
 
 `WEBHOOK_DELIVERY_TTL_SECONDS` is kept for deployments that already configured
 it, so upgrading does not silently change their retention. New deployments
-should use `WEBHOOK_DELIVERY_RETENTION_DAYS`.
+should use `WEBHOOK_DELIVERY_RETENTION_DAYS`. Apply
+`034_webhook_delivery_seven_day_ttl` to an existing database.
 
 ### What this means for you
 

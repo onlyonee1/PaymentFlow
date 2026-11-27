@@ -353,6 +353,28 @@ describe('Contract resource budgets', () => {
   });
 });
 
+const batchBudgetTest = process.env.PAYMENT_REGISTRY_CONTRACT_ID && process.env.SOROBAN_RPC_URL
+  && process.env.BATCH_BUDGET_PAYER && process.env.BATCH_BUDGET_RECIPIENT ? it : it.skip;
+
+batchBudgetTest('simulates ten real registry payments below half of the transaction instruction limit', async () => {
+  const { Networks } = require('../backend/node_modules/@stellar/stellar-sdk');
+  const { buildBatchTransaction } = require('../backend/src/soroban/paymentRegistry');
+  const { randomBytes } = require('node:crypto');
+  const payments = Array.from({ length: 10 }, () => ({
+    paymentId: randomBytes(12).toString('hex'), amountStroops: 10_000_000n,
+  }));
+  const { instructions } = await buildBatchTransaction({
+    contractId: process.env.PAYMENT_REGISTRY_CONTRACT_ID,
+    rpcUrl: process.env.SOROBAN_RPC_URL,
+    networkPassphrase: Networks.TESTNET,
+    payer: process.env.BATCH_BUDGET_PAYER,
+    recipient: process.env.BATCH_BUDGET_RECIPIENT,
+    payments,
+  });
+  expect(instructions).toBeGreaterThan(0);
+  expect(instructions).toBeLessThan(50_000_000);
+}, 30_000);
+
 // ── Export for external use ───────────────────────────────────────────────────
 
 module.exports = { BUDGET_CEILINGS, SIMULATED_USAGE, simulateOperation };

@@ -6,6 +6,7 @@ const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
 const { activeFeeFilter } = require('../utils/feeSchedule');
 const School = require('../models/schoolModel');
+const { studentLimit, withStudentQuotaLock } = require('./studentQuotaService');
 const ImportJob = require('../models/importJobModel');
 const { encryptStudentPii, hashParentEmail } = require('./studentPiiEncryption');
 const { del, KEYS } = require('../cache');
@@ -39,7 +40,17 @@ function validateRow(row) {
   return null;
 }
 
-async function recordBatch(jobId, schoolId, rows, school, quotaRemaining) {
+async function recordBatch(jobId, schoolId, rows) {
+  return withStudentQuotaLock(schoolId, async () => {
+    const school = await School.findOne({ schoolId }).lean();
+    if (!school?.isActive) throw new Error('School is deactivated');
+    const limit = studentLimit(school);
+    const count = await Student.countDocuments({ schoolId, deletedAt: null });
+    return insertBatch(jobId, schoolId, rows, limit, limit === null ? Infinity : limit - count);
+  });
+}
+
+async function insertBatch(jobId, schoolId, rows, limit, quotaRemaining) {
   const classes = [...new Set(rows.map(({ data }) => data.class?.trim()).filter(Boolean))];
   const feeStructures = classes.length
     ? await FeeStructure.find({ schoolId, className: { $in: classes }, ...activeFeeFilter() }).lean()
@@ -71,7 +82,7 @@ async function recordBatch(jobId, schoolId, rows, school, quotaRemaining) {
       outcomes.push({
         row: rowNumber,
         studentId,
-        error: `School has reached maximum student quota of ${school.maxStudents}`,
+        error: `School has reached maximum student quota of ${limit}`,
         code: 'STUDENT_QUOTA_EXCEEDED',
       });
       continue;
@@ -145,9 +156,6 @@ async function processStudentImport(job) {
     { status: 'processing', startedAt: importJob.startedAt || new Date() }
   );
 
-  const school = await School.findOne({ schoolId }).select('maxStudents').lean();
-  const currentCount = await Student.countDocuments({ schoolId, deletedAt: null });
-  let quotaRemaining = school?.maxStudents ? Math.max(0, school.maxStudents - currentCount) : Infinity;
   let processedRows = importJob.processedRows || 0;
   let rowsRead = 0;
   let batch = [];
@@ -161,14 +169,13 @@ async function processStudentImport(job) {
       if (rowsRead <= processedRows) continue;
       batch.push({ data, rowNumber: rowsRead + 1 });
       if (batch.length === BATCH_SIZE) {
-        const result = await recordBatch(jobId, schoolId, batch, school || {}, quotaRemaining);
+        await recordBatch(jobId, schoolId, batch);
         processedRows += batch.length;
-        quotaRemaining = result.quotaRemaining;
         batch = [];
       }
     }
     if (batch.length) {
-      const result = await recordBatch(jobId, schoolId, batch, school || {}, quotaRemaining);
+      await recordBatch(jobId, schoolId, batch);
       processedRows += batch.length;
     }
 

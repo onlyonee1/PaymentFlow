@@ -7,10 +7,12 @@
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+process.env.JWT_SECRET ||= 'test-only-audit-pagination-secret';
+
 const mockLogs = [
-  { _id: 'id1', schoolId: 'SCH-1', action: 'student_create', result: 'success', createdAt: new Date('2026-01-01') },
-  { _id: 'id2', schoolId: 'SCH-1', action: 'fee_create',     result: 'failure', createdAt: new Date('2026-01-02') },
-  { _id: 'id3', schoolId: 'SCH-1', action: 'student_delete', result: 'success', createdAt: new Date('2026-01-03') },
+  { _id: '000000000000000000000001', schoolId: 'SCH-1', action: 'student_create', result: 'success', createdAt: new Date('2026-01-01') },
+  { _id: '000000000000000000000002', schoolId: 'SCH-1', action: 'fee_create',     result: 'failure', createdAt: new Date('2026-01-02') },
+  { _id: '000000000000000000000003', schoolId: 'SCH-1', action: 'student_delete', result: 'success', createdAt: new Date('2026-01-03') },
 ];
 
 let mockFind;
@@ -42,48 +44,27 @@ beforeEach(() => {
 // ── Pagination envelope ───────────────────────────────────────────────────────
 
 describe('pagination envelope', () => {
-  test('returns logs, total, page, limit, and pages', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1', page: 1, limit: 2 });
-    expect(result).toHaveProperty('logs');
-    expect(result).toHaveProperty('total');
-    expect(result).toHaveProperty('page');
-    expect(result).toHaveProperty('limit');
-    expect(result).toHaveProperty('pages');
-    expect(Array.isArray(result.logs)).toBe(true);
+  test('returns logs and cursor metadata without a record count', async () => {
+    const result = await getAuditLogs({ schoolId: 'SCH-1', limit: 2 });
+    expect(result).toMatchObject({
+      logs: mockLogs.slice(0, 2),
+      limit: 2,
+      nextCursor: expect.any(String),
+      prevCursor: null,
+      hasMore: true,
+    });
+    expect(mockCount).not.toHaveBeenCalled();
   });
 
-  test('page defaults to 1 and limit defaults to 50', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1' });
-    expect(result.page).toBe(1);
-    expect(result.limit).toBe(50);
+  test('defaults to 50 and caps the requested page size at 200', async () => {
+    expect((await getAuditLogs({ schoolId: 'SCH-1' })).limit).toBe(50);
+    expect((await getAuditLogs({ schoolId: 'SCH-1', limit: 999 })).limit).toBe(200);
+    expect(mockFind.mock.results[1].value.limit).toHaveBeenCalledWith(201);
   });
 
-  test('totalPages is ceil(total / limit)', async () => {
-    mockCount.mockResolvedValue(125);
-    const result = await getAuditLogs({ schoolId: 'SCH-1', page: 1, limit: 50 });
-    expect(result.pages).toBe(3); // ceil(125/50) = 3
-  });
-
-  test('limit is capped at 200', async () => {
-    const result = await getAuditLogs({ schoolId: 'SCH-1', page: 1, limit: 999 });
-    expect(result.limit).toBe(200);
-    const chain = mockFind.mock.results[0].value;
-    expect(chain.limit).toHaveBeenCalledWith(200);
-  });
-
-  test('skip is (page - 1) * limit', async () => {
+  test('does not accept numeric offsets as a position', async () => {
     await getAuditLogs({ schoolId: 'SCH-1', page: 3, limit: 10 });
-    const chain = mockFind.mock.results[0].value;
-    expect(chain.skip).toHaveBeenCalledWith(20); // (3-1)*10
-  });
-
-  test('empty results return pages=1, not 0', async () => {
-    mockFind  = jest.fn(() => makeChain([]));
-    mockCount = jest.fn().mockResolvedValue(0);
-    const result = await getAuditLogs({ schoolId: 'SCH-1' });
-    expect(result.pages).toBe(1);
-    expect(result.total).toBe(0);
-    expect(result.logs).toHaveLength(0);
+    expect(mockFind.mock.results[0].value.skip).not.toHaveBeenCalled();
   });
 });
 
@@ -173,18 +154,15 @@ describe('filtering', () => {
 // ── Boundary cases ────────────────────────────────────────────────────────────
 
 describe('boundary cases', () => {
-  test('page beyond last page returns empty logs with correct total', async () => {
-    mockFind  = jest.fn(() => makeChain([]));
-    mockCount = jest.fn().mockResolvedValue(5);
-    const result = await getAuditLogs({ schoolId: 'SCH-1', page: 99, limit: 50 });
-    expect(result.logs).toHaveLength(0);
-    expect(result.total).toBe(5);
-    expect(result.page).toBe(99);
+  test('empty results have no navigation cursors', async () => {
+    mockFind.mockReturnValueOnce(makeChain([]));
+    const result = await getAuditLogs({ schoolId: 'SCH-1' });
+    expect(result).toMatchObject({ logs: [], nextCursor: null, prevCursor: null, hasMore: false });
   });
 
   test('sorting is always by createdAt descending', async () => {
     await getAuditLogs({ schoolId: 'SCH-1' });
     const chain = mockFind.mock.results[0].value;
-    expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+    expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1, _id: -1 });
   });
 });

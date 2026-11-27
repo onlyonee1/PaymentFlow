@@ -38,9 +38,9 @@
  *   const {
  *     summary, summaryLoading, summaryError,
  *     students, studentsLoading, studentsError,
- *     pages, total,
+ *     pagination,
  *     load, loadSummary, loadStudents,
- *   } = useDashboardLoader({ page, search, statusFilter, classFilter });
+ *   } = useDashboardLoader({ cursor, search, statusFilter, classFilter });
  *
  *   // Trigger a full refresh (e.g. after a sync completes):
  *   load();
@@ -83,9 +83,9 @@ export function loadDashboardSummary(options) {
   return cachedDashboardRequest('summary', () => getPaymentSummary(options));
 }
 
-export function loadDashboardStudents(page, pageSize, filters, options) {
-  const key = `students:${JSON.stringify([page, pageSize, filters])}`;
-  return cachedDashboardRequest(key, () => getStudents(page, pageSize, filters, options));
+export function loadDashboardStudents(cursor, pageSize, filters, options) {
+  const key = `students:${JSON.stringify([cursor, pageSize, filters])}`;
+  return cachedDashboardRequest(key, () => getStudents(cursor, pageSize, filters, options));
 }
 
 export function loadDashboardSyncStatus(options) {
@@ -95,7 +95,7 @@ export function loadDashboardSyncStatus(options) {
 export function prefetchDashboardData() {
   return Promise.allSettled([
     loadDashboardSummary(),
-    loadDashboardStudents(1, PAGE_SIZE, { search: '', status: 'all', className: '' }),
+    loadDashboardStudents(null, PAGE_SIZE, { search: '', status: 'all', className: '' }),
     loadDashboardSyncStatus(),
   ]);
 }
@@ -112,8 +112,7 @@ export function invalidateDashboardData() {
  * @property {Array}        students
  * @property {boolean}      studentsLoading
  * @property {string|null}  studentsError
- * @property {number}       pages
- * @property {number}       total
+ * @property {object}       pagination
  * @property {Function}     load          — full parallel refresh
  * @property {Function}     loadSummary   — summary-only refresh
  * @property {Function}     loadStudents  — students-only refresh
@@ -121,7 +120,7 @@ export function invalidateDashboardData() {
 
 /**
  * @param {object} params
- * @param {number} params.page
+ * @param {string} [params.cursor]
  * @param {string} params.search
  * @param {string} params.statusFilter
  * @param {string} params.classFilter
@@ -130,7 +129,7 @@ export function invalidateDashboardData() {
  * @returns {DashboardLoaderResult}
  */
 export function useDashboardLoader({
-  page,
+  cursor = null,
   search,
   statusFilter,
   classFilter,
@@ -146,8 +145,7 @@ export function useDashboardLoader({
   const [students, setStudents]               = useState([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [studentsError, setStudentsError]     = useState(null);
-  const [pages, setPages]                     = useState(1);
-  const [total, setTotal]                     = useState(0);
+  const [pagination, setPagination]           = useState({});
 
   // Abort controller for the in-flight students request — superseded calls
   // are cancelled before a new one starts.
@@ -181,15 +179,14 @@ export function useDashboardLoader({
     setStudentsLoading(true);
     setStudentsError(null);
     return loadDashboardStudents(
-      page,
+      cursor,
       PAGE_SIZE,
       { search, status: statusFilter, className: classFilter },
       { signal: controller.signal }
     )
       .then(({ data }) => {
         setStudents(data.students ?? []);
-        setPages(data.pages ?? 1);
-        setTotal(data.total ?? 0);
+        setPagination(data.pagination ?? {});
         return data;
       })
       .catch((err) => {
@@ -206,7 +203,7 @@ export function useDashboardLoader({
           setStudentsLoading(false);
         }
       });
-  }, [page, search, statusFilter, classFilter, studentsErrorMsg]);
+  }, [cursor, search, statusFilter, classFilter, studentsErrorMsg]);
 
   // ── Full parallel loader ──────────────────────────────────────────────────
 
@@ -236,8 +233,7 @@ export function useDashboardLoader({
     students,
     studentsLoading,
     studentsError,
-    pages,
-    total,
+    pagination,
     // Actions
     load,
     loadSummary,

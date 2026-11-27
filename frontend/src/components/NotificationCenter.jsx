@@ -11,7 +11,7 @@ const SEVERITY_META = {
   info:     { color: '#34d399', bg: 'rgba(52,211,153,0.12)', label: 'Info' },
 };
 
-function BellIcon({ hasUnread }) {
+function BellIcon() {
   return (
     <svg
       width="18"
@@ -26,9 +26,48 @@ function BellIcon({ hasUnread }) {
     >
       <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
       <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-      {hasUnread && (
-        <circle cx="19" cy="5" r="4" fill="#ef4444" stroke="#0e1424" strokeWidth="1.5" />
-      )}
+    </svg>
+  );
+}
+
+function NotificationTypeIcon({ type }) {
+  if (type === 'payment.confirmed') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+        <polyline points="22 4 12 14.01 9 11.01" />
+      </svg>
+    );
+  }
+  if (type === 'payment.failed') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="15" y1="9" x2="9" y2="15" />
+        <line x1="9" y1="9" x2="15" y2="15" />
+      </svg>
+    );
+  }
+  if (type === 'dispute.created' || type === 'dispute.updated') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      </svg>
+    );
+  }
+  if (type === 'admin.broadcast') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
     </svg>
   );
 }
@@ -67,7 +106,7 @@ function TimeAgo({ date, timeZone }) {
  * Accessibility:
  *   - The trigger button has aria-label, aria-expanded, and aria-haspopup.
  *   - The panel uses role="dialog" with aria-label.
- *   - Status updates use aria-live="polite".
+ *   - Keyboard focus trap is enforced when the dropdown is open.
  *   - Focus returns to the trigger when the panel closes.
  *   - Keyboard: Escape closes the panel.
  */
@@ -85,7 +124,7 @@ export default function NotificationCenter() {
 
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
-  const LIMIT = 15;
+  const LIMIT = 20;
 
   // ── Fetch helpers ────────────────────────────────────────────────────────
 
@@ -134,6 +173,35 @@ export default function NotificationCenter() {
     return () => clearInterval(id);
   }, [open, fetchUnreadCount]);
 
+  // ── Push delivery via SSE ────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const schoolId = localStorage.getItem('schoolId');
+    if (!schoolId) return;
+
+    let es;
+    try {
+      es = new EventSource(`${API_URL}/payments/events?schoolId=${encodeURIComponent(schoolId)}`, {
+        withCredentials: true,
+      });
+
+      const handlePush = () => {
+        fetchUnreadCount();
+        if (open) fetchNotifications(1, unreadOnly);
+      };
+
+      es.addEventListener('payment', handlePush);
+      es.addEventListener('dispute.created', handlePush);
+      es.addEventListener('dispute.updated', handlePush);
+      es.addEventListener('notification.created', handlePush);
+    } catch { /* non-fatal */ }
+
+    return () => {
+      if (es) es.close();
+    };
+  }, [fetchUnreadCount, fetchNotifications, open, unreadOnly]);
+
   // ── Open / close panel ───────────────────────────────────────────────────
 
   const openPanel = useCallback(() => {
@@ -146,12 +214,49 @@ export default function NotificationCenter() {
     triggerRef.current?.focus();
   }, []);
 
-  // Keyboard: Escape closes the panel
+  // ── Focus trap & keyboard accessibility ─────────────────────────────────
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') closePanel(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+
+    // Auto-focus first focusable inside panel
+    const timer = setTimeout(() => {
+      if (panelRef.current) {
+        const focusable = panelRef.current.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length > 0) focusable[0].focus();
+      }
+    }, 50);
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        closePanel();
+        return;
+      }
+      if (e.key === 'Tab' && panelRef.current) {
+        const elements = panelRef.current.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (elements.length === 0) return;
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [open, closePanel]);
 
   // Click-outside closes the panel
@@ -169,33 +274,41 @@ export default function NotificationCenter() {
     return () => document.removeEventListener('mousedown', onClick);
   }, [open, closePanel]);
 
-  // ── Mark as read ─────────────────────────────────────────────────────────
+  // ── Mark as read (Optimistic) ─────────────────────────────────────────────
 
   const markRead = useCallback(async (ids) => {
+    // Instant optimistic update
+    setNotifications((prev) =>
+      prev.map((n) => ids.includes(String(n._id)) ? { ...n, read: true } : n)
+    );
+    setUnreadCount((c) => Math.max(0, c - ids.length));
+
     try {
+      if (ids.length === 1) {
+        await fetch(`${API_URL}/notifications/${ids[0]}/read`, {
+          method: 'PATCH',
+          credentials: 'include',
+        }).catch(() => {});
+      }
       await fetch(`${API_URL}/notifications/read`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notificationIds: ids }),
       });
-      setNotifications((prev) =>
-        prev.map((n) => ids.includes(String(n._id)) ? { ...n, read: true } : n)
-      );
-      setUnreadCount((c) => Math.max(0, c - ids.filter((id) =>
-        notifications.find((n) => String(n._id) === id && !n.read)
-      ).length));
     } catch { /* non-fatal */ }
-  }, [notifications]);
+  }, []);
 
   const markAllRead = useCallback(async () => {
+    // Instant optimistic update
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    setUnreadCount(0);
+
     try {
       await fetch(`${API_URL}/notifications/read-all`, {
         method: 'POST',
         credentials: 'include',
       });
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-      setUnreadCount(0);
     } catch { /* non-fatal */ }
   }, []);
 
@@ -216,6 +329,7 @@ export default function NotificationCenter() {
   };
 
   const hasMore = page * LIMIT < total;
+  const badgeDisplay = unreadCount > 99 ? '99+' : unreadCount;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -242,12 +356,19 @@ export default function NotificationCenter() {
         }
         .nc-badge {
           position: absolute;
-          top: 3px; right: 3px;
-          min-width: 8px; height: 8px;
+          top: -4px; right: -6px;
+          min-width: 18px; height: 18px;
+          padding: 0 4px;
           background: #ef4444;
+          color: #fff;
           border-radius: 9999px;
-          border: 1.5px solid #0e1424;
-          font-size: 0;
+          border: 2px solid #0e1424;
+          font-size: 0.65rem;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          line-height: 1;
         }
         .nc-panel {
           position: absolute;
@@ -337,10 +458,14 @@ export default function NotificationCenter() {
           border-radius: 0 2px 2px 0;
         }
         .nc-dot {
-          width: 8px; height: 8px;
-          border-radius: 9999px;
+          width: 24px; height: 24px;
+          border-radius: 6px;
           flex-shrink: 0;
-          margin-top: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(255,255,255,0.06);
+          margin-top: 2px;
         }
         .nc-body { flex: 1; min-width: 0; }
         .nc-item-title {
@@ -378,7 +503,7 @@ export default function NotificationCenter() {
         .nc-empty {
           padding: 2.5rem 1rem;
           text-align: center;
-          color: rgba(255,255,255,0.3);
+          color: rgba(255,255,255,0.4);
           font-size: 0.85rem;
         }
         .nc-footer {
@@ -418,15 +543,17 @@ export default function NotificationCenter() {
         onClick={open ? closePanel : openPanel}
         aria-label={
           unreadCount > 0
-            ? `Notifications — ${unreadCount} unread`
+            ? `Notifications — ${badgeDisplay} unread`
             : 'Notifications — no unread'
         }
         aria-expanded={open}
         aria-haspopup="dialog"
       >
-        <BellIcon hasUnread={unreadCount > 0} />
+        <BellIcon />
         {unreadCount > 0 && (
-          <span className="nc-badge" aria-hidden="true" />
+          <span className="nc-badge" aria-hidden="true">
+            {badgeDisplay}
+          </span>
         )}
       </button>
 
@@ -437,7 +564,7 @@ export default function NotificationCenter() {
           className="nc-panel"
           role="dialog"
           aria-label="Notification center"
-          aria-modal="false"
+          aria-modal="true"
         >
           {/* Header */}
           <div className="nc-header">
@@ -455,9 +582,9 @@ export default function NotificationCenter() {
                     borderRadius: '99px',
                     verticalAlign: 'middle',
                   }}
-                  aria-label={`${unreadCount} unread`}
+                  aria-label={`${badgeDisplay} unread`}
                 >
-                  {unreadCount}
+                  {badgeDisplay}
                 </span>
               )}
             </span>
@@ -471,7 +598,7 @@ export default function NotificationCenter() {
               </button>
               {unreadCount > 0 && (
                 <button className="nc-btn" onClick={markAllRead}>
-                  Mark all read
+                  Mark all as read
                 </button>
               )}
               <button
@@ -496,9 +623,7 @@ export default function NotificationCenter() {
             ) : error ? (
               <div className="nc-error" role="alert">{error}</div>
             ) : notifications.length === 0 ? (
-              <div className="nc-empty">
-                {unreadOnly ? 'No unread notifications' : 'No notifications yet'}
-              </div>
+              <div className="nc-empty">No notifications</div>
             ) : (
               notifications.map((notif) => {
                 const sev = SEVERITY_META[notif.severity] || SEVERITY_META.info;
@@ -517,11 +642,9 @@ export default function NotificationCenter() {
                     tabIndex={0}
                     aria-label={`${notif.title}: ${notif.message}${!notif.read ? ' — unread' : ''}`}
                   >
-                    <div
-                      className="nc-dot"
-                      style={{ background: sev.color }}
-                      aria-hidden="true"
-                    />
+                    <div className="nc-dot" aria-hidden="true">
+                      <NotificationTypeIcon type={notif.type} />
+                    </div>
                     <div className="nc-body">
                       <div className="nc-item-title">{notif.title}</div>
                       <div className="nc-item-msg">{notif.message}</div>

@@ -1,5 +1,7 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const mongoose = require('mongoose');
 const FeeStructure = require('../models/feeStructureModel');
 const { del, KEYS } = require('../cache');
@@ -90,9 +92,9 @@ async function getAllFeeStructures(req, res, next) {
 async function getFeeByClass(req, res, next) {
   try {
     const { className } = req.params;
-    const fee = await FeeStructure.findOne({ schoolId: req.schoolId, className, deletedAt: null, ...activeFeeFilter() });
+    const fee = await FeeStructure.findOne({ schoolId: req.schoolId, className, deletedAt: null, isActive: true });
     if (!fee) return next(Object.assign(new Error(`No fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-    res.json(fee);
+    withVersion(res, fee).json(fee);
   } catch (err) { next(err); }
 }
 
@@ -132,22 +134,14 @@ async function updateFeeStructure(req, res, next) {
     if (academicYear   !== undefined) updateFields.academicYear   = academicYear;
     if (paymentDeadline !== undefined) updateFields.paymentDeadline = paymentDeadline;
 
-    const scheduleEdit = ['isActive', 'activeFrom', 'activeTo'].some(field => req.body[field] !== undefined);
-    const filter = { schoolId: req.schoolId, className, ...(scheduleEdit ? {} : { isActive: true }) };
-    const before = await FeeStructure.findOne(filter).lean();
-    Object.assign(updateFields, feeScheduleFields(req.body, before || {}));
-    if (scheduleEdit && before) {
-      // Keep validation of a one-sided edit coupled to the window that was read.
-      filter.activeFrom = before.activeFrom ?? null;
-      filter.activeTo = before.activeTo ?? null;
-    }
-    const fee = await FeeStructure.findOneAndUpdate(filter, updateFields, { new: true, runValidators: true });
-    if (!fee && scheduleEdit && before) {
-      return next(Object.assign(new Error('The activation window changed. Reload and try again.'), { code: 'CONFLICT', status: 409 }));
-    }
-    if (!fee) return next(Object.assign(new Error(`No active fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
-
-    del(KEYS.feesAll(), KEYS.feeByClass(className));
+    const target = { schoolId: req.schoolId, className, isActive: true };
+    const before = await FeeStructure.findOne(target).lean();
+    const writeFee = (session) => FeeStructure.findOneAndUpdate(
+      { ...target, ...versionFilter(req.expectedVersion) },
+      { $set: updateFields, $inc: { __v: 1 } },
+      { new: true, runValidators: true, ...(session && { session }) },
+    );
+    let fee;
 
     let studentsUpdated = 0;
     if (cascadeToStudents === true) {
@@ -160,6 +154,8 @@ async function updateFeeStructure(req, res, next) {
       });
       try {
         await session.withTransaction(async () => {
+          fee = await writeFee(session);
+          if (!fee) return;
           const students = await Student.find({ schoolId: req.schoolId, class: className, deletedAt: null }).session(session);
 
           if (students.length > 0) {
@@ -180,8 +176,9 @@ async function updateFeeStructure(req, res, next) {
                 updateOne: {
                   filter: { _id: s._id, schoolId: req.schoolId },
                   update: {
+                    $inc: { __v: 1 },
                     $set: {
-                      feeAmount,
+                      feeAmount: normalisedFeeAmount,
                       totalPaid: amountPaid,
                       remainingBalance,
                       feePaid: amountPaid >= feeAmount,
@@ -212,9 +209,14 @@ async function updateFeeStructure(req, res, next) {
           }
         });
       } finally {
-        session.endSession();
+        await session.endSession();
       }
+    } else {
+      fee = await writeFee();
     }
+
+    if (!fee) return staleOrMissing(res, next, FeeStructure.findOne(target));
+    del(KEYS.feesAll(), KEYS.feeByClass(className));
 
     await audit(req, 'fee_update', className, {
       before: before ? { feeAmount: before.feeAmount, description: before.description, academicYear: before.academicYear, paymentDeadline: before.paymentDeadline } : null,
@@ -222,7 +224,7 @@ async function updateFeeStructure(req, res, next) {
       cascadeToStudents,
       studentsUpdated,
     });
-    res.json({ fee, studentsUpdated });
+    withVersion(res, fee).json({ fee, studentsUpdated });
   } catch (err) { next(err); }
 }
 

@@ -3,81 +3,99 @@
 const crypto = require('crypto');
 
 const CURSOR_TTL_MS = 60 * 60 * 1000;
-const CURSOR_KEY = process.env.LIST_CURSOR_HMAC_KEY || process.env.JWT_SECRET || 'list-cursor-key';
+const TOKEN_FORMAT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/;
 
 function cursorError(message) {
-  const error = new Error(message);
-  error.code = 'INVALID_CURSOR';
-  return error;
+  return Object.assign(new Error(message), { code: 'INVALID_CURSOR', status: 400 });
 }
 
-function filtersFingerprint(filters) {
-  return crypto.createHash('sha256').update(JSON.stringify(filters)).digest('hex');
+function sign(data) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is required for cursor signing');
+
+  const key = crypto.createHmac('sha256', secret).update('PaymentFlow/list-cursor/v1').digest();
+  return crypto.createHmac('sha256', key).update(data).digest('base64url');
 }
 
-function encodeListCursor(record, filters) {
-  const payload = {
-    createdAt: new Date(record.createdAt).toISOString(),
+function fingerprint(scope, filters) {
+  const data = JSON.stringify([scope, filters], (_key, value) => (
+    value instanceof RegExp ? { source: value.source, flags: value.flags } : value
+  ));
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+function encodeListCursor(record, scope, filters, direction, timestamp = 'createdAt') {
+  const data = Buffer.from(JSON.stringify({
     id: String(record._id),
-    filters: filtersFingerprint(filters),
+    ts: new Date(record[timestamp]).toISOString(),
+    schoolId: filters.schoolId == null ? null : String(filters.schoolId),
+    fingerprint: fingerprint(scope, filters),
+    direction,
     expiresAt: Date.now() + CURSOR_TTL_MS,
-  };
-  const data = JSON.stringify(payload);
-  const signature = crypto.createHmac('sha256', CURSOR_KEY).update(data).digest('hex');
-  return Buffer.from(JSON.stringify({ data, signature })).toString('base64url');
+  })).toString('base64url');
+
+  return `${data}.${sign(data)}`;
 }
 
-function decodeListCursor(token, filters) {
-  let envelope;
-  try {
-    envelope = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
-  } catch {
+function decodeListCursor(token, scope, filters) {
+  if (typeof token !== 'string' || token.length > 2048 || !TOKEN_FORMAT.test(token)) {
     throw cursorError('Cursor is malformed');
   }
 
-  if (typeof envelope?.data !== 'string' || typeof envelope?.signature !== 'string') {
-    throw cursorError('Cursor is malformed');
-  }
-
-  const expected = crypto.createHmac('sha256', CURSOR_KEY).update(envelope.data).digest();
-  let supplied;
-  try {
-    supplied = Buffer.from(envelope.signature, 'hex');
-  } catch {
-    throw cursorError('Cursor signature is invalid');
-  }
-  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+  const [data, signature] = token.split('.');
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(sign(data)))) {
     throw cursorError('Cursor signature is invalid');
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(envelope.data);
-  } catch {
-    throw cursorError('Cursor payload is malformed');
+  const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+  if (payload.expiresAt <= Date.now()) throw cursorError('Cursor has expired');
+  if (payload.schoolId !== (filters.schoolId == null ? null : String(filters.schoolId)) ||
+      payload.fingerprint !== fingerprint(scope, filters)) {
+    throw cursorError('Cursor does not match the current tenant or filters');
   }
-
-  if (!Number.isFinite(payload.expiresAt) || Date.now() > payload.expiresAt) {
-    throw cursorError('Cursor has expired');
-  }
-  if (payload.filters !== filtersFingerprint(filters)) {
-    throw cursorError('Cursor does not match the current filters');
-  }
-  if (!Number.isFinite(Date.parse(payload.createdAt)) || typeof payload.id !== 'string' || !/^[a-f\d]{24}$/i.test(payload.id)) {
+  if (!/^[a-f\d]{24}$/i.test(payload.id) || !Number.isFinite(Date.parse(payload.ts)) ||
+      !['next', 'prev'].includes(payload.direction)) {
     throw cursorError('Cursor position is invalid');
   }
-
   return payload;
 }
 
-function cursorCondition(payload) {
-  const createdAt = new Date(payload.createdAt);
+async function paginateList({ find, scope, filter, cursor, limit, timestamp = 'createdAt' }) {
+  const position = cursor == null ? null : decodeListCursor(cursor, scope, filter);
+  const backwards = position?.direction === 'prev';
+  const order = backwards ? 1 : -1;
+  let query = filter;
+  if (position) {
+    const operator = backwards ? '$gt' : '$lt';
+    const date = new Date(position.ts);
+    query = {
+      ...filter,
+      $and: [
+        ...(filter.$and || []),
+        { $or: [
+          { [timestamp]: { [operator]: date } },
+          { [timestamp]: date, _id: { [operator]: position.id } },
+        ] },
+      ],
+    };
+  }
+
+  const results = await find(query).sort({ [timestamp]: order, _id: order }).limit(limit + 1);
+  const extra = results.length > limit;
+  const items = results.slice(0, limit);
+  if (backwards) items.reverse();
+
+  const hasMore = backwards ? Boolean(items.length) : extra;
+  const hasPrevious = backwards ? extra : Boolean(position && items.length);
   return {
-    $or: [
-      { createdAt: { $lt: createdAt } },
-      { createdAt, _id: { $lt: payload.id } },
-    ],
+    items,
+    pagination: {
+      limit,
+      nextCursor: hasMore ? encodeListCursor(items[items.length - 1], scope, filter, 'next', timestamp) : null,
+      prevCursor: hasPrevious ? encodeListCursor(items[0], scope, filter, 'prev', timestamp) : null,
+      hasMore,
+    },
   };
 }
 
-module.exports = { encodeListCursor, decodeListCursor, cursorCondition };
+module.exports = { paginateList, encodeListCursor, decodeListCursor, CURSOR_TTL_MS };

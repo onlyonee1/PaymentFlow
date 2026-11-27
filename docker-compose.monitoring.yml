@@ -1,6 +1,6 @@
 version: "3.8"
 
-# Local development monitoring stack — Prometheus + Grafana.
+# Local development monitoring stack for metrics and traces.
 #
 # Usage:
 #   1. Set METRICS_TOKEN in backend/.env (generate with: openssl rand -hex 32)
@@ -11,6 +11,8 @@ version: "3.8"
 #
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3001  (admin / <GRAFANA_PASSWORD>)
+# Jaeger:     http://localhost:16686
+# OTLP/HTTP:  http://localhost:4318
 #
 # NOTE: GRAFANA_PASSWORD is a required environment variable. Docker Compose will
 # refuse to start the monitoring stack if it is not set.
@@ -40,8 +42,11 @@ services:
   grafana:
     image: grafana/grafana:10.4.3
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Error: GRAFANA_PASSWORD environment variable must be set. Generate one with: openssl rand -hex 24}
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD before starting the monitoring stack}"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: "yesoreyeram-infinity-datasource 2.4.0"
+      PAYMENT_METRICS_ORIGIN: ${PAYMENT_METRICS_ORIGIN:-http://host.docker.internal:5000}
+      PAYMENT_METRICS_TOKEN: ${METRICS_BEARER_TOKEN:-${METRICS_TOKEN:-}}
       GF_SERVER_ROOT_URL: "http://localhost:3001"
     volumes:
       - grafana_data:/var/lib/grafana
@@ -49,8 +54,42 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3001:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
+      - loki
+    networks:
+      - monitoring
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.67.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686"
+    networks:
+      - monitoring
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./monitoring/tempo.yml:/etc/tempo.yml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - monitoring
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.119.0
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./monitoring/otel-collector.yml:/etc/otel-collector.yml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+    depends_on:
+      - jaeger
+      - tempo
     networks:
       - monitoring
 
@@ -114,3 +153,4 @@ networks:
 volumes:
   prometheus_data:
   grafana_data:
+  tempo_data:

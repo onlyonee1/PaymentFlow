@@ -1,5 +1,7 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const crypto = require('crypto');
 const StellarSdk = require('@stellar/stellar-sdk');
 const School = require('../models/schoolModel');
@@ -8,6 +10,20 @@ const { verifyStellarAccountFunding } = require('../services/stellarAccountVerif
 const { validateWebhookUrl } = require('../utils/validateWebhookUrl');
 const schoolCache = require('../services/schoolCacheInvalidator');
 const { isSupportedCurrency } = require('../services/currencyConversionService');
+const { normalizeSchoolSlug, isValidSchoolSlug, suggestSchoolSlugs } = require('../utils/schoolSlug');
+
+async function duplicateSchoolError(err, slug, timezone) {
+  const isSlugConflict = err.keyPattern?.slug === 1 ||
+    err.keyValue?.slug !== undefined || /index:\s+slug_1\b/.test(err.message);
+  const conflict = new Error(`A school with this ${isSlugConflict ? 'slug' : 'schoolId'} already exists`);
+  conflict.code = 'DUPLICATE_SCHOOL';
+  conflict.status = 409;
+  if (isSlugConflict) {
+    conflict.details = { suggestions: await suggestSchoolSlugs(School, slug, timezone) };
+  }
+  return conflict;
+}
+
 
 function isValidTimezone(tz) {
   try {
@@ -20,13 +36,14 @@ function isValidTimezone(tz) {
 
 // POST /api/schools
 async function createSchool(req, res, next) {
+  const slug = normalizeSchoolSlug(req.body.slug);
   try {
-    const { name, slug, stellarAddress, network, adminEmail, address, timezone, suspiciousPaymentMultiplier, suspiciousAmountConfig } = req.body;
+    const { name, stellarAddress, network, adminEmail, address, timezone, suspiciousPaymentMultiplier, suspiciousAmountConfig } = req.body;
 
     const errors = [];
     if (!name || typeof name !== 'string' || !name.trim())
       errors.push('name is required');
-    if (!slug || !/^[a-z0-9-]{2,60}$/.test(slug.trim().toLowerCase()))
+    if (!isValidSchoolSlug(slug))
       errors.push('slug must be 2–60 lowercase alphanumeric characters or hyphens');
     if (!stellarAddress)
       errors.push('stellarAddress is required');
@@ -67,7 +84,7 @@ async function createSchool(req, res, next) {
     const school = await School.create({
       schoolId,
       name: name.trim(),
-      slug: slug.trim().toLowerCase(),
+      slug,
       stellarAddress,
       network: network || 'testnet',
       adminEmail: adminEmail || null,
@@ -105,11 +122,7 @@ async function createSchool(req, res, next) {
     res.status(201).json(school);
   } catch (err) {
     if (err.code === 11000) {
-      const field = err.message.includes('slug') ? 'slug' : 'schoolId';
-      const e = new Error(`A school with this ${field} already exists`);
-      e.code = 'DUPLICATE_SCHOOL';
-      e.status = 409;
-      return next(e);
+      return duplicateSchoolError(err, slug, req.body.timezone).then(next, next);
     }
     // Handle Mongoose validation errors
     if (err.name === 'ValidationError') {
@@ -143,7 +156,11 @@ async function getAllSchools(req, res, next) {
     }
 
     const query = includeInactive ? {} : { isActive: true };
-    const schools = await School.find(query).sort({ name: 1 }).lean();
+    const schools = await School.find(query, {
+      jwtSecret: 0,
+      webhookSecret: 0,
+      internalNotes: 0,
+    }).sort({ name: 1 }).lean();
     res.json(schools);
   } catch (err) {
     next(err);
@@ -160,13 +177,15 @@ async function getSchool(req, res, next) {
       jwtSecret: 0,
       webhookSecret: 0,
       internalNotes: 0,
+      mfaSecret: 0,
+      mfaBackupCodes: 0,
     }).lean();
     if (!school) {
       const e = new Error('School not found');
       e.code = 'NOT_FOUND';
       return next(e);
     }
-    res.json(school);
+    withVersion(res, school).json(school);
   } catch (err) {
     next(err);
   }
@@ -174,11 +193,22 @@ async function getSchool(req, res, next) {
 
 // PATCH /api/schools/:schoolSlug
 async function updateSchool(req, res, next) {
+  const updates = {};
+  let original;
   try {
     const allowed = ['name', 'stellarAddress', 'network', 'adminEmail', 'address', 'suspiciousPaymentMultiplier', 'suspiciousAmountConfig', 'localCurrency', 'classOptions'];
-    const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+
+    if (req.body.slug !== undefined) {
+      updates.slug = normalizeSchoolSlug(req.body.slug);
+      if (!isValidSchoolSlug(updates.slug)) {
+        return res.status(400).json({
+          errors: ['slug must be 2–60 lowercase alphanumeric characters or hyphens'],
+          code: 'VALIDATION_ERROR',
+        });
+      }
     }
 
     // Issue #670: Step-up authentication for stellarAddress changes
@@ -264,10 +294,15 @@ async function updateSchool(req, res, next) {
       updates.classOptions = updates.classOptions.map(opt => opt.trim());
     }
 
-    const original = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }).lean();
+    const identifier = req.params.schoolSlug ?? req.params.schoolId;
+    const filter = /^SCH-[0-9A-F]+$/.test(identifier)
+      ? { schoolId: identifier, isActive: true }
+      : { slug: identifier.toLowerCase(), isActive: true };
+    original = await School.findOne(filter).lean();
     if (!original) {
       const e = new Error('School not found');
       e.code = 'NOT_FOUND';
+      e.status = 404;
       return next(e);
     }
 
@@ -278,11 +313,21 @@ async function updateSchool(req, res, next) {
       warning = fundingWarning;
     }
 
+    const target = { _id: original._id, isActive: true };
     const school = await School.findOneAndUpdate(
-      { slug: req.params.schoolSlug.toLowerCase(), isActive: true },
+      filter,
       updates,
       { new: true, runValidators: true }
     );
+
+    if (!school) {
+      const error = new Error('School not found');
+      error.code = 'NOT_FOUND';
+      error.status = 404;
+      return next(error);
+    }
+
+    if (updates.slug && original.slug !== school.slug) schoolCache.invalidate(original);
 
     // Drop the stale lean copy on every replica so the rotated address /
     // changed config is served within seconds, not after the 5-minute TTL.
@@ -311,11 +356,14 @@ async function updateSchool(req, res, next) {
 
     // Return 202 with warning if account is unfunded
     if (warning) {
-      return res.status(202).json({ ...school.toObject(), warning });
+      return withVersion(res, school).status(202).json({ ...school.toJSON(), warning });
     }
 
-    res.json(school);
+    withVersion(res, school).json(school);
   } catch (err) {
+    if (err.code === 11000 && updates.slug) {
+      return duplicateSchoolError(err, updates.slug, original?.timezone).then(next, next);
+    }
     // Handle Mongoose validation errors
     if (err.name === 'ValidationError') {
       const validationErrors = Object.values(err.errors).map(e => e.message);

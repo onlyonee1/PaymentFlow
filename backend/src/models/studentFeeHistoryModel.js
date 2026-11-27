@@ -18,6 +18,7 @@ const studentFeeHistorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+studentFeeHistorySchema.index({ schoolId: 1, studentId: 1, archivedAt: -1, _id: -1 });
 studentFeeHistorySchema.index({ studentId: 1, schoolId: 1 });
 
 studentFeeHistorySchema.plugin(tenantScope, { modelName: 'StudentFeeHistory' });
