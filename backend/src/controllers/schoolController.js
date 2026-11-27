@@ -1,5 +1,7 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const crypto = require('crypto');
 const StellarSdk = require('@stellar/stellar-sdk');
 const School = require('../models/schoolModel');
@@ -175,13 +177,15 @@ async function getSchool(req, res, next) {
       jwtSecret: 0,
       webhookSecret: 0,
       internalNotes: 0,
+      mfaSecret: 0,
+      mfaBackupCodes: 0,
     }).lean();
     if (!school) {
       const e = new Error('School not found');
       e.code = 'NOT_FOUND';
       return next(e);
     }
-    res.json(school);
+    withVersion(res, school).json(school);
   } catch (err) {
     next(err);
   }
@@ -309,6 +313,7 @@ async function updateSchool(req, res, next) {
       warning = fundingWarning;
     }
 
+    const target = { _id: original._id, isActive: true };
     const school = await School.findOneAndUpdate(
       filter,
       updates,
@@ -351,10 +356,10 @@ async function updateSchool(req, res, next) {
 
     // Return 202 with warning if account is unfunded
     if (warning) {
-      return res.status(202).json({ ...school.toObject(), warning });
+      return withVersion(res, school).status(202).json({ ...school.toJSON(), warning });
     }
 
-    res.json(school);
+    withVersion(res, school).json(school);
   } catch (err) {
     if (err.code === 11000 && updates.slug) {
       return duplicateSchoolError(err, updates.slug, original?.timezone).then(next, next);

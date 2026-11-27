@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { requireVersion } = require('../middleware/optimisticLock');
 const {
   registerStudent,
   getAllStudents,
@@ -272,7 +273,8 @@ router.get('/overdue', requireSchoolAuth(), getOverdueStudents);
 // Public routes
 router.get('/public/:studentId', validateStudentIdParam, getPublicStudentInfo);
 router.get('/:studentId', requireAdminAuth, validateStudentIdParam, getStudent);
-router.put('/:studentId', requireAdminAuth, auditContext, validateStudentIdParam, validateUpdateStudent, updateStudent);
+router.put('/:studentId', requireAdminAuth, auditContext, requireVersion, validateStudentIdParam, validateUpdateStudent, updateStudent);
+router.patch('/:studentId', requireAdminAuth, auditContext, requireVersion, validateStudentIdParam, validateUpdateStudent, updateStudent);
 router.delete('/:studentId', requireAdminAuth, auditContext, validateStudentIdParam, deleteStudent);
 router.post('/:studentId/restore', requireAdminAuth, auditContext, validateStudentIdParam, quotaWrite(restoreStudent));
 router.get('/:studentId/payments/audit', requireAdminAuth, validateStudentIdParam, getDeletedStudentPayments);

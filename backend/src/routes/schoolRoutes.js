@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { requireVersion } = require('../middleware/optimisticLock');
 const {
   createSchool,
   getAllSchools,
@@ -206,12 +207,12 @@ const { auditContext } = require('../middleware/auditContext');
  *         description: Unauthorized
  */
 router.get('/',                 getAllSchools);
-router.get('/:schoolId',        getSchool);
+router.get('/:schoolSlug',        getSchool);
 
 // Admin-only write endpoints — require JWT auth
 router.post('/',                requireAdminAuth, auditContext, createSchool);
-router.patch('/:schoolId',      requireAdminAuth, auditContext, updateSchool);
-router.delete('/:schoolId',     requireAdminAuth, auditContext, deactivateSchool);
+router.patch('/:schoolId',      requireAdminAuth, auditContext, requireVersion, updateSchool);
+router.delete('/:schoolSlug',     requireAdminAuth, auditContext, deactivateSchool);
 
 // Dedicated wallet-rotation endpoint — step-up auth + mandatory reason (#1387)
 router.put('/:schoolId/stellar-address', requireAdminAuth, auditContext, rotateStellarAddress);
@@ -220,15 +221,15 @@ router.put('/:schoolId/stellar-address', requireAdminAuth, auditContext, rotateS
 router.put('/:schoolId/webhook-secret', requireAdminAuth, auditContext, rotateWebhookSecret);
 
 // Explicit activate / deactivate endpoints
-router.patch('/:schoolId/deactivate', requireAdminAuth, auditContext, deactivateSchoolEndpoint);
-router.patch('/:schoolId/activate',   requireAdminAuth, auditContext, activateSchool);
+router.patch('/:schoolSlug/deactivate', requireAdminAuth, auditContext, deactivateSchoolEndpoint);
+router.patch('/:schoolSlug/activate',   requireAdminAuth, auditContext, activateSchool);
 
 // Webhook registration — validates URL for SSRF safety before storing
 router.post('/:slug/webhooks', requireAdminAuth, auditContext, registerWebhook);
 
 // Per-school settings overrides
-router.get('/:schoolId/settings',     requireAdminAuth, auditContext, getSchoolSettings);
-router.patch('/:schoolId/settings',   requireAdminAuth, auditContext, updateSchoolSettings);
-router.delete('/:schoolId/settings/:key', requireAdminAuth, auditContext, clearSchoolSetting);
+router.get('/:schoolSlug/settings',     requireAdminAuth, auditContext, getSchoolSettings);
+router.patch('/:schoolSlug/settings',   requireAdminAuth, auditContext, updateSchoolSettings);
+router.delete('/:schoolSlug/settings/:key', requireAdminAuth, auditContext, clearSchoolSetting);
 
 module.exports = router;

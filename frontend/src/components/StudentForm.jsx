@@ -73,7 +73,9 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
       }, 1000);
     } catch (err) {
       const data = err.response?.data;
-      const message = getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed");
+      const message = err.response?.status === 412
+        ? t("studentForm.stale", { defaultValue: "Someone else changed this — please refresh" })
+        : getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed");
       setError(message);
       onRollback?.(message);
     } finally {

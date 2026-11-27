@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { requireVersion } = require('../middleware/optimisticLock');
 const { createFeeStructure, getAllFeeStructures, getFeeByClass, deleteFeeStructure, updateFeeStructure } = require('../controllers/feeController');
 const { validateFeeStructure } = require('../middleware/validate');
 const { resolveSchool } = require('../middleware/schoolContext');
@@ -148,7 +149,8 @@ const requireIncludeDeletedAccess = (req, res, next) => {
 router.post('/',              requireAdminAuth, auditContext, contractPaused, validateFeeStructure, createFeeStructure);
 router.get('/',               requireIncludeDeletedAccess, getAllFeeStructures);
 router.get('/:className',     requireSchoolAuth(), getFeeByClass);
-router.put('/:className',     requireAdminAuth, auditContext, contractPaused, validateFeeStructure, updateFeeStructure);
+router.put('/:className',     requireAdminAuth, auditContext, requireVersion, contractPaused, validateFeeStructure, updateFeeStructure);
+router.patch('/:className',     requireAdminAuth, auditContext, requireVersion, contractPaused, validateFeeStructure, updateFeeStructure);
 router.delete('/:className',  requireAdminAuth, auditContext, contractPaused, deleteFeeStructure);
 
 module.exports = router;
