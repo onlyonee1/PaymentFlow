@@ -154,5 +154,10 @@ MyApp.getInitialProps = async ({ Component, ctx }) => {
     i18n.changeLanguage(primary);
   }
 
+  if (ctx.res && !ctx.res.hasHeader("Cache-Control")) {
+    ctx.res.setHeader("Cache-Control", "private, no-cache");
+    ctx.res.setHeader("Vary", "Accept-Language");
+  }
+
   return { pageProps };
 };

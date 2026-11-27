@@ -167,10 +167,10 @@ app.use(requestLogger());
 // ── Cache-Control: no-store on auth and sensitive data routes ─────────────────
 // Prevents intermediaries (CDNs, shared proxies) from caching tokens,
 // payment data, audit logs, and other sensitive JSON responses.
-const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)\b/;
+const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)(?:\/|$)/i;
 app.use((req, res, next) => {
   if (SENSITIVE_PATH_RE.test(req.path)) {
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Pragma', 'no-cache');
   }
   next();
