@@ -252,7 +252,7 @@ function WebhooksPage() {
                               disabled={testingId === ep._id}
                               title={t("webhooks.sendTestEvent")}
                             >
-                              <IconRefresh />
+                              <IconRefreshCw />
                             </button>
                             <button
                               className="btn btn-outline-secondary"

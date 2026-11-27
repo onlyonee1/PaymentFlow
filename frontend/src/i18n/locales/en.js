@@ -657,6 +657,8 @@ const en = {
     dailyBreakdown: "Daily Breakdown",
     days: "{{count}} days",
     noPaymentsInPeriod: "No payments in this period",
+    emptyTitle: "No reports generated yet",
+    emptyDescription: "Generate a report to review payments and collections.",
   },
 
   dashboard: {

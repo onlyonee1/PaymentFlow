@@ -123,11 +123,6 @@ function AuditLogsContent() {
           border-color: var(--accent);
           box-shadow: 0 0 0 3px var(--accent-subtle);
         }
-        .al-empty {
-          padding: 3.5rem;
-          text-align: center;
-          color: var(--text-muted);
-        }
         .al-detail-pre {
           margin-top: 0.75rem;
           padding: 0.625rem 0.75rem;

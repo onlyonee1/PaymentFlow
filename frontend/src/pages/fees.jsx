@@ -192,7 +192,7 @@ export default function FeesPage() {
       <div className="page-wrap">
 
         {/* ── Create form ──────────────────────────────────────────────────── */}
-        <div className="card" style={{ marginBottom: "1.5rem" }}>
+        <div className="card" id="create-fee" style={{ marginBottom: "1.5rem" }}>
           <div className="card-header">
             <div
               className="card-title"

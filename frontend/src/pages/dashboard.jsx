@@ -611,6 +611,23 @@ function Dashboard() {
               <TableDensityControl density={density} setDensity={setDensity} />
             </div>
           </div>
+          {importMessage && (
+            <div
+              className={`alert alert-${importMessage.type === "success" ? "success" : importMessage.type === "warning" ? "warning" : "danger"}`}
+              role={importMessage.type === "error" ? "alert" : "status"}
+              style={{ margin: "1rem 1.25rem 0" }}
+            >
+              {importMessage.text}
+            </div>
+          )}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={handleStudentImport}
+            aria-label={t("dashboard.importStudents")}
+            style={{ display: "none" }}
+          />
 
           {/* Filter chip bar — Issue #355: show active filters as removable chips */}
           <div style={{ paddingLeft: "1.25rem", paddingRight: "1.25rem" }}>
@@ -659,7 +676,7 @@ function Dashboard() {
                   action={studentsRetryable ? { label: t("actions.retry"), onClick: () => fetchStudents(cursor, debouncedSearch, statusFilter, classFilter) } : undefined}
                 />
               </div>
-            ) : (
+            ) : studentsLoading || students.length > 0 ? (
               <div style={{ overflowX: "auto" }} aria-busy={studentsLoading} aria-label={t("dashboard.studentTableAria")}>
                 <table
                   {...studentGridProps}
@@ -800,6 +817,21 @@ function Dashboard() {
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <EmptyState
+                variant="students"
+                title={search || statusFilter !== "all" || classFilter
+                  ? t("dashboard.emptyTitle")
+                  : t("dashboard.noStudentsYet")}
+                description={search || statusFilter !== "all" || classFilter
+                  ? t("dashboard.emptyFilters")
+                  : t("dashboard.importDescription")}
+                actionLabel={search || statusFilter !== "all" || classFilter
+                  ? undefined
+                  : importingStudents ? t("dashboard.importingStudents") : t("dashboard.importStudents")}
+                onAction={() => importInputRef.current?.click()}
+                actionDisabled={importingStudents}
+              />
             )}
           </ErrorBoundary>
 
