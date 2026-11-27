@@ -79,7 +79,7 @@ const LockIcon = () => (
  * - If `locked` is true: renders a disabled link with a lock icon + tooltip.
  * - Otherwise: renders a normal Next.js Link.
  */
-function NavLink({ href, label, active, locked = false, lockedTooltip, mobile = false }) {
+function NavLink({ href, label, active, locked = false, lockedTooltip, mobile = false, onMouseEnter, onFocus }) {
   const baseStyle = {
     color: locked ? "rgba(255,255,255,0.25)" : undefined,
     cursor: locked ? "default" : undefined,
@@ -112,6 +112,8 @@ function NavLink({ href, label, active, locked = false, lockedTooltip, mobile = 
       href={href}
       className={`nav-link${active ? " active" : ""}`}
       aria-current={active ? "page" : undefined}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
       style={mobile ? undefined : undefined}
     >
       {label}
@@ -493,6 +495,47 @@ export default function Navbar() {
           .nav-name { display: none; }
           .nav-inner { padding: 0 1rem; }
         }
+
+        /* ── Bottom tab bar — mobile only ───────────────── */
+        .bottom-tab-bar {
+          display: none;
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          height: 56px;
+          background: #0e1424;
+          border-top: 1px solid rgba(255,255,255,0.08);
+          z-index: 150;
+          flex-direction: row;
+          align-items: stretch;
+        }
+        .bottom-tab {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          min-height: 44px;
+          min-width: 44px;
+          color: rgba(255,255,255,0.5);
+          text-decoration: none;
+          font-size: 0.6rem;
+          font-weight: 500;
+          transition: color 0.12s;
+        }
+        .bottom-tab.active { color: #34d399; }
+        .bottom-tab:focus-visible { outline: 2px solid #34d399; outline-offset: -2px; }
+        .bottom-tab-icon { font-size: 1.2rem; line-height: 1; }
+        .bottom-tab-label { font-size: 0.6rem; white-space: nowrap; }
+        @media (max-width: 720px) {
+          .bottom-tab-bar { display: flex; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .bottom-tab { transition: none; }
+          .nav-mobile { transition: none; }
+        }
       `}</style>
 
       <TestnetBanner />
@@ -601,6 +644,26 @@ export default function Navbar() {
           : <Link href="/login" className="nav-pill nav-pill-accent" style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>{t("nav.adminLogin")}</Link>
         }
       </div>
+
+      {/* Bottom tab bar — mobile only */}
+      <nav className="bottom-tab-bar" aria-label={t("nav.bottomTabBar", "Bottom navigation")}>
+        {[
+          { href: "/dashboard", label: t("nav.dashboard", "Dashboard"), icon: "⊞" },
+          { href: "/pay-fees",  label: t("nav.payFees",  "Payments"),  icon: "₿" },
+          { href: "/",          label: t("nav.students", "Students"),  icon: "👥" },
+          { href: "/reports",   label: t("nav.reports",  "Reports"),   icon: "📊" },
+        ].map(({ href, label, icon }) => (
+          <Link
+            key={href}
+            href={href}
+            className={`bottom-tab${pathname === href ? " active" : ""}`}
+            aria-current={pathname === href ? "page" : undefined}
+          >
+            <span className="bottom-tab-icon" aria-hidden="true">{icon}</span>
+            <span className="bottom-tab-label">{label}</span>
+          </Link>
+        ))}
+      </nav>
     </>
   );
 }
