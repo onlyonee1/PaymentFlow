@@ -1,0 +1,72 @@
+name: Stellar Testnet integration
+
+on:
+  schedule:
+    - cron: '0 2 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stellar-testnet-integration
+  cancel-in-progress: false
+
+jobs:
+  payment-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      MONGO_URI: mongodb://localhost:27017/paymentflow_testnet?replicaSet=rs0
+      JWT_SECRET: testnet-ci-fixture-secret-only-for-this-job
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix backend
+      - name: Start MongoDB replica set
+        run: |
+          docker run -d --name paymentflow-mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for attempt in {1..30}; do
+            if docker exec paymentflow-mongo mongosh --quiet --eval 'if (!db.adminCommand({ping: 1}).ok) quit(1)' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec paymentflow-mongo mongosh --quiet --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})'
+          for attempt in {1..30}; do
+            if docker exec paymentflow-mongo mongosh --quiet --eval 'if (!db.hello().isWritablePrimary) quit(1)' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Run Testnet lifecycle suite
+        run: timeout 175s npm run test:integration -- --json --outputFile=testnet-report.json
+      - name: Upload Testnet report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: testnet-payment-lifecycle
+          path: testnet-report.json
+          retention-days: 7
+      - name: Alert payments on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.PAYMENTS_ALERTS_SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo '::error::Configure PAYMENTS_ALERTS_SLACK_WEBHOOK_URL for #payments-alerts'
+            exit 1
+          fi
+          jq -n --arg text "Weekly PaymentFlow Testnet integration failed: $RUN_URL" '{text: $text}' |
+            curl --fail-with-body --max-time 15 -H 'Content-Type: application/json' --data-binary @- "$SLACK_WEBHOOK_URL"

@@ -1,5 +1,7 @@
 'use strict';
 
+const { withSpan } = require('../tracing/spans');
+
 /**
  * HorizonFailoverClient
  *
@@ -334,7 +336,7 @@ class HorizonFailoverClient {
 
       const { server, cb, url } = this._servers[currentIdx];
       try {
-        const result = await fn(server);
+        const result = await withSpan('horizon.failover.request', () => fn(server));
         cb.recordSuccess();
         // If we succeeded on a non-primary endpoint, keep it as active.
         if (this._activeIndex !== currentIdx) {

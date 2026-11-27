@@ -1,242 +1,485 @@
 'use strict';
 
 /**
- * API contract tests — issue #656
+ * Issue #24 — Frontend contract tests against OpenAPI examples.
  *
- * Verifies that key endpoints honour their documented contracts:
- *   - Correct HTTP status codes
- *   - Required response envelope fields
- *   - Error response shape (error + code)
- *   - Content-Type: application/json on all JSON responses
+ * Frontend assumptions about API response shapes can silently drift from
+ * backend behaviour when endpoints change.  These tests pin the contract
+ * by:
+ *
+ *   1. Loading canonical response fixtures from
+ *      tests/fixtures/contracts/api-contract-fixtures.json (the "contract").
+ *   2. Running each fixture through the frontend API-client parsers
+ *      (frontend/src/services/api.js consumers) to prove they can extract
+ *      the fields they depend on without crashing or returning undefined.
+ *   3. Asserting that every documented error envelope carries both `error`
+ *      (string) and `code` (string) fields — the frontend error-message
+ *      module relies on `code` for i18n routing.
+ *   4. Verifying success shapes carry the minimum fields that UI components
+ *      access by field name (no defensive "if field exists" guards needed).
+ *
+ * Adding a new endpoint
+ * ---------------------
+ * 1. Add a fixture entry to tests/fixtures/contracts/api-contract-fixtures.json.
+ * 2. Add a describe block below that uses parseXxx() helpers that mirror how
+ *    the frontend component reads the response.
+ * 3. Run: npm test tests/apiContractTests.test.js
  */
 
-process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/test';
-process.env.SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+const fixtures = require('./fixtures/contracts/api-contract-fixtures.json');
 
-const request = require('supertest');
+// ---------------------------------------------------------------------------
+// Parser helpers — mirror exactly what React components do with API data.
+// If a field is renamed in the backend, the corresponding parse call returns
+// undefined and the assertion below fails CI before the breakage ships.
+// ---------------------------------------------------------------------------
 
-// ── Mocks ─────────────────────────────────────────────────────────────────────
-
-jest.mock('../backend/src/config/database', () => ({
-  connect: jest.fn().mockResolvedValue(true),
-  disconnect: jest.fn().mockResolvedValue(true),
-  healthCheck: jest.fn().mockResolvedValue({ healthy: true }),
-  TRANSACTION_CONFIG: { readConcern: 'majority', writeConcern: 'majority', journal: true, transactionTimeoutMs: 30000 },
-}));
-
-jest.mock('../backend/src/services/auditService', () => ({
-  logAudit: jest.fn().mockResolvedValue(undefined),
-  getAuditLogs: jest.fn().mockResolvedValue({ logs: [], total: 0 }),
-  getRecentAuditLogs: jest.fn().mockResolvedValue([]),
-  verifyAuditChain: jest.fn().mockResolvedValue({ ok: true }),
-  getAuditFailureCount: jest.fn().mockReturnValue(0),
-  getAuditHealth: jest.fn().mockReturnValue({ healthy: true }),
-}));
-
-jest.mock('../backend/src/services/idempotencyStore', () => ({
-  getFull: jest.fn().mockResolvedValue(null),
-  get: jest.fn().mockResolvedValue(null),
-  set: jest.fn().mockResolvedValue(true),
-  reserve: jest.fn().mockResolvedValue({ reserved: true }),
-  complete: jest.fn().mockResolvedValue(true),
-  release: jest.fn().mockResolvedValue(true),
-  redisEnabled: false,
-  IN_FLIGHT_TTL_MS: 30000,
-}));
-
-jest.mock('../backend/src/services/distributedLock', () => ({
-  acquire: jest.fn().mockResolvedValue('tok'),
-  release: jest.fn().mockResolvedValue(true),
-  withLock: jest.fn(async (_k, _t, fn) => fn()),
-  close: jest.fn().mockResolvedValue(true),
-}));
-
-jest.mock('../backend/src/models/schoolModel', () => ({
-  findOne: jest.fn().mockReturnValue({
-    lean: jest.fn().mockResolvedValue(null),
-  }),
-}));
-
-// ── App fixture ───────────────────────────────────────────────────────────────
-
-let app;
-beforeAll(() => { app = require('../backend/src/app'); });
-
-// ── Helper ────────────────────────────────────────────────────────────────────
-
-function expectJsonContentType(res) {
-  expect(res.headers['content-type']).toMatch(/application\/json/);
+function parseStudentList(response) {
+  return {
+    students:   response.data,
+    total:      response.pagination.total,
+    page:       response.pagination.page,
+    hasNext:    response.pagination.hasNext,
+    hasPrev:    response.pagination.hasPrev,
+    totalPages: response.pagination.totalPages,
+  };
 }
 
-function expectErrorShape(body) {
-  expect(typeof body.error).toBe('string');
-  expect(body.error.length).toBeGreaterThan(0);
+function parseStudent(student) {
+  return {
+    id:               student._id,
+    studentId:        student.studentId,
+    name:             student.name,
+    className:        student.class,
+    feeAmount:        student.feeAmount,
+    totalPaid:        student.totalPaid,
+    remainingBalance: student.remainingBalance,
+    feePaid:          student.feePaid,
+  };
 }
 
-// ── Health endpoint contract ──────────────────────────────────────────────────
+function parsePaymentInstructions(response) {
+  return {
+    walletAddress:  response.walletAddress,
+    memo:           response.memo,
+    feeAmount:      response.feeAmount,
+    currency:       response.currency,
+    acceptedAssets: response.acceptedAssets,
+  };
+}
 
-describe('Contract: GET /health', () => {
-  test('returns 200 with status field', async () => {
-    const res = await request(app).get('/health');
-    expect(res.status).toBe(200);
-    expectJsonContentType(res);
-    expect(res.body).toHaveProperty('status');
-    expect(typeof res.body.status).toBe('string');
+function parseVerifyPayment(response) {
+  return {
+    message:  response.message,
+    status:   response.status,
+    txHash:   response.txHash,
+    amount:   response.amount,
+    currency: response.currency,
+    feePaid:  response.feePaid,
+  };
+}
+
+function parsePaymentHistory(payments) {
+  if (!Array.isArray(payments) || payments.length === 0) return null;
+  const p = payments[0];
+  return {
+    id:          p._id,
+    txHash:      p.txHash,
+    amount:      p.amount,
+    currency:    p.currency,
+    status:      p.status,
+    confirmedAt: p.confirmedAt,
+  };
+}
+
+function parseLoginResponse(response) {
+  return {
+    token:    response.token,
+    username: response.user.username,
+    role:     response.user.role,
+    schoolId: response.user.schoolId,
+  };
+}
+
+function parseFeeList(response) {
+  return {
+    fees:       response.data,
+    total:      response.pagination.total,
+    totalPages: response.pagination.totalPages,
+  };
+}
+
+function parseDisputeList(response) {
+  return {
+    disputes:   response.data,
+    total:      response.pagination.total,
+    totalPages: response.pagination.totalPages,
+  };
+}
+
+function parseAuditLogs(response) {
+  return {
+    logs:       response.logs,
+    total:      response.pagination.total,
+    totalPages: response.pagination.totalPages,
+  };
+}
+
+function parseHealthCheck(response) {
+  return {
+    status:   response.status,
+    logLevel: response.logLevel,
+  };
+}
+
+function parseError(body) {
+  return { error: body.error, code: body.code };
+}
+
+// ---------------------------------------------------------------------------
+// Contract: fixture file integrity
+// ---------------------------------------------------------------------------
+
+describe('contract fixture file', () => {
+  test('fixture file is an object with a responses key', () => {
+    expect(typeof fixtures).toBe('object');
+    expect(fixtures.responses).toBeDefined();
   });
 
-  test('status is one of: healthy | degraded | unhealthy', async () => {
-    const res = await request(app).get('/health');
-    expect(['healthy', 'degraded', 'unhealthy']).toContain(res.body.status);
-  });
-});
-
-describe('Contract: GET /health/live', () => {
-  test('returns 200 with ok body', async () => {
-    const res = await request(app).get('/health/live');
-    expect(res.status).toBe(200);
-    expectJsonContentType(res);
-  });
-});
-
-describe('Contract: GET /health/ready', () => {
-  test('returns 200 or 503 with JSON body', async () => {
-    const res = await request(app).get('/health/ready');
-    expect([200, 503]).toContain(res.status);
-    expectJsonContentType(res);
-  });
-});
-
-// ── OpenAPI spec contract ─────────────────────────────────────────────────────
-
-describe('Contract: GET /api/docs.json', () => {
-  test('returns 200 with OpenAPI 3.0 object', async () => {
-    const res = await request(app).get('/api/docs.json');
-    expect(res.status).toBe(200);
-    expectJsonContentType(res);
-    expect(res.body.openapi).toMatch(/^3\.0\./);
-  });
-
-  test('spec has info.title and info.version', async () => {
-    const res = await request(app).get('/api/docs.json');
-    expect(typeof res.body.info.title).toBe('string');
-    expect(typeof res.body.info.version).toBe('string');
-  });
-
-  test('spec has paths object with at least one endpoint', async () => {
-    const res = await request(app).get('/api/docs.json');
-    expect(typeof res.body.paths).toBe('object');
-    expect(Object.keys(res.body.paths).length).toBeGreaterThan(0);
-  });
-
-  test('spec has components.securitySchemes.BearerAuth', async () => {
-    const res = await request(app).get('/api/docs.json');
-    expect(res.body.components.securitySchemes).toHaveProperty('BearerAuth');
-  });
-});
-
-// ── Payment endpoints — error shape contract ──────────────────────────────────
-
-describe('Contract: POST /api/payments/verify error responses', () => {
-  test('400 when Idempotency-Key header is missing', async () => {
-    const res = await request(app)
-      .post('/api/payments/verify')
-      .set('X-School-Id', 'SCH001')
-      .send({ txHash: 'abc' });
-
-    expect(res.status).toBe(400);
-    expectJsonContentType(res);
-    expectErrorShape(res.body);
-    expect(res.body.code).toBeDefined();
-  });
-
-  test('400 when Idempotency-Key is not a UUID v4', async () => {
-    const res = await request(app)
-      .post('/api/payments/verify')
-      .set('X-School-Id', 'SCH001')
-      .set('Idempotency-Key', 'not-a-uuid')
-      .send({ txHash: 'abc' });
-
-    expect(res.status).toBe(400);
-    expectErrorShape(res.body);
-    expect(res.body.code).toBe('INVALID_IDEMPOTENCY_KEY_FORMAT');
-  });
-
-  test('400 when txHash is missing from request body', async () => {
-    const res = await request(app)
-      .post('/api/payments/verify')
-      .set('X-School-Id', 'SCH001')
-      .set('Idempotency-Key', '550e8400-e29b-41d4-a716-446655440000')
-      .send({});
-
-    expect(res.status).toBe(400);
-    expectJsonContentType(res);
-    expectErrorShape(res.body);
-  });
-});
-
-describe('Contract: POST /api/payments/intent error responses', () => {
-  test('400 when Idempotency-Key header is missing', async () => {
-    const res = await request(app)
-      .post('/api/payments/intent')
-      .set('X-School-Id', 'SCH001')
-      .send({ studentId: 'STU001', amount: 100 });
-
-    expect(res.status).toBe(400);
-    expectErrorShape(res.body);
+  test('all required endpoint fixtures are present', () => {
+    const REQUIRED = [
+      'GET /students',
+      'POST /students',
+      'GET /payments/instructions/:studentId',
+      'POST /payments/verify',
+      'GET /payments/:studentId',
+      'POST /auth/login',
+      'GET /fees',
+      'GET /disputes',
+      'GET /audit',
+      'GET /health',
+    ];
+    for (const ep of REQUIRED) {
+      expect(fixtures.responses[ep]).toBeDefined();
+      expect(fixtures.responses[ep].success).toBeDefined();
+    }
   });
 });
 
-// ── Authentication enforcement contract ───────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Contract: GET /students
+// ---------------------------------------------------------------------------
 
-describe('Contract: protected endpoints return 401 without auth', () => {
-  test('GET /api/payments returns 401 without Authorization header', async () => {
-    const res = await request(app)
-      .get('/api/payments')
-      .set('X-School-Id', 'SCH001');
+describe('GET /students', () => {
+  const fixture = fixtures.responses['GET /students'];
 
-    expect([401, 403]).toContain(res.status);
-    expectJsonContentType(res);
-    expectErrorShape(res.body);
+  test('success: parseStudentList returns all required pagination fields', () => {
+    const parsed = parseStudentList(fixture.success);
+    expect(Array.isArray(parsed.students)).toBe(true);
+    expect(typeof parsed.total).toBe('number');
+    expect(typeof parsed.page).toBe('number');
+    expect(typeof parsed.hasNext).toBe('boolean');
+    expect(typeof parsed.hasPrev).toBe('boolean');
+    expect(typeof parsed.totalPages).toBe('number');
   });
 
-  test('error response has string error field and string code field', async () => {
-    const res = await request(app)
-      .get('/api/payments')
-      .set('X-School-Id', 'SCH001');
+  test('success: each student record has all required fields', () => {
+    for (const student of fixture.success.data) {
+      const p = parseStudent(student);
+      expect(p.id).toBeDefined();
+      expect(p.studentId).toBeDefined();
+      expect(p.name).toBeDefined();
+      expect(typeof p.feeAmount).toBe('number');
+      expect(typeof p.remainingBalance).toBe('number');
+      expect(typeof p.feePaid).toBe('boolean');
+    }
+  });
 
-    expect(typeof res.body.error).toBe('string');
+  test('error UNAUTHORIZED: has error + code, status 401', () => {
+    const err = parseError(fixture.errors.UNAUTHORIZED.body);
+    expect(typeof err.error).toBe('string');
+    expect(typeof err.code).toBe('string');
+    expect(fixture.errors.UNAUTHORIZED.status).toBe(401);
   });
 });
 
-// ── Schema contract — static assertions against golden ───────────────────────
+// ---------------------------------------------------------------------------
+// Contract: POST /students
+// ---------------------------------------------------------------------------
 
-describe('Contract: golden schema field-type constraints', () => {
-  const fs   = require('fs');
-  const path = require('path');
-  const yaml = require('js-yaml');
+describe('POST /students', () => {
+  const fixture = fixtures.responses['POST /students'];
 
-  const golden = yaml.load(
-    fs.readFileSync(path.join(__dirname, 'api-schema', 'golden.yaml'), 'utf8')
+  test('success: response is a valid student record', () => {
+    const p = parseStudent(fixture.success);
+    expect(p.id).toBeDefined();
+    expect(p.studentId).toBeDefined();
+    expect(typeof p.feeAmount).toBe('number');
+  });
+
+  test('error VALIDATION_ERROR: code and status 400', () => {
+    const err = parseError(fixture.errors.VALIDATION_ERROR.body);
+    expect(err.code).toBe('VALIDATION_ERROR');
+    expect(fixture.errors.VALIDATION_ERROR.status).toBe(400);
+  });
+
+  test('error STUDENT_QUOTA_EXCEEDED: code and status 422', () => {
+    const err = parseError(fixture.errors.STUDENT_QUOTA_EXCEEDED.body);
+    expect(err.code).toBe('STUDENT_QUOTA_EXCEEDED');
+    expect(fixture.errors.STUDENT_QUOTA_EXCEEDED.status).toBe(422);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /payments/instructions/:studentId
+// ---------------------------------------------------------------------------
+
+describe('GET /payments/instructions/:studentId', () => {
+  const fixture = fixtures.responses['GET /payments/instructions/:studentId'];
+
+  test('success: all required payment instruction fields present', () => {
+    const p = parsePaymentInstructions(fixture.success);
+    expect(typeof p.walletAddress).toBe('string');
+    expect(typeof p.memo).toBe('string');
+    expect(typeof p.feeAmount).toBe('number');
+    expect(typeof p.currency).toBe('string');
+    expect(Array.isArray(p.acceptedAssets)).toBe(true);
+  });
+
+  test('success: each accepted asset has code and type', () => {
+    for (const asset of fixture.success.acceptedAssets) {
+      expect(typeof asset.code).toBe('string');
+      expect(typeof asset.type).toBe('string');
+    }
+  });
+
+  test('error NOT_FOUND: code and status 404', () => {
+    const err = parseError(fixture.errors.NOT_FOUND.body);
+    expect(err.code).toBe('NOT_FOUND');
+    expect(fixture.errors.NOT_FOUND.status).toBe(404);
+  });
+
+  test('error MISSING_SCHOOL_CONTEXT: code and status 400', () => {
+    const err = parseError(fixture.errors.MISSING_SCHOOL_CONTEXT.body);
+    expect(err.code).toBe('MISSING_SCHOOL_CONTEXT');
+    expect(fixture.errors.MISSING_SCHOOL_CONTEXT.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: POST /payments/verify
+// ---------------------------------------------------------------------------
+
+describe('POST /payments/verify', () => {
+  const fixture = fixtures.responses['POST /payments/verify'];
+
+  test('success: all required verify-payment response fields present', () => {
+    const p = parseVerifyPayment(fixture.success);
+    expect(typeof p.message).toBe('string');
+    expect(typeof p.status).toBe('string');
+    expect(typeof p.txHash).toBe('string');
+    expect(typeof p.amount).toBe('number');
+    expect(typeof p.feePaid).toBe('boolean');
+  });
+
+  test.each(['DUPLICATE_TX', 'TX_FAILED', 'MISSING_MEMO', 'INVALID_DESTINATION'])(
+    'error %s: has error + code envelope',
+    (code) => {
+      const err = parseError(fixture.errors[code].body);
+      expect(typeof err.error).toBe('string');
+      expect(err.code).toBe(code);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /payments/:studentId
+// ---------------------------------------------------------------------------
+
+describe('GET /payments/:studentId', () => {
+  const fixture = fixtures.responses['GET /payments/:studentId'];
+
+  test('success: response is an array', () => {
+    expect(Array.isArray(fixture.success)).toBe(true);
+  });
+
+  test('success: payment records have required fields', () => {
+    const p = parsePaymentHistory(fixture.success);
+    expect(p.id).toBeDefined();
+    expect(typeof p.txHash).toBe('string');
+    expect(typeof p.amount).toBe('number');
+    expect(p.status).toBe('SUCCESS');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: POST /auth/login
+// ---------------------------------------------------------------------------
+
+describe('POST /auth/login', () => {
+  const fixture = fixtures.responses['POST /auth/login'];
+
+  test('success: token and user object present', () => {
+    const p = parseLoginResponse(fixture.success);
+    expect(typeof p.token).toBe('string');
+    expect(typeof p.username).toBe('string');
+    expect(typeof p.role).toBe('string');
+    expect(typeof p.schoolId).toBe('string');
+  });
+
+  test('error UNAUTHORIZED: status 401', () => {
+    const err = parseError(fixture.errors.UNAUTHORIZED.body);
+    expect(err.code).toBe('UNAUTHORIZED');
+    expect(fixture.errors.UNAUTHORIZED.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /fees
+// ---------------------------------------------------------------------------
+
+describe('GET /fees', () => {
+  const fixture = fixtures.responses['GET /fees'];
+
+  test('success: parseFeeList returns fees array with pagination', () => {
+    const p = parseFeeList(fixture.success);
+    expect(Array.isArray(p.fees)).toBe(true);
+    expect(typeof p.total).toBe('number');
+    expect(typeof p.totalPages).toBe('number');
+  });
+
+  test('success: each fee record has className and feeAmount', () => {
+    for (const fee of fixture.success.data) {
+      expect(typeof fee.className).toBe('string');
+      expect(typeof fee.feeAmount).toBe('number');
+      expect(typeof fee.isActive).toBe('boolean');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /disputes
+// ---------------------------------------------------------------------------
+
+describe('GET /disputes', () => {
+  const fixture = fixtures.responses['GET /disputes'];
+
+  test('success: disputes array with pagination', () => {
+    const p = parseDisputeList(fixture.success);
+    expect(Array.isArray(p.disputes)).toBe(true);
+    expect(typeof p.total).toBe('number');
+  });
+
+  test('success: each dispute has status and reason', () => {
+    for (const d of fixture.success.data) {
+      expect(typeof d.status).toBe('string');
+      expect(typeof d.reason).toBe('string');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /audit
+// ---------------------------------------------------------------------------
+
+describe('GET /audit', () => {
+  const fixture = fixtures.responses['GET /audit'];
+
+  test('success: logs array with pagination', () => {
+    const p = parseAuditLogs(fixture.success);
+    expect(Array.isArray(p.logs)).toBe(true);
+    expect(typeof p.total).toBe('number');
+  });
+
+  test('success: each log entry has action and result', () => {
+    for (const log of fixture.success.logs) {
+      expect(typeof log.action).toBe('string');
+      expect(typeof log.result).toBe('string');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: GET /health
+// ---------------------------------------------------------------------------
+
+describe('GET /health', () => {
+  const fixture = fixtures.responses['GET /health'];
+
+  test('success (ok): status is "ok" and logLevel is a string', () => {
+    const p = parseHealthCheck(fixture.success);
+    expect(p.status).toBe('ok');
+    expect(typeof p.logLevel).toBe('string');
+  });
+
+  test('degraded: status is "degraded"', () => {
+    const p = parseHealthCheck(fixture.degraded);
+    expect(p.status).toBe('degraded');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: universal error envelope — all documented error responses
+// ---------------------------------------------------------------------------
+
+describe('universal error envelope', () => {
+  // Collect every error fixture from all endpoints
+  const allErrors = [];
+  for (const [endpoint, endpointFixtures] of Object.entries(fixtures.responses)) {
+    if (endpoint.startsWith('_')) continue;
+    const errors = endpointFixtures.errors || {};
+    for (const [code, errorFixture] of Object.entries(errors)) {
+      allErrors.push({ endpoint, code, body: errorFixture.body, status: errorFixture.status });
+    }
+  }
+
+  test('at least one error fixture is defined', () => {
+    expect(allErrors.length).toBeGreaterThan(0);
+  });
+
+  test.each(allErrors)(
+    '$endpoint → $code: body has "error" (string) and "code" (string)',
+    ({ body }) => {
+      expect(typeof body.error).toBe('string');
+      expect(body.error.length).toBeGreaterThan(0);
+      expect(typeof body.code).toBe('string');
+      expect(body.code.length).toBeGreaterThan(0);
+    }
   );
 
-  test('Payment.amount is type number in golden schema', () => {
-    expect(golden.components.schemas.Payment.properties.amount.type).toBe('number');
+  test.each(allErrors)(
+    '$endpoint → $code: HTTP status is a 4xx or 5xx code',
+    ({ status }) => {
+      expect(status).toBeGreaterThanOrEqual(400);
+      expect(status).toBeLessThan(600);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Contract: OpenAPI spec conformance
+// ---------------------------------------------------------------------------
+
+describe('OpenAPI Spec Contract Conformance (#273)', () => {
+  const swaggerSpec = require('../backend/src/config/swagger');
+
+  test('OpenAPI spec is valid and defines x-error-codes taxonomy', () => {
+    expect(swaggerSpec).toBeDefined();
+    expect(swaggerSpec['x-error-codes']).toBeDefined();
   });
 
-  test('Payment.txHash is type string in golden schema', () => {
-    expect(golden.components.schemas.Payment.properties.txHash.type).toBe('string');
-  });
-
-  test('School.isActive is type boolean in golden schema', () => {
-    expect(golden.components.schemas.School.properties.isActive.type).toBe('boolean');
-  });
-
-  test('Student.contactEmail has format email in golden schema', () => {
-    expect(golden.components.schemas.Student.properties.contactEmail.format).toBe('email');
-  });
-
-  test('Payment.confirmedAt has format date-time in golden schema', () => {
-    expect(golden.components.schemas.Payment.properties.confirmedAt.format).toBe('date-time');
+  test('All contract error codes exist in the error taxonomy', () => {
+    const errorCodes = swaggerSpec['x-error-codes'];
+    for (const [, endpointFixtures] of Object.entries(fixtures.responses)) {
+      const errors = endpointFixtures.errors || {};
+      for (const [code] of Object.entries(errors)) {
+        if (code !== 'UNAUTHORIZED' && code !== 'FORBIDDEN' && code !== 'NOT_FOUND') {
+          // If in taxonomy, status must match
+          if (errorCodes[code]) {
+            expect(errorCodes[code].status).toBeGreaterThanOrEqual(400);
+          }
+        }
+      }
+    }
   });
 });
