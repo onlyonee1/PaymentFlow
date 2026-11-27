@@ -47,6 +47,8 @@ export const useTheme = () => useContext(ThemeContext);
 const APP_LAYOUT_ROUTES = [
   "/dashboard",
   "/reports",
+  "/analytics",
+  "/admin/analytics",
   "/fees",
   "/fee-adjustments",
   "/audit-logs",
@@ -62,6 +64,7 @@ const ROUTE_SECTION_NAMES = {
   "/pay-fees": "Payments",
   "/reports": "Reports",
   "/analytics": "Analytics",
+  "/admin/analytics": "Finance Analytics",
   "/audit-logs": "Audit log",
   "/fees": "Fees",
   "/fee-adjustments": "Fee adjustments",

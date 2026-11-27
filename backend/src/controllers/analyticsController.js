@@ -6,7 +6,7 @@ const Student = require('../models/studentModel');
 async function getPaymentVolumeTrend(req, res, next) {
   try {
     const { schoolId } = req;
-    const { period = 'daily' } = req.query;
+    const { period = 'daily', startDate, endDate } = req.query;
 
     let dateFormat;
     if (period === 'daily') {
@@ -19,8 +19,15 @@ async function getPaymentVolumeTrend(req, res, next) {
       return res.status(400).json({ error: 'period must be daily, weekly, or monthly', code: 'VALIDATION_ERROR' });
     }
 
+    const match = { schoolId, deletedAt: null, status: 'SUCCESS' };
+    if (startDate || endDate) {
+      match.confirmedAt = {};
+      if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
+      if (endDate) match.confirmedAt.$lte = new Date(endDate + 'T23:59:59.999Z');
+    }
+
     const trend = await Payment.aggregate([
-      { $match: { schoolId, deletedAt: null, status: 'SUCCESS' } },
+      { $match: match },
       {
         $group: {
           _id: { $dateToString: { format: dateFormat, date: '$confirmedAt' } },
@@ -163,9 +170,48 @@ async function getPaymentAnalyticsSummary(req, res, next) {
   }
 }
 
+async function getCategoryRevenueSplit(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { startDate, endDate } = req.query;
+
+    const match = { schoolId, deletedAt: null, status: 'SUCCESS' };
+    if (startDate || endDate) {
+      match.confirmedAt = {};
+      if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
+      if (endDate) match.confirmedAt.$lte = new Date(endDate + 'T23:59:59.999Z');
+    }
+
+    const categories = await Payment.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $ifNull: ['$feeCategory', 'Tuition'] },
+          totalAmount: { $sum: '$amount' },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          category: '$_id',
+          totalAmount: { $round: ['$totalAmount', 2] },
+          count: 1,
+          _id: 0,
+        },
+      },
+      { $sort: { totalAmount: -1 } },
+    ]);
+
+    res.json({ data: categories });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getPaymentVolumeTrend,
   getClassPaymentCompletion,
   getTopUnpaidCohorts,
   getPaymentAnalyticsSummary,
+  getCategoryRevenueSplit,
 };

@@ -11,6 +11,7 @@ const en = {
     payFees: "Pay Fees",
     dashboard: "Dashboard",
     reports: "Reports",
+    analytics: "Analytics",
     fees: "Fees",
     feeRules: "Fee Rules",
     auditLogs: "Audit Logs",

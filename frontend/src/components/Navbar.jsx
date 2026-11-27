@@ -29,6 +29,7 @@ const NAV_LINKS = [
 ];
 
 const ADMIN_LINKS = [
+  { href: "/admin/analytics", i18nKey: "nav.analytics" },
   { href: "/fee-adjustments", i18nKey: "nav.feeRules" },
   { href: "/audit-logs",      i18nKey: "nav.auditLogs" },
   { href: "/disputes",        i18nKey: "nav.disputes" },
