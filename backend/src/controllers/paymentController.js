@@ -161,7 +161,8 @@ async function createPaymentIntent(req, res, next) {
     if (!limitValidation.valid) return res.status(400).json({ error: limitValidation.error, code: limitValidation.code });
 
     const memo = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const ttlMs = parseInt(process.env.PAYMENT_INTENT_TTL_MS, 10) || 24 * 60 * 60 * 1000;
+    const ttlMs = Number(process.env.PAYMENT_INTENT_TTL_MS)
+      || Number(process.env.PAYMENT_INTENT_TTL_SECONDS) * 1000 || 900_000;
 
     const intent = await PaymentIntent.create({
       schoolId,

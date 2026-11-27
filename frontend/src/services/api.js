@@ -131,6 +131,11 @@ export const registerStudent = (data) => api.post("/students", data);
 export const updateStudent = (studentId, data) => api.put(`/students/${studentId}`, data);
 // Payment endpoints — also available as a typed client via ./paymentApiClient
 export const getPaymentSummary = ({ signal } = {}) => api.get("/payments/summary", { signal });
+export const createPaymentIntent = (studentId, { signal } = {}) =>
+  api.post("/payments/intent", { studentId }, {
+    signal,
+    headers: { "Idempotency-Key": globalThis.crypto.randomUUID() },
+  });
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
 export const getStudentPayments = (studentId, { signal } = {}) => api.get(`/payments/${studentId}`, { signal });
 export const getStudentBalance  = (studentId, { signal } = {}) => api.get(`/payments/balance/${studentId}`, { signal });

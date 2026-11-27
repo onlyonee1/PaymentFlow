@@ -604,9 +604,13 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
 
   // 6. Look up student to validate fee. School-scope when schoolId is provided so
   //    the same studentId string used across two schools resolves to the correct one.
-  const studentQuery = schoolId ? { schoolId, studentId: memo } : { studentId: memo };
+  const intent = schoolId && /^[A-F0-9]{8}$/.test(memo)
+    ? await PaymentIntent.findOne({ schoolId, memo })
+    : null;
+  const studentId = intent?.studentId || memo;
+  const studentQuery = schoolId ? { schoolId, studentId } : { studentId };
   const student = await Student.findOne(studentQuery);
-  const feeAmount = student ? student.feeAmount : null;
+  const feeAmount = student ? (intent?.amount ?? student.feeAmount) : null;
 
   const feeValidation =
     feeAmount != null
@@ -623,7 +627,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
   return {
     hash: tx.hash,
     memo: memo,
-    studentId: memo,
+    studentId,
     amount: amount,
     assetCode: asset.assetCode,
     assetType: asset.assetType,
