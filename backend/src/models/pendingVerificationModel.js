@@ -14,6 +14,7 @@ const pendingVerificationSchema = new mongoose.Schema(
     txHash: { type: String, required: true, unique: true, index: true },
     studentId: { type: String, default: null },
     // Correlation ID for tracing this job across the async pipeline.
+    traceContext: { traceparent: String, tracestate: String },
     correlationId: { type: String, default: null, index: true },
     attempts: { type: Number, default: 0 },
     lastAttemptAt: { type: Date, default: null },

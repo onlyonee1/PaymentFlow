@@ -24,12 +24,13 @@ function getS3Client() {
   return client;
 }
 
-async function storeReportArtifact(key, body, contentType) {
+async function storeReportArtifact(key, body, contentType, contentDisposition) {
   await getS3Client().send(new PutObjectCommand({
     Bucket: process.env.REPORTS_S3_BUCKET,
     Key: key,
     Body: body,
     ContentType: contentType,
+    ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
     ServerSideEncryption: 'AES256',
   }));
 }
