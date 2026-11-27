@@ -679,7 +679,44 @@ async function verifyTransactionHash(req, res, next) {
   }
 }
 
+async function createDirectPayment(req, res, next) {
+  try {
+    const { studentId, amount, feeCategory, feeBreakdown, txHash, memo, assetCode = 'XLM' } = req.body;
+    if (!studentId || amount == null) {
+      return res.status(400).json({ error: 'Missing required studentId or amount', code: 'VALIDATION_ERROR' });
+    }
+    const student = await Student.findOne({ schoolId: req.schoolId, studentId, deletedAt: null });
+    if (!student) {
+      return res.status(404).json({ error: 'Student not found', code: 'STUDENT_NOT_FOUND' });
+    }
+
+    const hash = txHash || `SIM-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    const payment = await Payment.create({
+      schoolId: req.schoolId,
+      studentId,
+      amount: Number(amount),
+      feeCategory: feeCategory || 'Tuition',
+      feeBreakdown: feeBreakdown || null,
+      memo: memo || studentId,
+      txHash: hash,
+      status: 'SUCCESS',
+      assetCode,
+      confirmedAt: new Date(),
+    });
+
+    res.status(201).json({
+      success: true,
+      payment,
+      txHash: hash,
+      message: 'Payment recorded successfully',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
+  createDirectPayment,
   getPaymentInstructions,
   createPaymentIntent,
   submitTransaction,
