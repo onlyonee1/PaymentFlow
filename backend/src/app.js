@@ -22,6 +22,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const orphanedPaymentRoutes = require('./routes/orphanedPaymentRoutes');
 const feeRoutes = require('./routes/feeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
@@ -202,6 +203,7 @@ app.use(maintenanceMode);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
 app.use('/api/students', studentRoutes);
+app.use('/api/payments/orphaned', orphanedPaymentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
 app.use('/api/reports', reportRoutes);

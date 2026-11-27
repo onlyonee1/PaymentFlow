@@ -711,6 +711,11 @@ async function syncPaymentsForSchool(school) {
 
       const valid = await extractValidPayment(tx, stellarAddress, schoolId);
       if (!valid) {
+        const { captureUnmatchedPayments } = require("./orphanedPaymentIngestion");
+        if (await captureUnmatchedPayments(tx, schoolId, stellarAddress)) {
+          summary.unmatched++;
+          continue;
+        }
         // Log if the tx was skipped due to wrong destination
         if (tx.successful) {
           const ops = await withStellarRetry(
@@ -781,7 +786,12 @@ async function syncPaymentsForSchool(school) {
           });
         }
       }
-      if (!student) { summary.unmatched++; continue; }
+      if (!student) {
+        const { captureUnmatchedPayments } = require("./orphanedPaymentIngestion");
+        await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+        summary.unmatched++;
+        continue;
+      }
 
       summary.matched++;
 
