@@ -39,6 +39,12 @@ const options = {
           bearerFormat: 'JWT',
           description: 'JWT token for admin authentication',
         },
+        ApiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-School-ID',
+          description: 'School ID passed as a header for school-scoped endpoints (alternative to slug-based routing)',
+        },
       },
       schemas: {
         Payment: {
@@ -95,8 +101,8 @@ const options = {
     ],
   },
   apis: [
-    './backend/src/routes/*.js',
-    './backend/src/controllers/*.js',
+    `${__dirname}/../routes/*.js`,
+    `${__dirname}/../controllers/*.js`,
   ],
 };
 

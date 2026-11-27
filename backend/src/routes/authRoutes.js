@@ -19,6 +19,228 @@ const loginLimiter = rl(
   { error: 'Too many login attempts, please try again later.', code: 'RATE_LIMIT_EXCEEDED' }
 );
 
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Authenticate and obtain a JWT
+ *     operationId: login
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 format: password
+ *     responses:
+ *       200:
+ *         description: Authentication successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     schoolId:
+ *                       type: string
+ *       400:
+ *         description: Missing username or password
+ *       401:
+ *         description: Invalid credentials
+ *       429:
+ *         description: Too many login attempts
+ */
+
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     summary: Refresh an access token using a refresh token cookie
+ *     operationId: refreshToken
+ *     tags:
+ *       - Auth
+ *     responses:
+ *       200:
+ *         description: New access token issued
+ *       401:
+ *         description: Invalid or expired refresh token
+ */
+
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Invalidate the current session and clear refresh token cookie
+ *     operationId: logout
+ *     tags:
+ *       - Auth
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ */
+
+/**
+ * @swagger
+ * /api/auth/me:
+ *   get:
+ *     summary: Get the currently authenticated user's profile
+ *     operationId: getMe
+ *     tags:
+ *       - Auth
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current user profile
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/auth/change-password:
+ *   post:
+ *     summary: Change the authenticated user's password (invalidates all sessions)
+ *     operationId: changePassword
+ *     tags:
+ *       - Auth
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - currentPassword
+ *               - newPassword
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *                 format: password
+ *               newPassword:
+ *                 type: string
+ *                 format: password
+ *     responses:
+ *       200:
+ *         description: Password changed; all sessions invalidated
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized or wrong current password
+ */
+
+/**
+ * @swagger
+ * /api/auth/sessions:
+ *   get:
+ *     summary: List all active sessions for the authenticated admin
+ *     operationId: listSessions
+ *     tags:
+ *       - Auth
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of active sessions
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/auth/sessions/{sessionId}:
+ *   delete:
+ *     summary: Revoke a specific session by ID
+ *     operationId: revokeSession
+ *     tags:
+ *       - Auth
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Session revoked
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Session not found
+ */
+
+/**
+ * @swagger
+ * /api/auth/mfa/setup:
+ *   post:
+ *     summary: Set up TOTP MFA for the admin account
+ *     operationId: setupMfa
+ *     tags:
+ *       - Auth
+ *       - MFA
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: MFA setup initiated — returns TOTP secret and QR code URI
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
+ * /api/auth/mfa/verify:
+ *   post:
+ *     summary: Verify TOTP token and enable MFA
+ *     operationId: verifyAndEnableMfa
+ *     tags:
+ *       - Auth
+ *       - MFA
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: 6-digit TOTP code
+ *     responses:
+ *       200:
+ *         description: MFA enabled
+ *       400:
+ *         description: Invalid token
+ *       401:
+ *         description: Unauthorized
+ */
+
 // ── Core auth routes ──────────────────────────────────────────────────────────
 // #614 — Refresh token rotation: POST /refresh issues a new access + refresh
 // token pair, invalidates the old refresh token, and detects reuse (token theft).

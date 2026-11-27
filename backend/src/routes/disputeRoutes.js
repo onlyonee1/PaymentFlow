@@ -28,6 +28,123 @@ const upload = multer({
 // All dispute routes require school context
 router.use(resolveSchool);
 
+/**
+ * @swagger
+ * /api/disputes:
+ *   post:
+ *     summary: Raise a payment dispute
+ *     operationId: flagDispute
+ *     tags:
+ *       - Disputes
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - txHash
+ *               - reason
+ *             properties:
+ *               txHash:
+ *                 type: string
+ *               reason:
+ *                 type: string
+ *               evidence:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Dispute raised
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: Transaction not found
+ *   get:
+ *     summary: List disputes (paginated)
+ *     operationId: getDisputes
+ *     tags:
+ *       - Disputes
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [open, resolved, dismissed]
+ *     responses:
+ *       200:
+ *         description: Paginated dispute list
+ */
+
+/**
+ * @swagger
+ * /api/disputes/{id}:
+ *   get:
+ *     summary: Get a dispute by ID
+ *     operationId: getDisputeById
+ *     tags:
+ *       - Disputes
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Dispute record
+ *       404:
+ *         description: Dispute not found
+ */
+
+/**
+ * @swagger
+ * /api/disputes/{id}/resolve:
+ *   patch:
+ *     summary: Resolve a dispute (admin only)
+ *     operationId: resolveDispute
+ *     tags:
+ *       - Disputes
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - resolution
+ *             properties:
+ *               resolution:
+ *                 type: string
+ *                 enum: [approved, dismissed]
+ *               notes:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Dispute resolved
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Dispute not found
+ */
+
 // Anyone with school context can raise or view disputes
 // auditContext uses req.admin which may not be present for unauthenticated flagDispute;
 // the audit helper in the controller gracefully skips when req.auditContext is absent.
