@@ -55,6 +55,60 @@
       "file": "tests/scanRepoSecrets.test.js",
       "line": 59,
       "reason": "BIP-39 mnemonic test fixture (all real BIP-39 words) used to exercise the mnemonic detector in unit tests."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/src/middleware/rateLimiter.js",
+      "line": 151,
+      "reason": "Inline code comment describing rate-limiter keying fallback behaviour; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/api-spec.md",
+      "line": 442,
+      "reason": "API documentation prose describing the school wallet address field; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/k8s-resource-sizing.md",
+      "line": 119,
+      "reason": "Documentation prose describing cluster scheduling validation steps; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/load-simulation.md",
+      "line": 36,
+      "reason": "Documentation prose describing load-simulation model assumptions; not a mnemonic phrase."
+    },
+    {
+      "type": "stellar-secret",
+      "file": "docs/quick-start.md",
+      "line": 106,
+      "reason": "Placeholder SXXX... key in quick-start documentation — all X characters, not a valid or real Stellar secret key."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/runbooks/asset-whitelist-upgrade.md",
+      "line": 14,
+      "reason": "Runbook prose describing decimal precision rejection rules; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/audit-privileged-mutations.test.js",
+      "line": 121,
+      "reason": "Test comment explaining audit-mock verification strategy; not a mnemonic phrase."
+    },
+    {
+      "type": "stellar-secret",
+      "file": "tests/deadLetterHandling.test.js",
+      "line": 86,
+      "reason": "Synthetic test fixture used to exercise the Stellar secret key redaction logic in sanitizeJobPayload — structurally valid but non-existent keypair, committed intentionally to verify the redactor works."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/loadsim/horizonPollLoadModel.test.js",
+      "line": 12,
+      "reason": "Test description string in a test() call; not a mnemonic phrase."
     }
   ]
 }
