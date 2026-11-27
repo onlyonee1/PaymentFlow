@@ -146,6 +146,12 @@ const paymentSchema = new mongoose.Schema(
 
     // Audit trail
     transactionHash: { type: String, default: null, index: true },
+    // Signed envelopes are kept only while a server submission is in progress.
+    signedSubmissionXdr: { type: String, select: false },
+    signedFeeBumpXdr: { type: String, select: false },
+    submissionIntentId: { type: mongoose.Schema.Types.ObjectId, select: false },
+    ledgerTransactionHash: { type: String },
+    feeBumpTxHash: { type: String, index: true, sparse: true },
     startedAt: { type: Date, default: null },
     submittedAt: { type: Date, default: null },
     confirmedAt: { type: Date, default: null, index: true },
@@ -206,6 +212,10 @@ paymentSchema.index({ schoolId: 1, studentId: 1, confirmedAt: -1 });
 paymentSchema.index({ schoolId: 1, feeValidationStatus: 1 });
 paymentSchema.index({ schoolId: 1, isSuspicious: 1 });
 paymentSchema.index({ schoolId: 1, confirmationStatus: 1 });
+paymentSchema.index(
+  { status: 1, submittedAt: 1 },
+  { partialFilterExpression: { status: 'SUBMITTED', signedSubmissionXdr: { $exists: true } } },
+);
 paymentSchema.index({ confirmationState: 1 });
 // Partial compound index for report queries: filters out soft-deleted
 // payments so MongoDB only indexes documents that appear in aggregation

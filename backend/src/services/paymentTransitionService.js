@@ -92,7 +92,9 @@ async function transition(payment, toStatus, opts = {}) {
   let result;
   try {
     await session.withTransaction(async () => {
-      let current = await payment.constructor.findOne({ _id: payment._id, schoolId }).session(session);
+      const query = payment.constructor.findOne({ _id: payment._id, schoolId });
+      if (opts.clearSubmissionEnvelopes) query.select('+signedSubmissionXdr +signedFeeBumpXdr');
+      let current = await query.session(session);
       if (!current && payment.isNew) {
         const initialState = { ...payment.toObject(), ...(opts.initialUpdates || {}), status: payment.status || PAYMENT_STATUS.PENDING };
         [current] = await payment.constructor.create([initialState], { session });
@@ -113,6 +115,17 @@ async function transition(payment, toStatus, opts = {}) {
       }
 
       current.set(opts.updates || {});
+      if (opts.clearSubmissionEnvelopes) {
+        current.set({ signedSubmissionXdr: undefined, signedFeeBumpXdr: undefined });
+      }
+      if (opts.paymentIntentId && toStatus === PAYMENT_STATUS.SUCCESS) {
+        const PaymentIntent = require('../models/paymentIntentModel');
+        await PaymentIntent.updateOne(
+          { _id: opts.paymentIntentId, schoolId, status: 'pending' },
+          { $set: { status: 'completed' } },
+          { session },
+        );
+      }
       current.status = toStatus;
       if (adminOverride) {
         current.$locals = current.$locals || {};

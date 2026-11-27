@@ -90,14 +90,15 @@ const MAX_CONCURRENT_SCHOOL_POLLS = Math.max(1, parseInt(
  */
 async function processTransaction(tx, school, fencingToken) {
   const { schoolId, stellarAddress } = school;
-  const correlationId = deriveCorrelationId(tx.hash);
+  const canonicalHash = tx.inner_transaction?.hash || tx.hash;
+  const correlationId = deriveCorrelationId(canonicalHash);
 
   // Cheap optimisation only: skip work for transactions we've clearly already
   // recorded. This is NOT the dedup guarantee — it is a read-then-write race
   // (two workers can both miss the row). The authoritative guard is the unique
   // index on Payment { schoolId, txHash }, which makes the insert below fail
   // atomically with code 11000 if a concurrent worker won the race.
-  const existing = await Payment.findOne({ schoolId, txHash: tx.hash, deletedAt: null });
+  const existing = await Payment.findOne({ schoolId, txHash: canonicalHash, deletedAt: null });
   if (existing) {
     return { processed: false, reason: 'duplicate' };
   }

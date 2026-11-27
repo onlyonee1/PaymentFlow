@@ -1,24 +1,26 @@
 'use strict';
 
-const request = require('supertest');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
-const app = require('../backend/src/app');
 const Student = require('../backend/src/models/studentModel');
-const Payment = require('../backend/src/models/paymentModel');
-const FeeStructure = require('../backend/src/models/feeStructureModel');
-const School = require('../backend/src/models/schoolModel');
 
 let mongoServer;
 const schoolId = 'SCH-TEST-001';
 const walletAddress = 'GSCHOOL123456789';
 const TEST_DB = 'fee_bump_tx_test';
-const USE_EXTERNAL_MONGO = !!process.env.MONGO_URI;
+const externalMongoUri = process.env.MONGO_URI;
+process.env.MONGO_URI ||= 'mongodb://localhost:27017/fee_bump_tx_test';
+process.env.JWT_SECRET ||= 'fee-bump-transaction-test-jwt-secret';
+
+const mockLookupTransaction = jest.fn();
+jest.mock('../backend/src/config/stellarConfig', () => ({
+  ...jest.requireActual('../backend/src/config/stellarConfig'),
+  server: { transactions: () => ({ transaction: () => ({ call: mockLookupTransaction }) }) },
+}));
 
 beforeAll(async () => {
-  if (USE_EXTERNAL_MONGO) {
-    const baseUri = process.env.MONGO_URI.replace(/\/[^/?]+(\?|$)/, `/${TEST_DB}$1`);
-    await mongoose.connect(baseUri);
+  if (externalMongoUri) {
+    await mongoose.connect(externalMongoUri, { dbName: TEST_DB });
   } else {
     mongoServer = await MongoMemoryServer.create();
     await mongoose.connect(mongoServer.getUri());
@@ -32,23 +34,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await Student.deleteMany({});
-  await Payment.deleteMany({});
-  await FeeStructure.deleteMany({});
-  await School.deleteMany({});
-
-  await School.create({
-    schoolId,
-    name: 'Test School',
-    stellarAddress: walletAddress,
-  });
-
-  await FeeStructure.create({
-    schoolId,
-    className: 'Grade 5A',
-    feeAmount: 250,
-    isActive: true,
-  });
+  await Student.deleteMany({ schoolId });
 
   await Student.create({
     schoolId,
@@ -111,24 +97,9 @@ describe('Fee-Bump Transaction Handling', () => {
     const feeBumpTx = {
       hash: 'feebump789',
       successful: true,
-      memo_type: 'none',
-      memo: null,
-      inner_transaction: {
-        hash: 'inner789',
-        successful: true,
-        memo_type: 'text',
-        memo: 'STU001',
-        operations: async () => ({
-          records: [
-            {
-              type: 'payment',
-              to: walletAddress,
-              asset_type: 'native',
-              amount: '250.0000000',
-            },
-          ],
-        }),
-      },
+      memo_type: 'text',
+      memo: 'STU001',
+      inner_transaction: { hash: 'inner789' },
       operations: async () => ({
         records: [
           {
@@ -141,27 +112,12 @@ describe('Fee-Bump Transaction Handling', () => {
       }),
     };
 
-    // Mock Stellar server
-    jest.spyOn(require('../backend/src/config/stellarConfig'), 'server', 'get').mockReturnValue({
-      transactions: () => ({
-        transaction: () => ({
-          call: async () => feeBumpTx,
-        }),
-      }),
-      ledgers: () => ({
-        order: () => ({
-          limit: () => ({
-            call: async () => ({
-              records: [{ sequence: 100 }],
-            }),
-          }),
-        }),
-      }),
-    });
-
-    const result = await stellarService.verifyTransaction('feebump789', walletAddress);
+    mockLookupTransaction.mockResolvedValue(feeBumpTx);
+    const result = await stellarService.verifyTransaction('feebump789', walletAddress, schoolId);
 
     expect(result.memo).toBe('STU001');
+    expect(result.hash).toBe('inner789');
+    expect(result.feeBumpTxHash).toBe('feebump789');
     expect(result.amount).toBe(250);
     expect(result.feeValidation.status).toBe('valid');
   });

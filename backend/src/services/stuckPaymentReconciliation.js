@@ -35,6 +35,7 @@ let reconciliationWorker = null;
 async function findStuckPayments(limit = STUCK_PAYMENT_RECONCILIATION_MAX_BATCH) {
   return Payment.find({
     status: 'SUBMITTED',
+    signedSubmissionXdr: { $exists: false },
     submittedAt: { $lt: new Date(Date.now() - STUCK_PAYMENT_THRESHOLD_MS) },
     deletedAt: null,
   })
@@ -51,7 +52,10 @@ async function reconcileOne(payment, run) {
   }
 
   try {
-    const verified = await verifyTransaction(payment.txHash, school.stellarAddress, payment.schoolId);
+    const verified = await verifyTransaction(payment.txHash, school.stellarAddress, payment.schoolId).catch(error => {
+      if (error.code !== 'NOT_FOUND' || !payment.feeBumpTxHash) throw error;
+      return verifyTransaction(payment.feeBumpTxHash, school.stellarAddress, payment.schoolId);
+    });
     if (verified.studentId !== payment.studentId) {
       run.mismatchCount++;
       run.errorCount++;
@@ -144,6 +148,7 @@ async function reconcileStuckPayments() {
     while (true) {
       const query = {
         status: 'SUBMITTED',
+        signedSubmissionXdr: { $exists: false },
         submittedAt: { $lt: new Date(Date.now() - STUCK_PAYMENT_THRESHOLD_MS) },
         deletedAt: null,
         ...(lastId ? { _id: { $gt: lastId } } : {}),

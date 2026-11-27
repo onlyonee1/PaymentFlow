@@ -251,3 +251,24 @@ may still confirm later. Take the following steps:
    availability issues. Check the `/health` endpoint and Horizon status page.
    Consider increasing `FINALITY_POLL_TIMEOUT_MS` or alerting on
    `payment.suspicionReason = FINALITY_TIMEOUT` count via Prometheus.
+
+### Fee-bump recovery for signed XDR submissions
+
+`POST /api/payments/submit` can return `202` with the original hash while
+Horizon is still processing the payment. The server keeps polling both hashes
+once it submits a fee bump. The original hash remains the payment's identifier.
+The response includes `feeBumpTxHash` when a bump has been prepared.
+
+Configure a fee source for the school with
+`STELLAR_SCHOOL_FEE_SOURCE_SECRETS`, a JSON object keyed by school ID.
+Single-school deployments can use `STELLAR_FEE_SOURCE_SECRET` when it
+matches the school's wallet. After 60 seconds without inclusion, the server
+can wrap a valid signed payment using a 10× fee bid by default. It consults
+Horizon fee statistics and caps the total fee at `FEE_BUMP_MAX_FEE_STROOPS`.
+`FEE_BUMP_MULTIPLIER` changes the multiplier. Wallets must give signed
+transactions time bounds that allow submission after the 60-second wait.
+
+If Horizon never reports inclusion by the polling deadline, the server marks
+the payment failed and attempts to email the parent if a deliverable address
+exists. If the transaction is included, the normal finality tracker monitors
+confirmation depth.

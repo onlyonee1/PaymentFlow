@@ -1,8 +1,10 @@
 "use strict";
 
+const { Operation, TransactionBuilder } = require("@stellar/stellar-sdk");
 const {
   server,
   isAcceptedAsset,
+  networkPassphrase,
   CONFIRMATION_THRESHOLD,
   FINALIZATION_THRESHOLD,
 } = require("../config/stellarConfig");
@@ -11,8 +13,7 @@ const Payment = require("../models/paymentModel");
 const Student = require("../models/studentModel");
 const PaymentIntent = require("../models/paymentIntentModel");
 const { validatePaymentAmount } = require("../utils/paymentLimits");
-const { Stroops, paymentAmountDecimal } = require("../utils/stroops");
-const { asStroops, classifyFeePayment, decimalFromMongo } = require("../utils/money");
+const { toStroops, stroopsToNumber, compareAmounts } = require("../utils/stellarAmount");
 const {
   SUPPORTED_MEMO_TYPES,
   normalizeMemoType,
@@ -39,11 +40,6 @@ const { getEngineForSchool } = require("./feeAdjustmentEngine");
 // or another syncPaymentsForSchool run.
 const STUDENT_BALANCE_LOCK_TTL_MS = parseInt(process.env.STUDENT_BALANCE_LOCK_TTL_MS || "15000", 10);
 
-/**
- * Provides the detect asset operation in stellarService.
- * @param {*} payOp - Value used by detectAsset.
- * @returns {*} Result produced by detectAsset.
- */
 function detectAsset(payOp) {
   const assetType = payOp.asset_type;
   const assetCode = assetType === "native" ? "XLM" : payOp.asset_code;
@@ -56,9 +52,34 @@ function detectAsset(payOp) {
   return { assetCode, assetType, assetIssuer };
 }
 
-/** Convert a Horizon decimal for legacy numeric fields. */
+/**
+ * Normalize a Horizon API amount string to a JS number using the Stellar SDK
+ * as the canonical source of truth for 7-decimal-place precision.
+ *
+ * Horizon returns amounts as decimal strings (e.g. '100.0000000'). Both XLM
+ * and USDC use 7 decimal places on Stellar, so the same conversion applies to
+ * all accepted assets. We round-trip through stroops via Operation._fromXDRAmount
+ * to guarantee the SDK's precision rules are applied consistently.
+ *
+ * @param {string} rawAmount - Decimal amount string from Horizon API
+ * @returns {number}
+ */
 function normalizeAmount(rawAmount) {
-  return Stroops.fromXLM(rawAmount).toNumber();
+  // Convert Horizon decimal string → stroop integer → SDK-normalized decimal
+  const stroops = String(Math.round(parseFloat(rawAmount) * 1e7));
+  return parseFloat(Operation._fromXDRAmount(stroops));
+}
+
+function transactionMemo(tx) {
+  const inner = tx.inner_transaction || tx;
+  const type = inner.memo_type || tx.memo_type;
+  if (type && type !== 'none') return { memoType: type, memoValue: inner.memo ?? tx.memo };
+  if (tx.inner_transaction && tx.envelope_xdr) {
+    const envelope = TransactionBuilder.fromXDR(tx.envelope_xdr, networkPassphrase);
+    const memo = envelope.innerTransaction?.memo;
+    if (memo) return { memoType: memo.type, memoValue: memo.type === 'hash' ? memo.value?.toString('hex') : memo.value };
+  }
+  return { memoType: 'none', memoValue: null };
 }
 
 /**
@@ -104,7 +125,7 @@ async function extractValidPayment(tx, walletAddress, schoolId) {
   }
 
   // Check memo type and handle accordingly
-  const memoType = innerTx.memo_type || 'none';
+  const { memoType, memoValue } = transactionMemo(tx);
   
   if (memoType === 'none') {
     // No memo provided
@@ -122,7 +143,7 @@ async function extractValidPayment(tx, walletAddress, schoolId) {
   }
 
   // MEMO_ID / MEMO_HASH decode back to the canonical intent memo (#1118).
-  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
+  const memo = decodeMemoToCanonical(memoValue, memoType);
   if (!memo) {
     logger.warn('Transaction memo could not be decoded to a payment reference', {
       txHash: tx.hash,
@@ -149,28 +170,22 @@ async function extractValidPayment(tx, walletAddress, schoolId) {
   return { payOp, memo, asset, memoType };
 }
 
-/**
- * Validates payment against fee in stellarService.
- * @param {number} paymentAmount - Value used by validatePaymentAgainstFee.
- * @param {number} expectedFee - Value used by validatePaymentAgainstFee.
- * @returns {*} Result produced by validatePaymentAgainstFee.
- */
 function validatePaymentAgainstFee(paymentAmount, expectedFee) {
   // Compare in exact integer stroop space (#842). Float comparison of the paid
   // amount vs the fee can mis-judge an exact-match payment as short/over by a
   // rounding epsilon; stroop comparison is exact.
-  const paidStroops = asStroops(paymentAmount);
-  const feeStroops = asStroops(expectedFee);
+  const paidStroops = toStroops(paymentAmount);
+  const feeStroops = toStroops(expectedFee);
 
-  if (paidStroops.compare(feeStroops) < 0) {
+  if (paidStroops < feeStroops) {
     return {
       status: "underpaid",
       excessAmount: 0,
       message: `Payment of ${paymentAmount} is less than the required fee of ${expectedFee}`,
     };
   }
-  if (paidStroops.compare(feeStroops) > 0) {
-    const excess = paidStroops.subtract(feeStroops).toNumber();
+  if (paidStroops > feeStroops) {
+    const excess = stroopsToNumber(paidStroops - feeStroops);
     return {
       status: "overpaid",
       excessAmount: excess,
@@ -240,11 +255,6 @@ async function getLatestLedgerSequence(label) {
   return latestLedger.records[0].sequence;
 }
 
-/**
- * Validates confirmation status in stellarService.
- * @param {number} txLedger - Value used by checkConfirmationStatus.
- * @returns {Promise<*>} Result produced by checkConfirmationStatus.
- */
 async function checkConfirmationStatus(txLedger) {
   const latestSequence = await getLatestLedgerSequence(
     "checkConfirmationStatus",
@@ -573,7 +583,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOp
   }
 
   // 3. Check memo type (after destination/asset are validated)
-  const memoType = innerTx.memo_type || 'none';
+  const { memoType, memoValue } = transactionMemo(tx);
 
   if (memoType === 'none') {
     const err = new Error(
@@ -595,7 +605,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOp
     throw err;
   }
 
-  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
+  const memo = decodeMemoToCanonical(memoValue, memoType);
   if (!memo) {
     // A non-text memo that fails to decode carries no student identity — it is
     // an unrecognised value rather than a missing one, so report it as such.
@@ -614,11 +624,10 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOp
     throw err;
   }
 
-  const exactAmount = Stroops.fromXLM(payOp.amount);
-  const amount = exactAmount.toNumber();
+  const amount = normalizeAmount(payOp.amount);
 
   // 5. Validate payment amount is within configured limits
-  const limitValidation = await validatePaymentAmount(exactAmount.toXLM(), {
+  const limitValidation = await validatePaymentAmount(amount, {
     schoolId,
     asset: asset?.code,
   });
@@ -640,7 +649,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOp
 
   const feeValidation =
     feeAmount != null
-      ? validatePaymentAgainstFee(exactAmount, feeAmount)
+      ? validatePaymentAgainstFee(amount, feeAmount)
       : {
         status: "unknown",
         excessAmount: 0,
@@ -648,10 +657,11 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOp
       };
 
   // Extract network fee from transaction
-  const networkFee = new Stroops(BigInt(tx.fee_paid || "0")).toNumber(); // Convert stroops to XLM
+  const networkFee = parseFloat(tx.fee_paid || "0") / 10000000; // Convert stroops to XLM
 
   return {
-    hash: tx.hash,
+    hash: tx.inner_transaction?.hash || tx.hash,
+    ...(tx.inner_transaction?.hash ? { feeBumpTxHash: tx.hash } : {}),
     memo: memo,
     studentId,
     amount: amount,
@@ -709,7 +719,8 @@ async function syncPaymentsForSchool(school) {
     for (const tx of page.records) {
       summary.found++;
 
-      const existing = await Payment.findOne({ txHash: tx.hash, schoolId, deletedAt: null });
+      const canonicalHash = tx.inner_transaction?.hash || tx.hash;
+      const existing = await Payment.findOne({ txHash: canonicalHash, schoolId, deletedAt: null });
       if (existing) { summary.alreadyProcessed++; done = true; break; }
 
       summary.new++;
@@ -800,10 +811,9 @@ async function syncPaymentsForSchool(school) {
 
       summary.matched++;
 
-      const exactAmount = Stroops.fromXLM(payOp.amount);
-      const paymentAmount = exactAmount.toNumber();
+      const paymentAmount = parseFloat(payOp.amount);
 
-      const limitValidation = await validatePaymentAmount(exactAmount.toXLM(), {
+      const limitValidation = await validatePaymentAmount(paymentAmount, {
         schoolId,
         asset: asset?.code,
       });
@@ -866,11 +876,29 @@ async function syncPaymentsForSchool(school) {
 
       const previousPayments = await Payment.aggregate([
         { $match: { schoolId, studentId, deletedAt: null } },
-        { $group: { _id: null, total: { $sum: paymentAmountDecimal } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
       ]);
-      const previousTotal = asStroops(decimalFromMongo(previousPayments[0]?.total));
-      const balance = classifyFeePayment(previousTotal.add(exactAmount), student.feeAmount);
-      const { cumulativeTotal, status: cumulativeStatus, excessAmount } = balance;
+      const previousTotal = previousPayments.length
+        ? previousPayments[0].total
+        : 0;
+      const cumulativeTotal = parseFloat(
+        (previousTotal + paymentAmount).toFixed(7),
+      );
+
+      // Partial payments are accepted in the sync path — cumulative total determines status.
+      // A single payment below the fee is recorded as 'partial' (credit toward remainingBalance).
+      // Compare in exact stroop space (#842) so an exact cumulative match is never
+      // mis-classified as partial/overpaid by a float rounding epsilon.
+      const cumulativeVsFee = compareAmounts(cumulativeTotal, student.feeAmount);
+      let cumulativeStatus;
+      if (cumulativeVsFee < 0) cumulativeStatus = "partial";
+      else if (cumulativeVsFee > 0) cumulativeStatus = "overpaid";
+      else cumulativeStatus = "valid";
+
+      const excessAmount =
+        cumulativeStatus === "overpaid"
+          ? stroopsToNumber(toStroops(cumulativeTotal) - toStroops(student.feeAmount))
+          : 0;
 
       let session;
       try {
@@ -879,10 +907,10 @@ async function syncPaymentsForSchool(school) {
           await savePayment({
             schoolId,
             studentId,
-            txHash: tx.hash,
-            correlationId: deriveCorrelationId(tx.hash),
+            txHash: canonicalHash,
+            feeBumpTxHash: tx.inner_transaction?.hash ? tx.hash : undefined,
+            correlationId: deriveCorrelationId(canonicalHash),
             amount: paymentAmount,
-            amountStroops: exactAmount.value.toString(),
             feeAmount: feeAmountForRecord,
             feeCategory,
             feeValidationStatus: cumulativeStatus,
@@ -903,8 +931,8 @@ async function syncPaymentsForSchool(school) {
           if (isConfirmed && !isSuspicious && !studentDeleted) {
             const updateData = {
               totalPaid: cumulativeTotal,
-              remainingBalance: balance.remainingBalance,
-              feePaid: balance.feePaid,
+              remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeTotal).toFixed(7)),
+              feePaid: cumulativeTotal >= student.feeAmount,
             };
 
             if (feeCategory && student.fees && student.fees.length > 0) {
@@ -921,13 +949,18 @@ async function syncPaymentsForSchool(school) {
                       deletedAt: null,
                     },
                   },
-                  { $group: { _id: null, total: { $sum: paymentAmountDecimal } } },
+                  { $group: { _id: null, total: { $sum: "$amount" } } },
                 ]).session(session);
-                const fee = student.fees[feeIndex];
-                const category = classifyFeePayment(decimalFromMongo(categoryPayments[0]?.total), fee.amount);
-                fee.totalPaid = category.cumulativeTotal;
-                fee.remainingBalance = category.remainingBalance;
-                fee.paid = category.feePaid;
+                const categoryTotalPaid = categoryPayments.length
+                  ? parseFloat(categoryPayments[0].total.toFixed(7))
+                  : 0;
+
+                student.fees[feeIndex].totalPaid = categoryTotalPaid;
+                student.fees[feeIndex].remainingBalance = Math.max(
+                  0,
+                  student.fees[feeIndex].amount - categoryTotalPaid
+                );
+                student.fees[feeIndex].paid = categoryTotalPaid >= student.fees[feeIndex].amount;
                 updateData.fees = student.fees;
               }
             }
@@ -1050,10 +1083,14 @@ async function finalizeConfirmedPayments(schoolId) {
           deletedAt: null,
         },
       },
-      { $group: { _id: null, total: { $sum: paymentAmountDecimal } } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
-    const balance = classifyFeePayment(decimalFromMongo(agg[0]?.total), student.feeAmount);
-    const updateData = { totalPaid: balance.cumulativeTotal, remainingBalance: balance.remainingBalance, feePaid: balance.feePaid };
+    const totalPaid = agg.length ? parseFloat(agg[0].total.toFixed(7)) : 0;
+    const remainingBalance = parseFloat(
+      Math.max(0, student.feeAmount - totalPaid).toFixed(7),
+    );
+
+    const updateData = { totalPaid, remainingBalance, feePaid: totalPaid >= student.feeAmount };
 
     // Update fee categories if they exist
     if (student.fees && student.fees.length > 0) {
@@ -1071,22 +1108,22 @@ async function finalizeConfirmedPayments(schoolId) {
         {
           $group: {
             _id: "$feeCategory",
-            totalPaid: { $sum: paymentAmountDecimal },
+            totalPaid: { $sum: "$amount" },
           },
         },
       ]);
 
       const categoryPaymentMap = {};
       categoryPayments.forEach(cp => {
-        categoryPaymentMap[cp._id] = decimalFromMongo(cp.totalPaid);
+        categoryPaymentMap[cp._id] = parseFloat(cp.totalPaid.toFixed(7));
       });
 
       // Update each fee category
       student.fees.forEach(fee => {
-        const category = classifyFeePayment(categoryPaymentMap[fee.category] || 0, fee.amount);
-        fee.totalPaid = category.cumulativeTotal;
-        fee.remainingBalance = category.remainingBalance;
-        fee.paid = category.feePaid;
+        const paid = categoryPaymentMap[fee.category] || 0;
+        fee.totalPaid = paid;
+        fee.remainingBalance = Math.max(0, fee.amount - paid);
+        fee.paid = paid >= fee.amount;
       });
 
       updateData.fees = student.fees;
@@ -1112,7 +1149,8 @@ async function parseIncomingTransaction(txHash, walletAddress = null) {
     { label: "parseIncomingTransaction", context: `Transaction ${txHash}` },
   );
 
-  const memo = tx.memo ? tx.memo.trim() : null;
+  const { memoType, memoValue } = transactionMemo(tx);
+  const memo = decodeMemoToCanonical(memoValue, memoType);
 
   const ops = await withStellarRetry(() => tx.operations(), {
     label: "parseIncomingTransaction.operations",
@@ -1127,7 +1165,6 @@ async function parseIncomingTransaction(txHash, walletAddress = null) {
       from: op.from || null,
       to: op.to,
       amount: normalizeAmount(op.amount),
-      ...Stroops.fromXLM(op.amount).toAmountFields(),
       assetCode: op.asset_type === "native" ? "XLM" : op.asset_code,
       assetType: op.asset_type,
       assetIssuer: op.asset_issuer || null,
@@ -1167,7 +1204,13 @@ async function parseIncomingTransaction(txHash, walletAddress = null) {
  * @param {number}  [opts.timeoutMs]    - Override for FINALITY_POLL_TIMEOUT_MS
  * @param {number}  [opts.initialDelayMs] - First poll delay (default 2 s)
  * @param {number}  [opts.maxDelayMs]   - Cap on backoff delay (default 10 s)
- * @returns {Promise<object>} Final payment state and related confirmation details.
+ * @returns {Promise<{
+ *   status: 'SUCCESS'|'FAILED',
+ *   failureReason: string|null,
+ *   confirmationState: string,
+ *   confirmationStatus: string,
+ *   ledger: number|null,
+ * }>}
  */
 const { PAYMENT_FAILURE_REASONS } = require('../constants/paymentStatus');
 
@@ -1184,13 +1227,6 @@ const FINALITY_POLL_MAX_DELAY_MS = parseInt(
   10,
 );
 
-/**
- * Provides the poll for ledger inclusion operation in stellarService.
- * @param {*} paymentDoc - Value used by pollForLedgerInclusion.
- * @param {string} txHash - Value used by pollForLedgerInclusion.
- * @param {object} opts - Value used by pollForLedgerInclusion.
- * @returns {Promise<*>} Result produced by pollForLedgerInclusion.
- */
 async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
   const timeoutMs      = opts.timeoutMs    || FINALITY_POLL_TIMEOUT_MS;
   const initialDelayMs = opts.initialDelayMs || FINALITY_POLL_INITIAL_DELAY_MS;
@@ -1214,7 +1250,8 @@ async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
     if (attempt > 1) {
       const base  = Math.min(initialDelayMs * 2 ** (attempt - 2), maxDelayMs);
       const jitter = Math.floor(base * 0.3 * Math.random());
-      const wait  = base + jitter;
+      const untilWake = opts.wakeAt > Date.now() ? opts.wakeAt - Date.now() : Infinity;
+      const wait = Math.min(base + jitter, untilWake);
       logger.debug('Ledger finality poll waiting before next attempt', { txHash, attempt, waitMs: wait });
       await new Promise((r) => setTimeout(r, wait));
     }
@@ -1225,7 +1262,7 @@ async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
     let tx;
     try {
       tx = await withStellarRetry(
-        () => server.transactions().transaction(txHash).call(),
+        opts.findTransaction || (() => server.transactions().transaction(txHash).call()),
         { label: 'pollForLedgerInclusion', context: `Transaction ${txHash}`, maxAttempts: 1 },
       );
       lastNetworkError = null; // reset on successful fetch
@@ -1243,14 +1280,11 @@ async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
       continue;
     }
 
+    opts.onInclusion?.(tx);
+
     // 2. Check on-chain success flag. A tx can be included but failed (#840).
     if (tx.successful === false) {
       logger.warn('Transaction failed on-chain during finality poll', { txHash });
-      const confirmation = await determineConfirmationState(
-        tx.ledger_attr || tx.ledger || null,
-        CONFIRMATION_STATES.DETECTED,
-        false,
-      );
       return {
         status: 'FAILED',
         failureReason: PAYMENT_FAILURE_REASONS.TX_FAILED_ON_CHAIN,
@@ -1262,11 +1296,16 @@ async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
 
     // 3. Evaluate finality against the confirmation state machine
     const txLedger = tx.ledger_attr || tx.ledger || null;
-    const { state: nextState, changed, confirmationStatus } = await determineConfirmationState(
+    const checkConfirmation = determineConfirmationState(
       txLedger,
       paymentDoc.confirmationState || CONFIRMATION_STATES.DETECTED,
       paymentDoc.isSuspicious || false,
     );
+    const { state: nextState, changed, confirmationStatus } = await (opts.stopOnInclusion
+      ? checkConfirmation.catch(() => ({
+        state: CONFIRMATION_STATES.DETECTED, changed: false, confirmationStatus: 'pending_confirmation',
+      }))
+      : checkConfirmation);
 
     logger.debug('Finality poll state check', {
       txHash, attempt, txLedger, nextState, changed,
@@ -1278,8 +1317,8 @@ async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
       paymentDoc.confirmationState = nextState;
     }
 
-    if (isConfirmedOrAbove(nextState)) {
-      logger.info('Transaction reached ledger finality', {
+    if (isConfirmedOrAbove(nextState) || (opts.stopOnInclusion && txLedger && tx.successful)) {
+      logger.info('Transaction found in the ledger', {
         txHash, confirmationState: nextState, attempts: attempt,
       });
       return {
