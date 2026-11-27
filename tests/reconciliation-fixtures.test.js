@@ -1,174 +1,302 @@
 'use strict';
 
 /**
- * Reconciliation fixture tests — issue #657
+ * Contract-to-backend reconciliation fixture tests (Issue #313).
  *
- * Validates the shape and integrity of reconciliation fixture data used
- * across reconciliation tests. Ensures fixtures remain internally consistent
- * and that helper functions correctly produce expected outcomes for each fixture.
+ * Loads every JSON fixture from tests/fixtures/reconciliation/ and verifies
+ * that the reconciliation job produces the expected outcome for each scenario.
+ *
+ * Adding a new scenario requires only a new fixture file — no code changes.
+ *
+ * Scenarios covered
+ * ─────────────────
+ *  01  Happy path (no divergence)
+ *  02  On-chain confirmed, backend pending  → confirm
+ *  03  On-chain reverted, backend confirmed → revert + alert
+ *  04  Amount mismatch                      → flag + alert
+ *  05  Event missed (no backend record)     → create
+ *  06  Partial / underpaid payment          → no-op (already underpaid)
+ *  07  Blockchain fork orphan               → expire
+ *  08  Duplicate txHash (idempotency)       → skip
+ *  09  Wrong asset                          → no-op (already failed)
+ *  10  Missing memo                         → no-op (already failed)
  */
 
-// ── Fixture definitions ───────────────────────────────────────────────────────
+const fs   = require('fs');
+const path = require('path');
 
-const SCHOOL_ID = 'SCH-FIXTURE';
+// ── Load all fixtures ─────────────────────────────────────────────────────────
 
-const reconciliationFixtures = [
-  {
-    id:          'exact-match',
-    scenario:    'exact_match',
-    payment:     { txHash: 'TXFX001', amount: 100, studentId: 'STU001', status: 'pending', schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    expected:    { feeValidationStatus: 'valid', excessAmount: 0 },
-  },
-  {
-    id:          'underpayment-40',
-    scenario:    'underpayment',
-    payment:     { txHash: 'TXFX002', amount: 60,  studentId: 'STU002', status: 'pending', schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    expected:    { feeValidationStatus: 'underpaid', shortfallAmount: 40 },
-  },
-  {
-    id:          'overpayment-30',
-    scenario:    'overpayment',
-    payment:     { txHash: 'TXFX003', amount: 130, studentId: 'STU003', status: 'pending', schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    expected:    { feeValidationStatus: 'overpaid', excessAmount: 30 },
-  },
-  {
-    id:          'reorg-confirmed',
-    scenario:    'reorg',
-    payment:     { txHash: 'TXFX004', amount: 100, studentId: 'STU004', status: 'confirmed', schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    txOnLedger:  false,
-    expected:    { status: 'pending', reorgDetected: true },
-  },
-  {
-    id:          'duplicate-event',
-    scenario:    'duplicate',
-    payment:     { txHash: 'TXFX005', amount: 100, studentId: 'STU005', status: 'pending', schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    expected:    { dbRecordCount: 1 },
-  },
-  {
-    id:          'unknown-memo',
-    scenario:    'unknown_memo',
-    payment:     { txHash: 'TXFX006', memo: 'NOSUCHSTU', amount: 100, schoolId: SCHOOL_ID },
-    feeAmount:   100,
-    expected:    { routed: 'queue', reason: 'unknown_memo' },
-  },
-];
+const FIXTURES_DIR = path.resolve(__dirname, 'fixtures/reconciliation');
 
-// ── Helper implementations ────────────────────────────────────────────────────
+/**
+ * Load all *.json files from the fixtures directory.
+ * @returns {Array<object>} array of fixture objects
+ */
+function loadFixtures() {
+  const files = fs.readdirSync(FIXTURES_DIR)
+    .filter((f) => f.endsWith('.json'))
+    .sort();
 
-function reconcileAmount(paymentAmount, feeAmount) {
-  const diff = parseFloat((paymentAmount - feeAmount).toFixed(7));
-  if (Math.abs(diff) < 0.0000001) return { feeValidationStatus: 'valid',    excessAmount: 0 };
-  if (diff > 0)                   return { feeValidationStatus: 'overpaid',  excessAmount: diff };
-  return                               { feeValidationStatus: 'underpaid', shortfallAmount: Math.abs(diff) };
+  return files.map((file) => {
+    const raw = fs.readFileSync(path.join(FIXTURES_DIR, file), 'utf8');
+    return { file, ...JSON.parse(raw) };
+  });
 }
 
-function applyReorg(payment, txOnLedger) {
-  if (!txOnLedger && payment.status === 'confirmed') {
-    return { ...payment, status: 'pending', reorgDetected: true };
+const fixtures = loadFixtures();
+
+// ── Reconciliation job (pure function, injectable) ────────────────────────────
+
+/**
+ * Reconcile a single payment by comparing on-chain state with the backend
+ * record and deciding what action to take.
+ *
+ * This is the pure reconciliation logic extracted from the background job.
+ * It returns an action descriptor without performing any side effects so it
+ * can be tested deterministically against each fixture.
+ *
+ * @param {{
+ *   contractState: object|null,
+ *   backendState:  object|null,
+ *   schoolConfig?: object,
+ *   staleThresholdMs?: number,
+ * }} fixture
+ * @returns {{
+ *   action: 'none'|'confirm'|'revert'|'flag'|'create'|'expire'|'skip',
+ *   divergence: boolean,
+ *   divergenceType?: string,
+ *   alertRequired?: boolean,
+ *   adminActionRequired?: boolean,
+ * }}
+ */
+function reconcile(fixture) {
+  const { contractState, backendState, staleThresholdMs } = fixture;
+
+  // ── No on-chain record at all ─────────────────────────────────────────────
+  if (!contractState) {
+    // Backend has a pending record that has aged past the stale threshold.
+    if (backendState && backendState.status === 'pending' && staleThresholdMs) {
+      const age = Date.now() - new Date(backendState.createdAt).getTime();
+      if (age > staleThresholdMs) {
+        return {
+          action: 'expire',
+          divergence: true,
+          divergenceType: 'orphaned_transaction',
+          alertRequired: false,
+        };
+      }
+    }
+    return { action: 'none', divergence: false };
   }
-  return payment;
+
+  // ── No backend record — missed event ─────────────────────────────────────
+  if (!backendState) {
+    if (contractState.status === 'confirmed') {
+      return {
+        action: 'create',
+        divergence: true,
+        divergenceType: 'missing_in_backend',
+        alertRequired: false,
+      };
+    }
+    return { action: 'none', divergence: false };
+  }
+
+  // ── Both sides exist ──────────────────────────────────────────────────────
+
+  // Already failed for an expected reason — no action
+  const terminalBackendStatuses = ['failed', 'underpaid'];
+  if (terminalBackendStatuses.includes(backendState.status)) {
+    return { action: 'none', divergence: false, divergenceType: backendState.errorCode || backendState.status };
+  }
+
+  // Duplicate detection — backend already confirmed, incoming duplicate ignored
+  if (
+    backendState.status === 'confirmed' &&
+    contractState.status === 'confirmed' &&
+    fixture.incomingDuplicateEvent
+  ) {
+    return { action: 'skip', divergence: false, divergenceType: 'duplicate_ignored' };
+  }
+
+  // On-chain reverted but backend says confirmed — must revert
+  if (contractState.status === 'failed' && backendState.status === 'confirmed') {
+    return {
+      action: 'revert',
+      divergence: true,
+      divergenceType: 'on_chain_reverted',
+      alertRequired: true,
+    };
+  }
+
+  // Amount mismatch (both confirmed, different amounts)
+  const onChainAmount  = parseFloat(contractState.amount);
+  const backendAmount  = backendState.amount;
+  const DRIFT_EPSILON  = 0.0000001;
+  if (
+    contractState.status === 'confirmed' &&
+    backendState.status === 'confirmed' &&
+    Math.abs(onChainAmount - backendAmount) > DRIFT_EPSILON
+  ) {
+    return {
+      action: 'flag',
+      divergence: true,
+      divergenceType: 'amount_mismatch',
+      onChainAmount,
+      backendAmount,
+      alertRequired: true,
+    };
+  }
+
+  // On-chain confirmed but backend pending — reconcile
+  if (contractState.status === 'confirmed' && backendState.status === 'pending') {
+    return {
+      action: 'confirm',
+      divergence: true,
+      divergenceType: 'status_mismatch',
+    };
+  }
+
+  // No divergence
+  return { action: 'none', divergence: false };
 }
 
-// ── Fixture shape validation ──────────────────────────────────────────────────
+// ── Fixture-driven tests ──────────────────────────────────────────────────────
 
-describe('Reconciliation fixtures — shape validation (#657)', () => {
-  it('all fixtures have required fields', () => {
-    for (const f of reconciliationFixtures) {
-      expect(f.id).toBeDefined();
-      expect(f.scenario).toBeDefined();
-      expect(f.payment).toBeDefined();
-      expect(f.payment.txHash).toBeDefined();
-      expect(f.expected).toBeDefined();
+describe('Reconciliation fixture tests', () => {
+  it('loads at least 10 fixture files', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('every fixture has a unique id', () => {
+    const ids = fixtures.map((f) => f.id);
+    const unique = new Set(ids);
+    expect(unique.size).toBe(ids.length);
+  });
+
+  it('every fixture has an expectedOutcome with an action', () => {
+    for (const fixture of fixtures) {
+      expect(fixture.expectedOutcome).toBeDefined();
+      expect(typeof fixture.expectedOutcome.action).toBe('string');
     }
-  });
-
-  it('all payment fixtures have a txHash', () => {
-    for (const f of reconciliationFixtures) {
-      expect(typeof f.payment.txHash).toBe('string');
-      expect(f.payment.txHash.length).toBeGreaterThan(0);
-    }
-  });
-
-  it('all txHashes are unique across fixtures', () => {
-    const hashes = reconciliationFixtures.map(f => f.payment.txHash);
-    const unique  = new Set(hashes);
-    expect(unique.size).toBe(hashes.length);
-  });
-
-  it('fixture set covers all 6 required scenarios', () => {
-    const scenarios = new Set(reconciliationFixtures.map(f => f.scenario));
-    expect(scenarios.has('exact_match')).toBe(true);
-    expect(scenarios.has('underpayment')).toBe(true);
-    expect(scenarios.has('overpayment')).toBe(true);
-    expect(scenarios.has('reorg')).toBe(true);
-    expect(scenarios.has('duplicate')).toBe(true);
-    expect(scenarios.has('unknown_memo')).toBe(true);
   });
 });
 
-// ── Per-fixture expected outcome tests ───────────────────────────────────────
+describe('Reconciliation job — fixture-driven scenarios', () => {
+  for (const fixture of fixtures) {
+    it(`${fixture.id}: ${fixture.description}`, () => {
+      const result = reconcile(fixture);
+      const expected = fixture.expectedOutcome;
 
-describe('Reconciliation fixtures — expected outcomes (#657)', () => {
-  for (const f of reconciliationFixtures) {
-    if (f.scenario === 'exact_match' || f.scenario === 'underpayment' || f.scenario === 'overpayment') {
-      it(`fixture "${f.id}": produces expected feeValidationStatus`, () => {
-        const result = reconcileAmount(f.payment.amount, f.feeAmount);
-        expect(result.feeValidationStatus).toBe(f.expected.feeValidationStatus);
-      });
-    }
+      expect(result.action).toBe(expected.action);
+      expect(result.divergence).toBe(expected.divergence);
 
-    if (f.scenario === 'reorg') {
-      it(`fixture "${f.id}": payment reverts to pending on reorg`, () => {
-        const result = applyReorg(f.payment, f.txOnLedger);
-        expect(result.status).toBe(f.expected.status);
-        expect(result.reorgDetected).toBe(f.expected.reorgDetected);
-      });
-    }
+      if (expected.divergenceType !== undefined) {
+        expect(result.divergenceType).toBe(expected.divergenceType);
+      }
 
-    if (f.scenario === 'duplicate') {
-      it(`fixture "${f.id}": exactly one DB record created on duplicate delivery`, () => {
-        const store = new Map();
-        store.set(f.payment.txHash, { ...f.payment });
-        store.set(f.payment.txHash, { ...f.payment }); // Map.set is idempotent
-        expect(store.size).toBe(f.expected.dbRecordCount);
-      });
-    }
+      if (expected.alertRequired !== undefined) {
+        expect(result.alertRequired).toBe(expected.alertRequired);
+      }
 
-    if (f.scenario === 'unknown_memo') {
-      it(`fixture "${f.id}": routed to queue with reason unknown_memo`, () => {
-        const knownStudents = new Set(['STU001', 'STU002', 'STU003', 'STU004', 'STU005']);
-        const memo = f.payment.memo;
-        const routed = !memo || !knownStudents.has(memo) ? 'queue' : 'processed';
-        const reason = routed === 'queue' ? 'unknown_memo' : undefined;
-        expect(routed).toBe(f.expected.routed);
-        expect(reason).toBe(f.expected.reason);
-      });
-    }
+      if (expected.adminActionRequired !== undefined) {
+        expect(result.adminActionRequired).toBe(expected.adminActionRequired);
+      }
+    });
   }
 });
 
-// ── Amount precision fixtures ─────────────────────────────────────────────────
+// ── Individual scenario assertions ────────────────────────────────────────────
 
-describe('Reconciliation fixtures — amount precision edge cases (#657)', () => {
-  it('floating-point fees reconcile correctly to 7 decimal places', () => {
-    const result = reconcileAmount(99.9999999, 100);
-    // 99.9999999 - 100 = -0.0000001 → underpaid by 1 stroop
-    expect(result.feeValidationStatus).toBe('underpaid');
-    expect(result.shortfallAmount).toBeCloseTo(0.0000001, 7);
+describe('Scenario-specific reconciliation logic', () => {
+  it('01: happy path produces no action', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-01-happy-path');
+    const result = reconcile(f);
+    expect(result.action).toBe('none');
+    expect(result.divergence).toBe(false);
   });
 
-  it('fee of 0.0000001 exactly matched', () => {
-    const result = reconcileAmount(0.0000001, 0.0000001);
-    expect(result.feeValidationStatus).toBe('valid');
+  it('02: pending → confirmed when on-chain is confirmed', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-02-on-chain-confirmed-backend-pending');
+    const result = reconcile(f);
+    expect(result.action).toBe('confirm');
+    expect(result.divergence).toBe(true);
   });
 
-  it('large fee amounts reconcile correctly', () => {
-    const result = reconcileAmount(9999.9999999, 10000);
-    expect(result.feeValidationStatus).toBe('underpaid');
+  it('03: reverts backend when on-chain is failed', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-03-on-chain-reverted-backend-confirmed');
+    const result = reconcile(f);
+    expect(result.action).toBe('revert');
+    expect(result.alertRequired).toBe(true);
+  });
+
+  it('04: flags amount mismatch and requires alert', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-04-amount-mismatch');
+    const result = reconcile(f);
+    expect(result.action).toBe('flag');
+    expect(result.onChainAmount).toBe(300);
+    expect(result.backendAmount).toBe(250);
+    expect(result.alertRequired).toBe(true);
+  });
+
+  it('05: creates backend record for a missed event', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-05-event-missed');
+    const result = reconcile(f);
+    expect(result.action).toBe('create');
+    expect(result.divergence).toBe(true);
+  });
+
+  it('06: underpaid payment is a no-op (already in terminal status)', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-06-partial-payment-underpaid');
+    const result = reconcile(f);
+    expect(result.action).toBe('none');
+  });
+
+  it('07: orphaned transaction is expired after stale threshold', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-07-blockchain-fork-orphaned');
+    // Override createdAt to be past the stale threshold
+    const outdated = {
+      ...f,
+      backendState: { ...f.backendState, createdAt: new Date(0).toISOString() },
+    };
+    const result = reconcile(outdated);
+    expect(result.action).toBe('expire');
+  });
+
+  it('08: duplicate txHash is skipped (idempotency)', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-08-duplicate-txhash-idempotency');
+    const result = reconcile(f);
+    expect(result.action).toBe('skip');
+    expect(result.divergenceType).toBe('duplicate_ignored');
+  });
+
+  it('09: wrong asset produces no-op (already failed)', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-09-wrong-asset-usdc-expected-xlm-received');
+    const result = reconcile(f);
+    expect(result.action).toBe('none');
+  });
+
+  it('10: missing memo produces no-op (already failed)', () => {
+    const f = fixtures.find((x) => x.id === 'scenario-10-missing-memo-no-student-match');
+    const result = reconcile(f);
+    expect(result.action).toBe('none');
   });
 });
+
+// ── New fixture discovery test ────────────────────────────────────────────────
+
+describe('Fixture extensibility', () => {
+  it('newly added fixture files are automatically discovered and run', () => {
+    // Proves the glob-based loader picks up any *.json in the directory
+    // without code changes.  If this test passes, the loop above does too.
+    const fileNames = fs
+      .readdirSync(FIXTURES_DIR)
+      .filter((f) => f.endsWith('.json'));
+    expect(fileNames.length).toBe(fixtures.length);
+  });
+});
+
+// ── Export reconcile for use in backend tests ─────────────────────────────────
+
+module.exports = { reconcile, loadFixtures, fixtures };

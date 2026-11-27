@@ -9,6 +9,8 @@ const paymentIntentSchema = new mongoose.Schema(
     studentId: { type: String, required: true },
     amount: { type: Number, required: true },
     feeCategory: { type: String, default: null },
+    batchTxHash: { type: String },
+    batchPayer: { type: String },
     memo: { type: String, required: true },
     status: {
       type: String,
@@ -22,6 +24,9 @@ const paymentIntentSchema = new mongoose.Schema(
 
 paymentIntentSchema.index({ schoolId: 1, studentId: 1 });
 paymentIntentSchema.index({ schoolId: 1, status: 1 });
+paymentIntentSchema.index({ schoolId: 1, batchTxHash: 1 }, {
+  partialFilterExpression: { batchTxHash: { $exists: true } },
+});
 // Lookup intent by memo during payment sync
 paymentIntentSchema.index({ schoolId: 1, memo: 1, status: 1 });
 // Memos are only required to be unique within a school, not globally — two

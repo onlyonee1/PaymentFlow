@@ -72,10 +72,24 @@ i18n
     },
   });
 
+export const RTL_LOCALES = ["ar", "he", "fa", "ur"];
+
+/**
+ * Returns true if the given locale code uses a right-to-left layout.
+ *
+ * @param {string} [lng]
+ * @returns {boolean}
+ */
+export const isRTL = (lng) => Boolean(lng && RTL_LOCALES.includes(lng.split("-")[0].toLowerCase()));
+
 if (typeof window !== "undefined") {
   i18n.on("languageChanged", (lng) => {
     if (!document.documentElement) return;
     document.documentElement.lang = lng;
+    document.documentElement.dir = isRTL(lng) ? "rtl" : "ltr";
+    try {
+      localStorage.setItem("locale", lng);
+    } catch {}
   });
 }
 
