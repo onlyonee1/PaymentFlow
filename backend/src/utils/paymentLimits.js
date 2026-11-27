@@ -38,7 +38,7 @@ const logger = require('./logger').child('PaymentLimits');
  * @param {object} [context]
  * @param {string} [context.schoolId] - Scopes to a school's override
  * @param {string} [context.asset]    - Asset code, e.g. 'XLM'
- * @returns {Promise<{valid: boolean, error?: string, code?: string}>}
+ * @returns {Promise<object>} Payment validation result with an optional error code.
  */
 async function validatePaymentAmount(amount, { schoolId, asset } = {}) {
   const limits = await resolveLimits({ schoolId, asset });
@@ -61,6 +61,13 @@ async function validatePaymentAmount(amount, { schoolId, asset } = {}) {
   return result;
 }
 
+/**
+ * Validates payment amount against fee in paymentLimits.
+ * @param {number} paymentAmount - Value used by validatePaymentAmountAgainstFee.
+ * @param {number} feeAmount - Value used by validatePaymentAmountAgainstFee.
+ * @param {*} maxPaymentMultiplier - Value used by validatePaymentAmountAgainstFee.
+ * @returns {*} Result produced by validatePaymentAmountAgainstFee.
+ */
 function validatePaymentAmountAgainstFee(paymentAmount, feeAmount, maxPaymentMultiplier = 3.0) {
   const dPayment = new Decimal(typeof paymentAmount === 'number' && isFinite(paymentAmount) ? paymentAmount : NaN);
   const dFee    = new Decimal(typeof feeAmount    === 'number' && isFinite(feeAmount)    ? feeAmount    : NaN);

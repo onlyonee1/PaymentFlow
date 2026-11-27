@@ -1,5 +1,9 @@
 'use strict';
 
+/**
+ * Computes or normalizes allowed origins in corsOrigins.
+ * @returns {*} Result produced by parseAllowedOrigins.
+ */
 function parseAllowedOrigins() {
   const raw = process.env.ALLOWED_ORIGIN ?? 'http://localhost:3000';
 

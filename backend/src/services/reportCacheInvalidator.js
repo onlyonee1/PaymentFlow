@@ -46,6 +46,11 @@ if (redisEnabled) {
   });
 }
 
+/**
+ * Provides the drop school reports operation in reportCacheInvalidator.
+ * @param {string} schoolId - Value used by dropSchoolReports.
+ * @returns {void} Completes without a return value.
+ */
 function dropSchoolReports(schoolId) {
   const allKeys = cache.keys();
   const reportKeys = allKeys.filter(
@@ -57,6 +62,11 @@ function dropSchoolReports(schoolId) {
   }
 }
 
+/**
+ * Updates state in reportCacheInvalidator.
+ * @param {string} schoolId - Value used by invalidate.
+ * @returns {void} Completes without a return value.
+ */
 function invalidate(schoolId) {
   if (!schoolId) return;
 
@@ -71,6 +81,10 @@ function invalidate(schoolId) {
   }
 }
 
+/**
+ * Manages the module lifecycle for reportCacheInvalidator.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function close() {
   try {
     if (subscriber) await subscriber.quit();
@@ -85,5 +99,9 @@ module.exports = {
   close,
   CHANNEL,
   _dropSchoolReports: dropSchoolReports,
+  /**
+ * Provides the is redis enabled operation in reportCacheInvalidator.
+ * @returns {*} Result produced by _isRedisEnabled.
+ */
   _isRedisEnabled: () => Boolean(publisher),
 };

@@ -15,6 +15,11 @@
  * bypass the automatic filter and retrieve all documents including deleted ones.
  */
 
+/**
+ * Provides the soft delete operation in softDelete.
+ * @param {*} schema - Value used by softDelete.
+ * @returns {void} Completes without a return value.
+ */
 const softDelete = (schema) => {
   // Add deletedAt field
   schema.add({

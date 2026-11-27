@@ -17,6 +17,11 @@ const DRAIN_TIMEOUT_MS = parseInt(process.env.DRAIN_TIMEOUT_MS, 10) || 60_000;
 let ready = true;
 let shutdownStarted = false;
 
+/**
+ * Updates ready in shutdownManager.
+ * @param {*} value - Value used by setReady.
+ * @returns {void} Completes without a return value.
+ */
 function setReady(value) {
   ready = value;
   // Setting ready to false marks the start of shutdown — flip the flag so
@@ -27,10 +32,18 @@ function setReady(value) {
   logger.info(`Readiness set to ${value ? 'ready' : 'not_ready'}`);
 }
 
+/**
+ * Validates ready in shutdownManager.
+ * @returns {*} Result produced by isReady.
+ */
 function isReady() {
   return ready && !shutdownStarted;
 }
 
+/**
+ * Validates shutdown in progress in shutdownManager.
+ * @returns {*} Result produced by isShutdownInProgress.
+ */
 function isShutdownInProgress() {
   return shutdownStarted;
 }
@@ -43,6 +56,10 @@ function markShutdownStarted() {
   shutdownStarted = true;
 }
 
+/**
+ * Provides the drain workers operation in shutdownManager.
+ * @returns {Promise<*>} Result produced by drainWorkers.
+ */
 async function drainWorkers() {
   const results = { txQueue: false, retryQueue: false };
 
@@ -87,6 +104,10 @@ async function drainWorkers() {
   return results;
 }
 
+/**
+ * Dispatches sseclients through shutdownManager.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function notifySSEClients() {
   try {
     const sseService = require('./sseService');
@@ -99,6 +120,10 @@ async function notifySSEClients() {
   }
 }
 
+/**
+ * Manages queues for shutdownManager.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function closeQueues() {
   const closeOps = [
     { name: 'transactionQueue', fn: async () => {
@@ -133,6 +158,10 @@ async function closeQueues() {
   }
 }
 
+/**
+ * Manages accepting new work for shutdownManager.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function stopAcceptingNewWork() {
   const stopOps = [
     { name: 'polling', fn: async () => {

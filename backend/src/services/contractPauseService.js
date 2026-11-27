@@ -124,6 +124,10 @@ async function getContractPauseStatus() {
 }
 
 // Exposed for tests only — resets the in-process cache
+/**
+ * Provides the reset cache for test operation in contractPauseService.
+ * @returns {void} Completes without a return value.
+ */
 function _resetCacheForTest() {
   _cache = null;
 }

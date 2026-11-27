@@ -13,11 +13,22 @@ function getStatus(err) {
   return err.response?.status || err.response?.statusCode || err.status || err.statusCode;
 }
 
+/**
+ * Validates transient in withStellarRetry.
+ * @param {*} err - Value used by isTransient.
+ * @returns {*} Result produced by isTransient.
+ */
 function isTransient(err) {
   const s = getStatus(err);
   return NETWORK_CODES.has(err.code) || /timeout|network|socket hang up/i.test(err.message || '') || s === 429 || (s >= 500 && s < 600);
 }
 
+/**
+ * Computes or normalizes horizon error in withStellarRetry.
+ * @param {*} err - Value used by classifyHorizonError.
+ * @param {object} context - Value used by classifyHorizonError.
+ * @returns {*} Result produced by classifyHorizonError.
+ */
 function classifyHorizonError(err, context = '') {
   const s = getStatus(err);
   // originalError is attached to every classified error (mirroring the
@@ -46,6 +57,12 @@ function classifyHorizonError(err, context = '') {
 // itself. classifyHorizonError() is idempotent on an already-classified error
 // (see its `err.code && err.status` passthrough), so this is safe even if a
 // caller further up the stack also classifies defensively.
+/**
+ * Provides the with stellar retry operation in withStellarRetry.
+ * @param {Function} fn - Value used by withStellarRetry.
+ * @param {object} opts - Value used by withStellarRetry.
+ * @returns {Promise<*>} Result produced by withStellarRetry.
+ */
 async function withStellarRetry(fn, opts = {}) {
   const maxAttempts = opts.maxAttempts || MAX_ATTEMPTS;
   const baseDelay   = opts.baseDelay   || BASE_DELAY;

@@ -767,6 +767,7 @@ Current migrations include: audit log TTL index, student indexes, idempotency ke
 ## Backup & Recovery
 
 The Docker Compose `backup` service runs `mongodump` every 24 hours and retains 7 days of archives.
+For current recovery objectives, restore validation, and backup-staleness escalation, see the [backup and recovery runbook](docs/runbooks/backup-recovery.md).
 
 ```bash
 # Manual backup
@@ -857,6 +858,9 @@ PaymentFlow/
 | [`docs/runbooks/incident-response.md`](docs/runbooks/incident-response.md) | Incident response runbook — severity framework, SLAs, escalation, communication templates |
 | [`docs/payment-lifecycle.md`](docs/payment-lifecycle.md) | Payment status, confirmation, retry, and reconciliation lifecycle |
 | [`docs/environment-reference.md`](docs/environment-reference.md) | Complete environment-variable ownership and secret-sensitivity reference |
+| [`docs/user-guide/admin-guide.md`](docs/user-guide/admin-guide.md) | School finance administrator guide for fees, students, payments, disputes, and reports |
+| [`docs/configuration.md`](docs/configuration.md) | Environment variable types, defaults, sensitivity, and examples |
+| [`docs/runbooks/backup-recovery.md`](docs/runbooks/backup-recovery.md) | Backup and recovery schedule, restore steps, retention, and escalation |
 
 ---
 

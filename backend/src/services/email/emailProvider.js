@@ -24,6 +24,10 @@ const PROVIDERS = {
 
 let _selected = null;
 
+/**
+ * Computes or normalizes provider name in emailProvider.
+ * @returns {*} Result produced by resolveProviderName.
+ */
 function resolveProviderName() {
   const explicit = (process.env.EMAIL_PROVIDER || config.EMAIL_PROVIDER || '').toLowerCase();
   if (explicit) {
@@ -37,6 +41,10 @@ function resolveProviderName() {
   return 'console';
 }
 
+/**
+ * Retrieves provider from emailProvider.
+ * @returns {*} Result produced by getProvider.
+ */
 function getProvider() {
   if (_selected) return _selected;
   const name = resolveProviderName();

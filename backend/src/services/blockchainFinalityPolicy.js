@@ -112,7 +112,7 @@ const FINALITY_POLICY = Object.freeze({
  *   isSettled: boolean,
  *   isTerminal: boolean,
  *   shouldRetry: boolean,
- *   changed: boolean,
+ *   changed: boolean
  * }}
  */
 function evaluatePaymentFinality(payment, latestLedgerSequence) {

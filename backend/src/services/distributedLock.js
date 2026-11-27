@@ -254,7 +254,7 @@ async function renew(key, token, ttlMs) {
  * @param {string} token
  * @param {number} ttlMs
  * @param {number} intervalMs How often to renew (default: ttlMs / 4).
- * @returns {() => void} Stop function to cancel the watchdog.
+ * @returns {Function} Stop function to cancel the watchdog.
  */
 function startWatchdog(key, token, ttlMs, intervalMs) {
   const actualInterval = intervalMs || Math.floor(ttlMs / 4);
@@ -322,6 +322,10 @@ async function getCurrentFence(key) {
   return existing ? existing.fencingToken : null;
 }
 
+/**
+ * Manages the module lifecycle for distributedLock.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function close() {
   try {
     if (client) await client.quit();
@@ -339,8 +343,16 @@ module.exports = {
   startWatchdog,
   studentBalanceLockKey,
   close,
+  /**
+ * Provides the is redis enabled operation in distributedLock.
+ * @returns {*} Result produced by _isRedisEnabled.
+ */
   _isRedisEnabled: () => Boolean(client),
   _getFenceKey: getFenceKey,
   // Test-only: clear the in-process fallback lock map between test cases.
+  /**
+ * Provides the reset local locks operation in distributedLock.
+ * @returns {*} Result produced by _resetLocalLocks.
+ */
   _resetLocalLocks: () => localLocks.clear(),
 };

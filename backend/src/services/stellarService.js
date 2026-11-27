@@ -39,6 +39,11 @@ const { getEngineForSchool } = require("./feeAdjustmentEngine");
 // or another syncPaymentsForSchool run.
 const STUDENT_BALANCE_LOCK_TTL_MS = parseInt(process.env.STUDENT_BALANCE_LOCK_TTL_MS || "15000", 10);
 
+/**
+ * Provides the detect asset operation in stellarService.
+ * @param {*} payOp - Value used by detectAsset.
+ * @returns {*} Result produced by detectAsset.
+ */
 function detectAsset(payOp) {
   const assetType = payOp.asset_type;
   const assetCode = assetType === "native" ? "XLM" : payOp.asset_code;
@@ -144,6 +149,12 @@ async function extractValidPayment(tx, walletAddress, schoolId) {
   return { payOp, memo, asset, memoType };
 }
 
+/**
+ * Validates payment against fee in stellarService.
+ * @param {number} paymentAmount - Value used by validatePaymentAgainstFee.
+ * @param {number} expectedFee - Value used by validatePaymentAgainstFee.
+ * @returns {*} Result produced by validatePaymentAgainstFee.
+ */
 function validatePaymentAgainstFee(paymentAmount, expectedFee) {
   // Compare in exact integer stroop space (#842). Float comparison of the paid
   // amount vs the fee can mis-judge an exact-match payment as short/over by a
@@ -229,6 +240,11 @@ async function getLatestLedgerSequence(label) {
   return latestLedger.records[0].sequence;
 }
 
+/**
+ * Validates confirmation status in stellarService.
+ * @param {number} txLedger - Value used by checkConfirmationStatus.
+ * @returns {Promise<*>} Result produced by checkConfirmationStatus.
+ */
 async function checkConfirmationStatus(txLedger) {
   const latestSequence = await getLatestLedgerSequence(
     "checkConfirmationStatus",
@@ -1151,13 +1167,7 @@ async function parseIncomingTransaction(txHash, walletAddress = null) {
  * @param {number}  [opts.timeoutMs]    - Override for FINALITY_POLL_TIMEOUT_MS
  * @param {number}  [opts.initialDelayMs] - First poll delay (default 2 s)
  * @param {number}  [opts.maxDelayMs]   - Cap on backoff delay (default 10 s)
- * @returns {Promise<{
- *   status: 'SUCCESS'|'FAILED',
- *   failureReason: string|null,
- *   confirmationState: string,
- *   confirmationStatus: string,
- *   ledger: number|null,
- * }>}
+ * @returns {Promise<object>} Final payment state and related confirmation details.
  */
 const { PAYMENT_FAILURE_REASONS } = require('../constants/paymentStatus');
 
@@ -1174,6 +1184,13 @@ const FINALITY_POLL_MAX_DELAY_MS = parseInt(
   10,
 );
 
+/**
+ * Provides the poll for ledger inclusion operation in stellarService.
+ * @param {*} paymentDoc - Value used by pollForLedgerInclusion.
+ * @param {string} txHash - Value used by pollForLedgerInclusion.
+ * @param {object} opts - Value used by pollForLedgerInclusion.
+ * @returns {Promise<*>} Result produced by pollForLedgerInclusion.
+ */
 async function pollForLedgerInclusion(paymentDoc, txHash, opts = {}) {
   const timeoutMs      = opts.timeoutMs    || FINALITY_POLL_TIMEOUT_MS;
   const initialDelayMs = opts.initialDelayMs || FINALITY_POLL_INITIAL_DELAY_MS;

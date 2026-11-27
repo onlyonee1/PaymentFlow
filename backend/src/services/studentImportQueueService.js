@@ -142,6 +142,11 @@ async function insertBatch(jobId, schoolId, rows, limit, quotaRemaining) {
   return { created: inserts.length, failed: failed.length, quotaRemaining: remainingQuota };
 }
 
+/**
+ * Processes student import in studentImportQueueService.
+ * @param {*} job - Value used by processStudentImport.
+ * @returns {Promise<*>} Result produced by processStudentImport.
+ */
 async function processStudentImport(job) {
   const { jobId, schoolId, fileId } = job.data;
   const ImportFileId = new mongoose.mongo.ObjectId(fileId);
@@ -191,10 +196,18 @@ async function processStudentImport(job) {
   }
 }
 
+/**
+ * Manages worker for studentImportQueueService.
+ * @returns {*} Result produced by startWorker.
+ */
 function startWorker() {
   return startQueueWorker(processStudentImport);
 }
 
+/**
+ * Manages worker for studentImportQueueService.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function stopWorker() {
   await closeQueue();
 }

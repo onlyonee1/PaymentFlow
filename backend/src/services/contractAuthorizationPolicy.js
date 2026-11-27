@@ -67,7 +67,7 @@ const ROLE_PERMISSIONS = {
  * @param {string} [params.actor] Identifier or public key of calling actor
  * @param {boolean} [params.isPaused=false] Emergency paused state of the contract
  * @param {string} [params.resourceOwner] Payer or owner of the resource (for cross-tenant checks)
- * @returns {{ authorized: boolean, code?: string, reason?: string }}
+ * @returns {object} Authorization result with an authorized flag and optional reason/code.
  */
 function evaluateAuthorization({
   action,

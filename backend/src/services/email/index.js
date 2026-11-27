@@ -59,8 +59,7 @@ function _cbKeyForProvider(providerName) {
  * @param {string} [message.html]
  * @param {string} [message.from]
  * @param {string} [message.category]   - logical type, e.g. 'receipt'|'reminder'
- * @returns {Promise<{sent:boolean, skipped?:boolean, suppressed?:boolean,
- *   messageId?:string, attempts?:number, provider?:string, error?:string}>}
+ * @returns {Promise<object>} Delivery status, provider metadata, and any failure reason.
  */
 async function sendEmail(message) {
   const { to, subject, category } = message;

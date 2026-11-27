@@ -314,7 +314,7 @@ function parse(rawEvent) {
  * Parse a batch of raw events, skipping invalid ones.
  *
  * @param {object[]} rawEvents
- * @param {{ onInvalid?: (result: object) => void }} [options]
+ * @param {object} [options] Optional parser settings, including an onInvalid callback.
  * @returns {Array<{ eventType: string, reconciliationAction: string, payload: object }>}
  */
 function parseBatch(rawEvents, options = {}) {

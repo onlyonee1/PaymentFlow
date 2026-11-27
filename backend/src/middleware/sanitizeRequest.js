@@ -64,6 +64,13 @@ function collectComplexityErrors(value, currentDepth, path, errors) {
   }
 }
 
+/**
+ * Provides the json depth guard operation in sanitizeRequest.
+ * @param {object} req - Value used by jsonDepthGuard.
+ * @param {object} res - Value used by jsonDepthGuard.
+ * @param {Function} next - Value used by jsonDepthGuard.
+ * @returns {*} Result produced by jsonDepthGuard.
+ */
 function jsonDepthGuard(req, res, next) {
   if (req.body && typeof req.body === 'object') {
     const errors = [];
@@ -79,6 +86,13 @@ function jsonDepthGuard(req, res, next) {
 // When Express parses ?a=1&a=2 it produces { a: ['1','2'] }.
 // Collapse arrays to their last value so downstream code always gets a scalar.
 
+/**
+ * Provides the deduplicate query params operation in sanitizeRequest.
+ * @param {object} req - Value used by deduplicateQueryParams.
+ * @param {object} res - Value used by deduplicateQueryParams.
+ * @param {Function} next - Value used by deduplicateQueryParams.
+ * @returns {*} Result produced by deduplicateQueryParams.
+ */
 function deduplicateQueryParams(req, res, next) {
   if (req.query && typeof req.query === 'object') {
     for (const [key, val] of Object.entries(req.query)) {

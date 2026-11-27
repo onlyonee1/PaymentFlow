@@ -153,16 +153,29 @@ async function reconcileAll(schoolId) {
   }
 }
 
+/**
+ * Manages reconciliation scheduler for reconciliationService.
+ * @returns {void} Completes without a return value.
+ */
 function startReconciliationScheduler() {
   if (_timer) return;
   _timer = setInterval(async () => { try { await reconcileAll(); } catch (err) { logger.error('Scheduler error', { error: err.message }); } }, INTERVAL_MS);
   if (_timer.unref) _timer.unref();
 }
 
+/**
+ * Manages reconciliation scheduler for reconciliationService.
+ * @returns {void} Completes without a return value.
+ */
 function stopReconciliationScheduler() {
   if (_timer) { clearInterval(_timer); _timer = null; }
 }
 
+/**
+ * Provides the generate reconciliation report operation in reconciliationService.
+ * @param {string} schoolId - Value used by generateReconciliationReport.
+ * @returns {Promise<*>} Result produced by generateReconciliationReport.
+ */
 async function generateReconciliationReport(schoolId) {
   try {
     const school = await School.findOne({ schoolId }).lean();
@@ -238,6 +251,10 @@ async function generateReconciliationReport(schoolId) {
   }
 }
 
+/**
+ * Provides the generate all reconciliation reports operation in reconciliationService.
+ * @returns {Promise<*>} Result produced by generateAllReconciliationReports.
+ */
 async function generateAllReconciliationReports() {
   const schools = await School.find({ isActive: true }).lean();
   const reports = [];

@@ -21,6 +21,14 @@ const ERROR_STATUS_MAP = {
   RATE_LIMITED: 429,
 };
 
+/**
+ * Provides the error response operation in errorHandler.
+ * @param {string} message - Value used by errorResponse.
+ * @param {string} code - Value used by errorResponse.
+ * @param {object} details - Value used by errorResponse.
+ * @param {*} category - Value used by errorResponse.
+ * @returns {*} Result produced by errorResponse.
+ */
 function errorResponse(message, code = 'INTERNAL_ERROR', details = null, category = null) {
   const resolvedCategory = category || getErrorCategory(code);
   const r = { success: false, error: { message, code, category: resolvedCategory } };
@@ -28,6 +36,13 @@ function errorResponse(message, code = 'INTERNAL_ERROR', details = null, categor
   return r;
 }
 
+/**
+ * Provides the success response operation in errorHandler.
+ * @param {object} data - Value used by successResponse.
+ * @param {string} message - Value used by successResponse.
+ * @param {*} meta - Value used by successResponse.
+ * @returns {*} Result produced by successResponse.
+ */
 function successResponse(data, message = null, meta = {}) {
   const r = { success: true, data };
   if (message) r.message = message;
@@ -35,6 +50,14 @@ function successResponse(data, message = null, meta = {}) {
   return r;
 }
 
+/**
+ * Provides the global error handler operation in errorHandler.
+ * @param {*} err - Value used by globalErrorHandler.
+ * @param {object} req - Value used by globalErrorHandler.
+ * @param {object} res - Value used by globalErrorHandler.
+ * @param {Function} next - Value used by globalErrorHandler.
+ * @returns {*} Result produced by globalErrorHandler.
+ */
 function globalErrorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
 
@@ -73,10 +96,21 @@ function globalErrorHandler(err, req, res, next) {
   res.status(statusCode).json(body);
 }
 
+/**
+ * Provides the not found handler operation in errorHandler.
+ * @param {object} req - Value used by notFoundHandler.
+ * @param {object} res - Value used by notFoundHandler.
+ * @returns {void} Completes without a return value.
+ */
 function notFoundHandler(req, res) {
   res.status(404).json(errorResponse(`Route ${req.method} ${req.path} not found`, 'ROUTE_NOT_FOUND'));
 }
 
+/**
+ * Provides the async handler operation in errorHandler.
+ * @param {Function} fn - Value used by asyncHandler.
+ * @returns {*} Result produced by asyncHandler.
+ */
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }

@@ -437,6 +437,10 @@ async function runReminders() {
   }
 }
 
+/**
+ * Manages reminder scheduler for reminderService.
+ * @returns {void} Completes without a return value.
+ */
 function startReminderScheduler() {
   if (_timer) return;
   
@@ -460,6 +464,10 @@ function startReminderScheduler() {
   _timer.unref(); // don't block process exit
 }
 
+/**
+ * Manages reminder scheduler for reminderService.
+ * @returns {void} Completes without a return value.
+ */
 function stopReminderScheduler() {
   if (_timer) {
     clearInterval(_timer);
@@ -472,6 +480,10 @@ function stopReminderScheduler() {
   }
 }
 
+/**
+ * Retrieves reminder status from reminderService.
+ * @returns {*} Result produced by getReminderStatus.
+ */
 function getReminderStatus() {
   return {
     schedulerRunning: _timer !== null,

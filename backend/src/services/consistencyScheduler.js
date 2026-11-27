@@ -29,6 +29,10 @@ async function runCheck() {
   }
 }
 
+/**
+ * Manages consistency scheduler for consistencyScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function startConsistencyScheduler() {
   if (_timer) return;
   markStarted(WORKER_NAMES.CONSISTENCY_SCHEDULER);
@@ -36,6 +40,10 @@ function startConsistencyScheduler() {
   _timer = setInterval(runCheck, INTERVAL_MS);
 }
 
+/**
+ * Manages consistency scheduler for consistencyScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function stopConsistencyScheduler() {
   if (_timer) {
     clearInterval(_timer);

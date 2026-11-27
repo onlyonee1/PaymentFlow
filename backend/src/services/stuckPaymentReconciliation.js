@@ -27,6 +27,11 @@ const PERMANENT_PROVIDER_FAILURES = new Set([
 let reconciliationQueue = null;
 let reconciliationWorker = null;
 
+/**
+ * Retrieves stuck payments from stuckPaymentReconciliation.
+ * @param {number} limit - Value used by findStuckPayments.
+ * @returns {Promise<*>} Result produced by findStuckPayments.
+ */
 async function findStuckPayments(limit = STUCK_PAYMENT_RECONCILIATION_MAX_BATCH) {
   return Payment.find({
     status: 'SUBMITTED',
@@ -122,6 +127,10 @@ async function reconcileOne(payment, run) {
   }
 }
 
+/**
+ * Provides the reconcile stuck payments operation in stuckPaymentReconciliation.
+ * @returns {Promise<*>} Result produced by reconcileStuckPayments.
+ */
 async function reconcileStuckPayments() {
   const run = await PaymentReconciliationRun.create({
     runId: randomUUID(),
@@ -204,6 +213,10 @@ async function reconcileStuckPayments() {
   }
 }
 
+/**
+ * Manages stuck payment reconciliation scheduler for stuckPaymentReconciliation.
+ * @returns {void} Completes without a return value.
+ */
 function startStuckPaymentReconciliationScheduler() {
   if (reconciliationWorker) return;
   const connection = getRedisClient();
@@ -236,6 +249,10 @@ function startStuckPaymentReconciliationScheduler() {
   });
 }
 
+/**
+ * Manages stuck payment reconciliation scheduler for stuckPaymentReconciliation.
+ * @returns {void} Completes without a return value.
+ */
 function stopStuckPaymentReconciliationScheduler() {
   const closing = [];
   if (reconciliationWorker) closing.push(reconciliationWorker.close());

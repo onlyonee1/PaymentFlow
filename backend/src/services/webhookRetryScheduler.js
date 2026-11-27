@@ -18,12 +18,20 @@ async function runOnce() {
   }
 }
 
+/**
+ * Manages webhook retry scheduler for webhookRetryScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function startWebhookRetryScheduler() {
   if (_timer) return;
   _timer = setInterval(runOnce, INTERVAL_MS);
   _timer.unref();
 }
 
+/**
+ * Manages webhook retry scheduler for webhookRetryScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function stopWebhookRetryScheduler() {
   if (_timer) { clearInterval(_timer); _timer = null; }
 }

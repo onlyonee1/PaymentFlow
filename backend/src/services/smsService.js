@@ -58,7 +58,7 @@ function isTwilioConfigured() {
  *
  * @param {string} to   - Recipient phone number in E.164 format (e.g. +447700900000)
  * @param {string} body - Message text (max 1600 chars; longer messages are split)
- * @returns {Promise<{sent: boolean, sid?: string}>}
+ * @returns {Promise<object>} Send result and provider message identifier when available.
  */
 async function sendSms(to, body) {
   const client = getTwilioClient();
@@ -92,7 +92,7 @@ async function sendSms(to, body) {
  *
  * @param {string} to   - Recipient WhatsApp number (E.164 or whatsapp:+...)
  * @param {string} body - Message text
- * @returns {Promise<{sent: boolean, sid?: string}>}
+ * @returns {Promise<object>} Send result and provider message identifier when available.
  */
 async function sendWhatsApp(to, body) {
   const client = getTwilioClient();

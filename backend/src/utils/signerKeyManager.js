@@ -284,7 +284,7 @@ function decryptSecretKey(encryptedBlob) {
  * the reference as soon as signing is complete.
  *
  * @param {string} encryptedBlob  Encrypted secret key from the DB.
- * @returns {import('@stellar/stellar-sdk').Keypair}
+ * @returns {object} Stellar SDK keypair.
  */
 function getKeypair(encryptedBlob) {
   const secretKey = decryptSecretKey(encryptedBlob);

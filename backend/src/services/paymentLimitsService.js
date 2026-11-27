@@ -111,7 +111,7 @@ function invalidateCache(schoolId) {
  * a bad admin write cannot put the system in a state a fresh boot would refuse.
  *
  * @param {object} limits
- * @returns {{valid: boolean, error?: string}}
+ * @returns {object} Validation result with an optional error message.
  */
 function validateLimitPair(limits) {
   if (!limits || typeof limits !== 'object') {
@@ -132,7 +132,7 @@ function validateLimitPair(limits) {
  * Validate a full limits document ({ default, assets }) before storing it.
  *
  * @param {object} doc
- * @returns {{valid: boolean, error?: string}}
+ * @returns {object} Validation result with an optional error message.
  */
 function validateLimitsDocument(doc) {
   if (!doc || typeof doc !== 'object') {
@@ -246,7 +246,7 @@ async function getStoredLimits(schoolId) {
 /**
  * Replace the global limits document.
  *
- * @param {object} doc - { default?: {min,max}, assets?: {CODE: {min,max}} }
+ * @param {object} doc - Limits document with optional default and per-asset values.
  * @returns {Promise<object>} The stored document
  */
 async function setSystemLimits(doc) {
@@ -309,7 +309,7 @@ async function clearSchoolLimits(schoolId) {
  *
  * @param {number} amount
  * @param {{min: number, max: number}} limits
- * @returns {{valid: boolean, error?: string, code?: string}}
+ * @returns {object} Validation result with an optional error code and message.
  */
 function compareAgainstLimits(amount, limits) {
   const d = new Decimal(typeof amount === 'number' && isFinite(amount) ? amount : NaN);

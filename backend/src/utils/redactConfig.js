@@ -54,6 +54,11 @@ const PII_FIELDS = new Set([
 
 const SENSITIVE_LOG_KEY = /(password|secret|token|authorization|cookie|api.?key|private.?key|access.?key|refresh.?token|mfa|backup.?code|student.?id|tx.?hash|sender.?address|memo)/i;
 
+/**
+ * Provides the redact log value operation in redactConfig.
+ * @param {*} value - Value used by redactLogValue.
+ * @returns {*} Result produced by redactLogValue.
+ */
 function redactLogValue(value) {
   if (Array.isArray(value)) return value.map(redactLogValue);
   if (!value || typeof value !== 'object') return value;

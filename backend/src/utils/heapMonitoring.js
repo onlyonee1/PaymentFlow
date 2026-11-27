@@ -2,6 +2,10 @@
 
 const logger = require('./logger');
 
+/**
+ * Manages heap monitoring for heapMonitoring.
+ * @returns {void} Completes without a return value.
+ */
 function startHeapMonitoring() {
   const { heap_size_limit: max } = require('v8').getHeapStatistics();
   const threshold = max * 0.8;

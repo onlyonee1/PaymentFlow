@@ -31,6 +31,11 @@ function getClient() {
 module.exports = {
   name: 'ses',
 
+  /**
+ * Dispatches the supplied value through sesProvider.
+ * @param {string} message - Value used by send.
+ * @returns {Promise<*>} Result produced by send.
+ */
   async send(message) {
     const client = getClient();
     const command = new _SendEmailCommand({
@@ -48,6 +53,10 @@ module.exports = {
     return { messageId: res.MessageId };
   },
 
+  /**
+ * Validates the supplied value in sesProvider.
+ * @returns {Promise<*>} Result produced by verify.
+ */
   async verify() {
     try {
       getClient();
@@ -57,6 +66,10 @@ module.exports = {
     }
   },
 
+  /**
+ * Provides the reset operation in sesProvider.
+ * @returns {void} Completes without a return value.
+ */
   _reset() {
     _client = null;
     _SendEmailCommand = null;

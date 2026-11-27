@@ -494,6 +494,7 @@ The ten lowest-covered modules under `backend/src/services/` are tracked in foll
 3. **Update documentation**
    - Update `docs/api-spec.md` if you changed API endpoints
    - Update `README.md` if you added new features or changed setup
+   - When synthetic-data screenshots are added or a change affects a school finance screen, update the corresponding image and annotation in `docs/user-guide/assets/`
    - Add inline code comments for complex logic
 
 ### Submitting Your PR

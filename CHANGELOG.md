@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Centralized provider timeout & retry policy registry (#290)**: Extended `providerPolicyRegistry.js` with per-provider circuit-breaker configs and environment-variable policy overrides (`PROVIDER_<NAME>_TIMEOUT_MS`, `PROVIDER_<NAME>_MAX_ATTEMPTS`). Introduced `ProviderHttpClient` base class for external integrations and startup policy logging.
 - **Frontend analytics event schema (#270)**: Defined strict TypeScript union types in `analyticsEvents.d.ts`, documented event definitions and privacy rules in `docs/analytics-events.md`, and stamped `schemaVersion: "1.0.0"` onto all outgoing analytics payloads.
 
+### Documentation
+
+- **School finance administrator guide (#642)**: Added a text-first guide to current student, fee, payment, dispute, and reporting workflows. Screenshots and stakeholder approval remain pending because the existing frontend does not build and no local API/data service is available.
+- **Environment configuration reference (#643)**: Added a typed `.env.example` guide, completed missing runtime variables, corrected sensitivity/default classifications, and added CI-tested completeness checks.
+- **Backup and recovery runbook (#644)**: Documented the current backup schedule, restore verification, retention, recovery targets, and alert escalation; linked existing backup guidance to the canonical runbook.
+- **Backend JSDoc generation (#645)**: Added exported-function JSDoc coverage, parser support for BigInt literals, and a CI documentation-build check.
+
 ### Dependencies
 
 - **Production dependencies pinned (#297)**: All 28 direct backend production dependencies (`@stellar/stellar-sdk`, `express`, `mongoose`, `ioredis`, `bullmq`, `axios`, etc.) are now pinned to exact semantic versions without loose ranges to ensure deterministic, reproducible deployments.

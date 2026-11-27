@@ -129,6 +129,12 @@ function ship(entry) {
 }
 
 const logger = {
+  /**
+ * Provides the error operation in logger.
+ * @param {string} message - Value used by error.
+ * @param {*} args - Value used by error.
+ * @returns {void} Completes without a return value.
+ */
   error(message, ...args) {
     if (shouldLog('ERROR')) {
       const entry = formatMessage('ERROR', message, ...args);
@@ -138,6 +144,12 @@ const logger = {
     }
   },
 
+  /**
+ * Provides the warn operation in logger.
+ * @param {string} message - Value used by warn.
+ * @param {*} args - Value used by warn.
+ * @returns {void} Completes without a return value.
+ */
   warn(message, ...args) {
     if (shouldLog('WARN')) {
       const entry = formatMessage('WARN', message, ...args);
@@ -147,6 +159,12 @@ const logger = {
     }
   },
 
+  /**
+ * Provides the info operation in logger.
+ * @param {string} message - Value used by info.
+ * @param {*} args - Value used by info.
+ * @returns {void} Completes without a return value.
+ */
   info(message, ...args) {
     if (shouldLog('INFO')) {
       const entry = formatMessage('INFO', message, ...args);
@@ -156,6 +174,12 @@ const logger = {
     }
   },
 
+  /**
+ * Provides the debug operation in logger.
+ * @param {string} message - Value used by debug.
+ * @param {*} args - Value used by debug.
+ * @returns {void} Completes without a return value.
+ */
   debug(message, ...args) {
     if (shouldLog('DEBUG')) {
       const entry = formatMessage('DEBUG', message, ...args);

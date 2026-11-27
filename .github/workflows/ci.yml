@@ -147,6 +147,8 @@ jobs:
         run: cd backend && npm ci
       - name: Run ESLint (backend)
         run: cd backend && npx eslint src/ --max-warnings=0
+      - name: Build backend JSDoc
+        run: cd backend && npm run docs:jsdoc
 
   lint-frontend:
     name: Lint frontend

@@ -98,6 +98,13 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
 // Protects global super-admin endpoints. Accepts JWTs with role:'admin' (env
 // super-admin) or roles including 'super_admin' (DB super-admin).
 
+/**
+ * Provides the require admin auth operation in auth.
+ * @param {object} req - Value used by requireAdminAuth.
+ * @param {object} res - Value used by requireAdminAuth.
+ * @param {Function} next - Value used by requireAdminAuth.
+ * @returns {Promise<*>} Result produced by requireAdminAuth.
+ */
 async function requireAdminAuth(req, res, next) {
   const ip = req.ip || req.connection?.remoteAddress || 'unknown';
   const blockKey = ipBlockKey(ip);
@@ -181,6 +188,11 @@ async function requireAdminAuth(req, res, next) {
 //  • The env super-admin (role:'admin') is always granted access so that the
 //    break-glass account can reach every tenant without needing a scoped token.
 
+/**
+ * Provides the require school auth operation in auth.
+ * @param {*} allowedRoles - Value used by requireSchoolAuth.
+ * @returns {*} Result produced by requireSchoolAuth.
+ */
 function requireSchoolAuth(allowedRoles = []) {
   return async function schoolAuthMiddleware(req, res, next) {
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';

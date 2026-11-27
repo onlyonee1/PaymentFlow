@@ -89,7 +89,7 @@ function isPrivateIPv6(ip) {
  * Check a single resolved IP (v4 or v6) against the deny list.
  *
  * @param {string} ip
- * @returns {{ blocked: boolean, reason?: string }}
+ * @returns {object} Result indicating whether the URL is blocked and why.
  */
 function validateResolvedIp(ip) {
   if (net.isIPv4(ip)) {
@@ -119,7 +119,7 @@ function validateResolvedIp(ip) {
  *      Resolved IPs are returned so the caller can pin them for send-time check.
  *
  * @param {string} url
- * @returns {Promise<{ valid: boolean, reason?: string, resolvedIps?: string[] }>}
+ * @returns {Promise<object>} Validation result with the resolved addresses when available.
  */
 async function validateWebhookUrl(url) {
   let parsed;

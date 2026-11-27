@@ -36,7 +36,9 @@ All other backend variables are optional at startup unless a feature explicitly 
 | `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH` | unset; hash preferred | secret | Application operator | backend, Docker |
 | `REQUIRE_MFA` | unset / false | internal | Security | backend |
 | `SCHOOL_ADMIN_PASSWORD`, `SCHOOL_ADMIN_PASSWORD_HASH` | unset | secret | Application operator | backend |
-| `SIGNER_KEY_SOURCE`, `SIGNER_MASTER_KEY`, `SIGNER_MASTER_KEY_OLD`, `SIGNER_MASTER_KEY_HTTP_URL`, `SIGNER_MASTER_KEY_HTTP_TOKEN`, `SIGNER_MASTER_KEY_SECRET_ID` | local source / unset | secret | Security / platform | backend |
+| `SIGNER_MASTER_KEY`, `SIGNER_MASTER_KEY_OLD`, `SIGNER_MASTER_KEY_HTTP_TOKEN` | unset | secret | Security / platform | backend |
+| `SIGNER_KEY_SOURCE` | local source | internal | Security / platform | backend |
+| `SIGNER_MASTER_KEY_HTTP_URL`, `SIGNER_MASTER_KEY_SECRET_ID` | unset; required only for the selected signer source | internal | Security / platform | backend |
 | `STUDENT_PII_ENCRYPTION_KEY` | unset; generated when PII encryption is enabled | secret | Security / platform | backend |
 | `AUDIT_HMAC_KEY`, `RECEIPT_SIGNATURE_SECRET` | fallback or unset; generated for managed deployments | secret | Security | backend |
 | `LOG_LEVEL`, `LOG_MAX_SIZE`, `LOG_MAX_FILES`, `LOG_REDACT_FIELDS`, `LOG_REQUEST_HEADERS` | info, 100m, 14d, application redaction defaults, disabled | internal | Operations | backend |

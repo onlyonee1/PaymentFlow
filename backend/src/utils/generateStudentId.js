@@ -3,6 +3,12 @@
 const Student = require('../models/studentModel');
 const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
+/**
+ * Provides the generate student id operation in generateStudentId.
+ * @param {number} maxAttempts - Value used by generateStudentId.
+ * @param {string} schoolId - Value used by generateStudentId.
+ * @returns {Promise<*>} Result produced by generateStudentId.
+ */
 async function generateStudentId(maxAttempts = 5, schoolId = null) {
   for (let i = 0; i < maxAttempts; i++) {
     const suffix = Array.from({ length: 6 }, () => CHARS[Math.floor(Math.random() * 36)]).join('');

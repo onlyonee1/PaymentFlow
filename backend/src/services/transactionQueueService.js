@@ -149,6 +149,10 @@ async function jobProcessor(job) {
 
 let worker = null;
 
+/**
+ * Manages worker for transactionQueueService.
+ * @returns {Promise<*>} Result produced by startWorker.
+ */
 async function startWorker() {
   if (worker) return worker;
   worker = startTransactionWorker(jobProcessor);
@@ -168,6 +172,10 @@ async function startWorker() {
   return worker;
 }
 
+/**
+ * Manages worker for transactionQueueService.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function stopWorker() {
   if (worker) {
     await worker.close();

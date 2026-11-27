@@ -28,6 +28,11 @@ function getTransporter() {
 module.exports = {
   name: 'smtp',
 
+  /**
+ * Dispatches the supplied value through smtpProvider.
+ * @param {string} message - Value used by send.
+ * @returns {Promise<*>} Result produced by send.
+ */
   async send(message) {
     const info = await getTransporter().sendMail({
       from: message.from || config.SMTP_FROM,
@@ -39,6 +44,10 @@ module.exports = {
     return { messageId: info.messageId };
   },
 
+  /**
+ * Validates the supplied value in smtpProvider.
+ * @returns {Promise<*>} Result produced by verify.
+ */
   async verify() {
     try {
       await getTransporter().verify();
@@ -50,6 +59,10 @@ module.exports = {
   },
 
   // Exposed for tests to reset the cached transporter.
+  /**
+ * Provides the reset operation in smtpProvider.
+ * @returns {void} Completes without a return value.
+ */
   _reset() {
     _transporter = null;
   },

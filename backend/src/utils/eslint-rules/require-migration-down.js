@@ -17,7 +17,7 @@
  *   module.exports = { version: VERSION, up };
  */
 
-/** @type {import('eslint').Rule.RuleModule} */
+/** @type {object} */
 const requireMigrationDown = {
   meta: {
     type: 'problem',
@@ -35,6 +35,11 @@ const requireMigrationDown = {
     schema: [],
   },
 
+  /**
+ * Creates or prepares the supplied value in require-migration-down.
+ * @param {object} context - Value used by create.
+ * @returns {*} Result produced by create.
+ */
   create(context) {
     // Only enforce on migration files.
     const filename = context.getFilename();

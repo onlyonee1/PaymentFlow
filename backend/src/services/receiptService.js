@@ -5,6 +5,11 @@ const Receipt = require('../models/receiptModel');
 const Student = require('../models/studentModel');
 const School = require('../models/schoolModel');
 
+/**
+ * Provides the generate receipt signature operation in receiptService.
+ * @param {*} receipt - Value used by generateReceiptSignature.
+ * @returns {*} Result produced by generateReceiptSignature.
+ */
 function generateReceiptSignature(receipt) {
   const payload = {
     txHash: receipt.txHash,
@@ -18,6 +23,11 @@ function generateReceiptSignature(receipt) {
   return crypto.createHmac('sha256', secret).update(JSON.stringify(payload)).digest('hex');
 }
 
+/**
+ * Validates receipt signature in receiptService.
+ * @param {*} receipt - Value used by verifyReceiptSignature.
+ * @returns {*} Result produced by verifyReceiptSignature.
+ */
 function verifyReceiptSignature(receipt) {
   if (!receipt.signature) return false;
   const expectedSignature = generateReceiptSignature(receipt);

@@ -57,7 +57,7 @@ async function getDataVersion(schoolId) {
 /**
  * Aggregate confirmed payments grouped by date (YYYY-MM-DD), scoped to a school.
  *
- * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
+ * @param {object} options - School, optional date range, and optional timezone.
  */
 const UNCONFIRMED = '__unconfirmed';
 
@@ -136,7 +136,7 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
  * Build a full summary report for one school.
  * Includes all students, even those with no payment history.
  *
- * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
+ * @param {object} options - School, optional date range, and optional timezone.
  */
 async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', groupBy } = {}) {
   const rows = await aggregateByDate({ schoolId, startDate, endDate, timezone, groupBy });
@@ -318,7 +318,7 @@ function reportToCsv(report) {
  * Aggregate dashboard metrics for a school.
  * #881 — Reads all-time and today totals from pre-aggregated rollups (O(1));
  * falls back to raw aggregation if no rollup exists yet.
- * @param {{ schoolId: string, timezone?: string }} options
+ * @param {object} options - School and optional timezone.
  */
 async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
   const { DailyMetrics, MonthlyMetrics } = require('../models/metricsModel');
@@ -451,7 +451,7 @@ const ACCOUNTING_HEADERS_V1 = [
  * Build the accounting CSV for a school, pulling transaction-level rows
  * directly from the payments collection so every payment appears as one line.
  *
- * @param {{ schoolId: string, startDate?: string, endDate?: string }} options
+ * @param {object} options - School and optional date range.
  * @returns {{ csv: string, schemaVersion: number }}
  */
 // Build the $match / $lookup / $sort pipeline shared by the buffered and
@@ -511,6 +511,11 @@ function formatAccountingRow(r, exportedAt) {
   ].map(v => csvEscape(v)).join(',');
 }
 
+/**
+ * Provides the generate accounting csv operation in reportService.
+ * @param {object} options - Value used by generateAccountingCsv.
+ * @returns {Promise<*>} Result produced by generateAccountingCsv.
+ */
 async function generateAccountingCsv({ schoolId, startDate, endDate, timezone = 'UTC' } = {}) {
   // Enrich with student class via a $lookup
   const rows = await Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate, timezone }));
@@ -533,7 +538,7 @@ async function generateAccountingCsv({ schoolId, startDate, endDate, timezone = 
  * memory. Writes the header row first, then one line per payment, then ends
  * the response.
  *
- * @param {{ schoolId: string, startDate?: string, endDate?: string, res: object }} options
+ * @param {object} options - School, optional date range, and HTTP response.
  */
 async function generateAccountingCsvStream({ schoolId, startDate, endDate, timezone = 'UTC', res } = {}) {
   const cursor = Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate, timezone })).cursor();

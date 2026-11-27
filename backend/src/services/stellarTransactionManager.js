@@ -97,9 +97,9 @@ async function getRecommendedFee(multiplier = DEFAULT_FEE_MULTIPLIER) {
 class StellarTransactionManager {
   /**
    * @param {object} opts
-   * @param {import('@stellar/stellar-sdk').Keypair} opts.signingKeypair
+   * @param {object} opts.signingKeypair Stellar SDK transaction signing keypair.
    *   Keypair that will sign submitted transactions (the source account).
-   * @param {import('@stellar/stellar-sdk').Keypair} [opts.feeSourceKeypair]
+   * @param {object} [opts.feeSourceKeypair] Optional fee-source signing keypair.
    *   Optional separate keypair used as the fee-bump source.
    *   If omitted, signingKeypair is reused as the fee source.
    * @param {number} [opts.timeoutSeconds]   Override default tx timeout.
@@ -124,7 +124,7 @@ class StellarTransactionManager {
    * Always fetches fresh to avoid using a cached / stale sequence.
    *
    * @param {string} publicKey
-   * @returns {Promise<import('@stellar/stellar-sdk').AccountResponse>}
+   * @returns {Promise<object>} Loaded Stellar account response.
    */
   async _loadAccount(publicKey) {
     return withStellarRetry(() => server.loadAccount(publicKey), {

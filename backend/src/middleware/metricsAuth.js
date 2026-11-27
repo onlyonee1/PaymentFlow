@@ -89,6 +89,13 @@ function validateMetricsTokenOnStartup({ isProduction } = {}) {
   }
 }
 
+/**
+ * Provides the metrics auth operation in metricsAuth.
+ * @param {object} req - Value used by metricsAuth.
+ * @param {object} res - Value used by metricsAuth.
+ * @param {Function} next - Value used by metricsAuth.
+ * @returns {*} Result produced by metricsAuth.
+ */
 function metricsAuth(req, res, next) {
   // Accept METRICS_BEARER_TOKEN (preferred) or legacy METRICS_TOKEN.
   const token = process.env.METRICS_BEARER_TOKEN || process.env.METRICS_TOKEN;

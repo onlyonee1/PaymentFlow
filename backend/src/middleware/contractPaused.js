@@ -21,6 +21,13 @@
 const { isContractPaused } = require('../services/contractPauseService');
 const logger = require('../utils/logger').child('ContractPaused');
 
+/**
+ * Provides the contract paused operation in contractPaused.
+ * @param {object} req - Value used by contractPaused.
+ * @param {object} res - Value used by contractPaused.
+ * @param {Function} next - Value used by contractPaused.
+ * @returns {Promise<*>} Result produced by contractPaused.
+ */
 async function contractPaused(req, res, next) {
   try {
     const paused = await isContractPaused();

@@ -341,6 +341,12 @@ function getEffectiveBatchSize(queueDepth) {
   return Math.max(MIN_TRANSACTIONS_PER_POLL, Math.min(MAX_TRANSACTIONS_PER_POLL, scaled));
 }
 
+/**
+ * Provides the poll school transactions operation in transactionPollingService.
+ * @param {object} school - Value used by pollSchoolTransactions.
+ * @param {*} budget - Value used by pollSchoolTransactions.
+ * @returns {Promise<*>} Result produced by pollSchoolTransactions.
+ */
 async function pollSchoolTransactions(school, budget = null) {
   const backpressure = getQueueBackpressureState();
   if (backpressure.queueDepth >= backpressure.highWater) {
@@ -816,12 +822,33 @@ module.exports = {
   pollSchoolTransactions,
   processTransaction,
   // Exposed for testing
+  /**
+ * Provides the get backoff state operation in transactionPollingService.
+ * @returns {*} Result produced by _getBackoffState.
+ */
   _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
+  /**
+ * Retrieves horizon unreachable since from transactionPollingService.
+ * @returns {*} Result produced by getHorizonUnreachableSince.
+ */
   getHorizonUnreachableSince: () => horizonUnreachableSince,
+  /**
+ * Provides the get budget stats operation in transactionPollingService.
+ * @returns {*} Result produced by _getBudgetStats.
+ */
   _getBudgetStats: () => pollBudget.getStats(),
+  /**
+ * Provides the set poll budget operation in transactionPollingService.
+ * @param {*} budget - Value used by _setPollBudget.
+ * @returns {void} Completes without a return value.
+ */
   _setPollBudget: (budget) => { pollBudget = budget; },
   _runWithConcurrency: runWithConcurrency,
   _gatherSchoolSignals: gatherSchoolSignals,
+  /**
+ * Provides the reset backoff state operation in transactionPollingService.
+ * @returns {void} Completes without a return value.
+ */
   _resetBackoffState: () => {
     consecutiveErrors = 0;
     currentIntervalMs = SYNC_INTERVAL_MS;

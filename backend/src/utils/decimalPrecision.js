@@ -210,6 +210,12 @@ function fromStroops(stroops) {
   return toDecimalString(d, CURRENCY_RULES.XLM.maxDecimalPlaces);
 }
 
+/**
+ * Provides the to minor units operation in decimalPrecision.
+ * @param {*} value - Value used by toMinorUnits.
+ * @param {*} decimalPlaces - Value used by toMinorUnits.
+ * @returns {*} Result produced by toMinorUnits.
+ */
 function toMinorUnits(value, decimalPlaces = DEFAULT_MAX_DECIMAL_PLACES) {
   const amount = new Decimal(String(value));
   const minorUnits = amount.times(new Decimal(10).pow(decimalPlaces));
@@ -219,10 +225,22 @@ function toMinorUnits(value, decimalPlaces = DEFAULT_MAX_DECIMAL_PLACES) {
   return minorUnits.toFixed(0);
 }
 
+/**
+ * Provides the from minor units operation in decimalPrecision.
+ * @param {*} value - Value used by fromMinorUnits.
+ * @param {*} decimalPlaces - Value used by fromMinorUnits.
+ * @returns {*} Result produced by fromMinorUnits.
+ */
 function fromMinorUnits(value, decimalPlaces = DEFAULT_MAX_DECIMAL_PLACES) {
   return new Decimal(String(value)).div(new Decimal(10).pow(decimalPlaces)).toFixed(decimalPlaces);
 }
 
+/**
+ * Provides the to fixed decimal string operation in decimalPrecision.
+ * @param {*} value - Value used by toFixedDecimalString.
+ * @param {*} decimalPlaces - Value used by toFixedDecimalString.
+ * @returns {*} Result produced by toFixedDecimalString.
+ */
 function toFixedDecimalString(value, decimalPlaces = DEFAULT_MAX_DECIMAL_PLACES) {
   return new Decimal(String(value)).toFixed(decimalPlaces);
 }

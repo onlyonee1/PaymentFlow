@@ -244,7 +244,7 @@ function createContractEvent(topic, {
  * @param {object} event
  * @param {object} projection Current state projection
  * @param {Set<string>} processedEventIds Set of already processed event IDs
- * @returns {{ processed: boolean, reason?: string, projection: object }}
+ * @returns {object} Processing result with a status reason and event projection.
  */
 function processEventIdempotently(event, projection, processedEventIds) {
   validateContractEvent(event);
@@ -343,7 +343,7 @@ function rebuildProjectionFromEvents(events, initialProjection = null) {
  *
  * @param {object} event
  * @param {string} [targetVersion='1.0.0']
- * @returns {{ compatible: boolean, reason?: string }}
+ * @returns {object} Compatibility result with an optional reason when rejected.
  */
 function validateSchemaCompatibility(event, targetVersion = CURRENT_SCHEMA_VERSION) {
   try {

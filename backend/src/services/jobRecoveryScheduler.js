@@ -50,6 +50,10 @@ async function runRecovery() {
   }
 }
 
+/**
+ * Manages job recovery scheduler for jobRecoveryScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function startJobRecoveryScheduler() {
   if (_timer) return;
   markStarted(WORKER_NAMES.JOB_RECOVERY_SCHEDULER);
@@ -57,6 +61,10 @@ function startJobRecoveryScheduler() {
   _timer = setInterval(runRecovery, INTERVAL_MS);
 }
 
+/**
+ * Manages job recovery scheduler for jobRecoveryScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function stopJobRecoveryScheduler() {
   if (_timer) {
     clearInterval(_timer);

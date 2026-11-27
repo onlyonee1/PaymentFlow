@@ -136,6 +136,11 @@ function resolveHorizonUrls() {
   ];
 }
 
+/**
+ * Validates transient failure in horizonFailoverClient.
+ * @param {*} err - Value used by isTransientFailure.
+ * @returns {*} Result produced by isTransientFailure.
+ */
 function isTransientFailure(err) {
   const status =
     err.response?.status ||
@@ -412,11 +417,20 @@ class HorizonFailoverClient {
 
 let _instance = null;
 
+/**
+ * Retrieves instance from horizonFailoverClient.
+ * @param {object} opts - Value used by getInstance.
+ * @returns {*} Result produced by getInstance.
+ */
 function getInstance(opts) {
   if (!_instance) _instance = new HorizonFailoverClient(opts);
   return _instance;
 }
 
+/**
+ * Updates instance in horizonFailoverClient.
+ * @returns {void} Completes without a return value.
+ */
 function resetInstance() {
   _instance = null;
 }

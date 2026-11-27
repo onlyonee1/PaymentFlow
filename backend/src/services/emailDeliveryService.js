@@ -4,6 +4,11 @@ const EmailDelivery = require('../models/emailDeliveryModel');
 const Student = require('../models/studentModel');
 const logger = require('../utils/logger').child('EmailDeliveryService');
 
+/**
+ * Creates or prepares email delivery in emailDeliveryService.
+ * @param {object} record - Value used by createEmailDelivery.
+ * @returns {Promise<*>} Result produced by createEmailDelivery.
+ */
 async function createEmailDelivery(record) {
   const emailDelivery = await EmailDelivery.create(record);
   if (record.schoolId && record.studentId) {
@@ -12,6 +17,13 @@ async function createEmailDelivery(record) {
   return emailDelivery;
 }
 
+/**
+ * Updates email delivery status in emailDeliveryService.
+ * @param {*} selector - Value used by updateEmailDeliveryStatus.
+ * @param {string} status - Value used by updateEmailDeliveryStatus.
+ * @param {*} updateFields - Value used by updateEmailDeliveryStatus.
+ * @returns {Promise<*>} Result produced by updateEmailDeliveryStatus.
+ */
 async function updateEmailDeliveryStatus(selector, status, updateFields = {}) {
   const filter = selector.recordId
     ? { _id: selector.recordId }
@@ -54,6 +66,11 @@ async function updateStudentDeliveryStatus(schoolId, studentId, status, at) {
   );
 }
 
+/**
+ * Processes email provider event in emailDeliveryService.
+ * @param {object} event - Value used by handleEmailProviderEvent.
+ * @returns {Promise<*>} Result produced by handleEmailProviderEvent.
+ */
 async function handleEmailProviderEvent(event) {
   const {
     provider = 'generic',

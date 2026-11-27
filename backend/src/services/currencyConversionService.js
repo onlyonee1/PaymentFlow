@@ -141,6 +141,10 @@ function _buildAllowlist() {
 // after changing the env var.
 let ALLOWED_FIAT_CURRENCIES = _buildAllowlist();
 
+/**
+ * Provides the reset allowlist operation in currencyConversionService.
+ * @returns {void} Completes without a return value.
+ */
 function _resetAllowlist() {
   ALLOWED_FIAT_CURRENCIES = _buildAllowlist();
 }
@@ -574,6 +578,11 @@ async function _fetchRates(currency) {
 
 // ── getRates (cache + dedup + stale-while-revalidate) ────────────────────────
 
+/**
+ * Retrieves rates from currencyConversionService.
+ * @param {string} currency - Value used by getRates.
+ * @returns {Promise<*>} Result produced by getRates.
+ */
 async function getRates(currency) {
   const key = currency.toUpperCase();
 
@@ -642,6 +651,13 @@ async function getRates(currency) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Provides the convert to local currency operation in currencyConversionService.
+ * @param {number} amount - Value used by convertToLocalCurrency.
+ * @param {string} assetCode - Value used by convertToLocalCurrency.
+ * @param {string} targetCurrency - Value used by convertToLocalCurrency.
+ * @returns {Promise<*>} Result produced by convertToLocalCurrency.
+ */
 async function convertToLocalCurrency(amount, assetCode = "XLM", targetCurrency = "USD") {
   const currency  = targetCurrency.toUpperCase();
 
@@ -675,6 +691,12 @@ async function convertToLocalCurrency(amount, assetCode = "XLM", targetCurrency 
   };
 }
 
+/**
+ * Provides the enrich payment with conversion operation in currencyConversionService.
+ * @param {object} payment - Value used by enrichPaymentWithConversion.
+ * @param {string} targetCurrency - Value used by enrichPaymentWithConversion.
+ * @returns {Promise<*>} Result produced by enrichPaymentWithConversion.
+ */
 async function enrichPaymentWithConversion(payment, targetCurrency = "USD") {
   const assetCode  = payment.assetCode || "XLM";
   const conversion = await convertToLocalCurrency(payment.amount, assetCode, targetCurrency);
@@ -697,6 +719,13 @@ async function enrichPaymentWithConversion(payment, targetCurrency = "USD") {
   };
 }
 
+/**
+ * Provides the format with local equivalent operation in currencyConversionService.
+ * @param {number} amount - Value used by formatWithLocalEquivalent.
+ * @param {string} assetCode - Value used by formatWithLocalEquivalent.
+ * @param {string} targetCurrency - Value used by formatWithLocalEquivalent.
+ * @returns {Promise<*>} Result produced by formatWithLocalEquivalent.
+ */
 async function formatWithLocalEquivalent(amount, assetCode = "XLM", targetCurrency = "USD") {
   const base = `${parseFloat(amount).toFixed(7)} ${assetCode}`;
   const conv = await convertToLocalCurrency(amount, assetCode, targetCurrency);
@@ -705,6 +734,10 @@ async function formatWithLocalEquivalent(amount, assetCode = "XLM", targetCurren
   return `${base} (≈ ${conv.localAmount.toFixed(dp)} ${conv.currency})`;
 }
 
+/**
+ * Retrieves cached rates from currencyConversionService.
+ * @returns {*} Result produced by getCachedRates.
+ */
 function getCachedRates() {
   const result = {};
   for (const [k, v] of _localCache) {
@@ -713,15 +746,42 @@ function getCachedRates() {
   return result;
 }
 
+/**
+ * Updates cache in currencyConversionService.
+ * @returns {void} Completes without a return value.
+ */
 function resetCache() {
   _localCache.clear();
   _inFlight.clear();
 }
 
 // Back-compat aliases
+/**
+ * Retrieves xlm rate from currencyConversionService.
+ * @param {*} c - Value used by fetchXlmRate.
+ * @returns {*} Result produced by fetchXlmRate.
+ */
 const fetchXlmRate       = (c = "usd") => getRates(c.toUpperCase()).then((e) => e?.rates?.XLM ?? null);
+/**
+ * Provides the convert xlm to local operation in currencyConversionService.
+ * @param {*} a - Value used by convertXlmToLocal.
+ * @param {*} c - Value used by convertXlmToLocal.
+ * @returns {*} Result produced by convertXlmToLocal.
+ */
 const convertXlmToLocal  = (a, c = "USD") => convertToLocalCurrency(a, "XLM", c);
+/**
+ * Provides the format with conversion operation in currencyConversionService.
+ * @param {*} a - Value used by formatWithConversion.
+ * @param {*} c - Value used by formatWithConversion.
+ * @returns {*} Result produced by formatWithConversion.
+ */
 const formatWithConversion = (a, c = "USD") => formatWithLocalEquivalent(a, "XLM", c);
+/**
+ * Provides the attach conversion operation in currencyConversionService.
+ * @param {*} o - Value used by attachConversion.
+ * @param {*} c - Value used by attachConversion.
+ * @returns {*} Result produced by attachConversion.
+ */
 const attachConversion   = (o, c = "USD") => enrichPaymentWithConversion(o, c);
 
 /**
@@ -763,6 +823,12 @@ async function captureFiatSnapshot(amount, assetCode = "XLM", currency = "USD") 
 // Expected shape (documented contract):
 //   data.stellar[lc_currency]     — positive finite number  (XLM rate)
 //   data['usd-coin'][lc_currency] — positive finite number  (USDC rate)
+/**
+ * Validates coin gecko response shape in currencyConversionService.
+ * @param {object} data - Value used by checkCoinGeckoResponseShape.
+ * @param {string} currency - Value used by checkCoinGeckoResponseShape.
+ * @returns {*} Result produced by checkCoinGeckoResponseShape.
+ */
 function checkCoinGeckoResponseShape(data, currency) {
   const lc = (currency || "").toLowerCase();
 
@@ -798,7 +864,7 @@ function checkCoinGeckoResponseShape(data, currency) {
  * disrupting the main application flow.
  *
  * @param {string} [currency="usd"]
- * @returns {Promise<{ ok: boolean, reason?: string }>}
+ * @returns {Promise<object>} Result indicating whether conversion succeeded.
  */
 async function runCoinGeckoCanary(currency = "usd") {
   try {
@@ -843,10 +909,23 @@ module.exports = {
   runCoinGeckoCanary,
   CURRENCY_DECIMALS,
   // Testing internals
+  /**
+ * Provides the fetch rates from coin gecko operation in currencyConversionService.
+ * @param {*} c - Value used by _fetchRatesFromCoinGecko.
+ * @returns {*} Result produced by _fetchRatesFromCoinGecko.
+ */
   _fetchRatesFromCoinGecko: (c) => _fetchFromCoinGecko(c),
   _getRates: getRates,
   _getCache: getCachedRates,
   _resetAllowlist,
+  /**
+ * Provides the get allowlist operation in currencyConversionService.
+ * @returns {*} Result produced by _getAllowlist.
+ */
   _getAllowlist: () => ALLOWED_FIAT_CURRENCIES,
+  /**
+ * Provides the get local cache size operation in currencyConversionService.
+ * @returns {*} Result produced by _getLocalCacheSize.
+ */
   _getLocalCacheSize: () => _localCache.size,
 };

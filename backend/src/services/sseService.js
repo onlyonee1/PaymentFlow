@@ -230,6 +230,12 @@ function addClient(schoolId, res) {
   return true;
 }
 
+/**
+ * Updates client in sseService.
+ * @param {string} schoolId - Value used by removeClient.
+ * @param {object} res - Value used by removeClient.
+ * @returns {void} Completes without a return value.
+ */
 function removeClient(schoolId, res) {
   if (res._sseHeartbeat) {
     clearInterval(res._sseHeartbeat);

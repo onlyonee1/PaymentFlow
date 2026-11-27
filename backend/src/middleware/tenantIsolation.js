@@ -35,7 +35,7 @@
  *     studentController.list
  *   );
  *
- * @type {import('express').RequestHandler}
+ * @type {Function}
  */
 function assertTenantScope(req, res, next) {
   const user = req.user;

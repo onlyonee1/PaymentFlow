@@ -18,6 +18,10 @@ const SENSITIVE_AUDIT_KEY = /secret|password|token|private.?key|authorization/i;
 // In-process failure counter — reset on restart
 let _auditFailureCount = 0;
 
+/**
+ * Retrieves audit health from auditService.
+ * @returns {*} Result produced by getAuditHealth.
+ */
 function getAuditHealth() {
   return {
     status: _auditFailureCount === 0 ? 'ok' : 'degraded',
@@ -25,6 +29,10 @@ function getAuditHealth() {
   };
 }
 
+/**
+ * Provides the reset audit failure count operation in auditService.
+ * @returns {void} Completes without a return value.
+ */
 function _resetAuditFailureCount() {
   _auditFailureCount = 0;
 }
@@ -189,6 +197,12 @@ async function getAuditLogs(filters = {}) {
   return { logs, ...pagination, cursorExpiry };
 }
 
+/**
+ * Retrieves recent audit logs from auditService.
+ * @param {string} schoolId - Value used by getRecentAuditLogs.
+ * @param {number} limit - Value used by getRecentAuditLogs.
+ * @returns {Promise<*>} Result produced by getRecentAuditLogs.
+ */
 async function getRecentAuditLogs(schoolId, limit = 10) {
   return AuditLog.find({ schoolId }).sort({ createdAt: -1 }).limit(limit).lean();
 }

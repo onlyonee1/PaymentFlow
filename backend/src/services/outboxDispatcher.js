@@ -53,7 +53,7 @@ async function deadLetterOutboxEvent(event, retryCount, errorMessage) {
  * (lockedUntil is null or already expired). This prevents two concurrent
  * dispatcher instances from double-delivering the same event.
  *
- * @param {import('mongoose').Document} event
+ * @param {object} event Mongoose outbox document.
  * @returns {Promise<boolean>} true if the lock was acquired, false otherwise
  */
 async function tryClaimEvent(event) {
@@ -75,6 +75,10 @@ async function tryClaimEvent(event) {
   return claimed !== null;
 }
 
+/**
+ * Dispatches outbox events through outboxDispatcher.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function dispatchOutboxEvents() {
   const now = new Date();
 
@@ -169,6 +173,10 @@ async function dispatchOutboxEvents() {
   }
 }
 
+/**
+ * Manages outbox dispatcher for outboxDispatcher.
+ * @returns {void} Completes without a return value.
+ */
 function startOutboxDispatcher() {
   if (_dispatchTimer) return;
   // dispatchOutboxEvents already catches everything it awaits internally, but
@@ -188,6 +196,10 @@ function startOutboxDispatcher() {
   logger.info('Outbox dispatcher started');
 }
 
+/**
+ * Manages outbox dispatcher for outboxDispatcher.
+ * @returns {void} Completes without a return value.
+ */
 function stopOutboxDispatcher() {
   if (_dispatchTimer) {
     clearInterval(_dispatchTimer);

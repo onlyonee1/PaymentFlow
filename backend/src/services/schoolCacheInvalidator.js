@@ -91,7 +91,7 @@ function dropLocal(schoolId, slug) {
 /**
  * Invalidate a school across every replica after a write.
  *
- * @param {{schoolId?: string, slug?: string}} school The mutated school (the
+ * @param {object} school The mutated school (the
  *   doc returned by the write is fine — only schoolId and slug are read).
  */
 function invalidate(school) {
@@ -131,5 +131,9 @@ module.exports = {
   CHANNEL,
   // Exposed for testing
   _dropLocal: dropLocal,
+  /**
+ * Provides the is redis enabled operation in schoolCacheInvalidator.
+ * @returns {*} Result produced by _isRedisEnabled.
+ */
   _isRedisEnabled: () => Boolean(publisher),
 };

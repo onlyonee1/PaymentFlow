@@ -22,6 +22,12 @@ const RL_MSG = { error: 'Too many requests, please try again later.', code: 'RAT
 // `_bucketInfo` / `_slidingWindowCount` below, so they implement the exact
 // same decision function; only how the two per-bucket counts are fetched
 // differs (Redis INCR/GET vs. an in-process store).
+/**
+ * Provides the bucket info operation in rateLimiter.
+ * @param {*} now - Value used by _bucketInfo.
+ * @param {*} windowMs - Value used by _bucketInfo.
+ * @returns {*} Result produced by _bucketInfo.
+ */
 function _bucketInfo(now, windowMs) {
   const bucket = Math.floor(now / windowMs);
   const bucketStart = bucket * windowMs;
@@ -31,6 +37,13 @@ function _bucketInfo(now, windowMs) {
   return { bucket, weight, resetSeconds };
 }
 
+/**
+ * Provides the sliding window count operation in rateLimiter.
+ * @param {number} currentCount - Value used by _slidingWindowCount.
+ * @param {number} previousCount - Value used by _slidingWindowCount.
+ * @param {*} weight - Value used by _slidingWindowCount.
+ * @returns {*} Result produced by _slidingWindowCount.
+ */
 function _slidingWindowCount(currentCount, previousCount, weight) {
   return currentCount + previousCount * weight;
 }
@@ -42,6 +55,11 @@ function _slidingWindowCount(currentCount, previousCount, weight) {
 // bucket's relevance, so the store's size is bounded by the number of
 // distinct clients active within the last two windows, not by every client
 // that has ever connected to the process.
+/**
+ * Provides the create fallback store operation in rateLimiter.
+ * @param {*} windowMs - Value used by _createFallbackStore.
+ * @returns {*} Result produced by _createFallbackStore.
+ */
 function _createFallbackStore(windowMs) {
   // node-cache's TTL/checkperiod are seconds, but accept fractional values,
   // so short test windows (milliseconds) still get real, sub-second expiry
@@ -53,6 +71,13 @@ function _createFallbackStore(windowMs) {
   });
 }
 
+/**
+ * Provides the in memory bucket count operation in rateLimiter.
+ * @param {*} store - Value used by _inMemoryBucketCount.
+ * @param {string} clientKey - Value used by _inMemoryBucketCount.
+ * @param {*} bucket - Value used by _inMemoryBucketCount.
+ * @returns {*} Result produced by _inMemoryBucketCount.
+ */
 function _inMemoryBucketCount(store, clientKey, bucket) {
   const key = `${clientKey}:${bucket}`;
   const next = (store.get(key) || 0) + 1;
@@ -60,6 +85,13 @@ function _inMemoryBucketCount(store, clientKey, bucket) {
   return next;
 }
 
+/**
+ * Provides the in memory previous count operation in rateLimiter.
+ * @param {*} store - Value used by _inMemoryPreviousCount.
+ * @param {string} clientKey - Value used by _inMemoryPreviousCount.
+ * @param {*} bucket - Value used by _inMemoryPreviousCount.
+ * @returns {*} Result produced by _inMemoryPreviousCount.
+ */
 function _inMemoryPreviousCount(store, clientKey, bucket) {
   return store.get(`${clientKey}:${bucket - 1}`) || 0;
 }
@@ -89,6 +121,14 @@ async function _redisBucketCount(redis, redisKeyPrefix, clientKey, bucket, ttlSe
 // counter (per replica) if Redis is unavailable, per docs/redis-dependency.md.
 // See docs/redis-dependency.md for what a Redis outage means for the
 // effective limit in a multi-replica deployment.
+/**
+ * Provides the rl operation in rateLimiter.
+ * @param {*} windowMs - Value used by rl.
+ * @param {*} max - Value used by rl.
+ * @param {string} message - Value used by rl.
+ * @param {object} opts - Value used by rl.
+ * @returns {*} Result produced by rl.
+ */
 function rl(windowMs, max, message = RL_MSG, opts = {}) {
   const memoryStore = _createFallbackStore(windowMs);
   const keyGenerator = opts.keyGenerator || ((req) => req.ip);

@@ -253,8 +253,8 @@ investigating Horizon / MongoDB latency.
 | `BackupRestoreTestStale` | warning | `last_backup_restore_test_age_seconds > 691200` | > 8 days since CI restore test | 5 min |
 | `BackupVerificationStale` | warning | `last_backup_verification_age_seconds > 691200` | > 8 days since backup verification | 5 min |
 
-**Runbook:** `docs/runbooks/price-feed-staleness.md` (referenced in alert YAML;
-a dedicated `docs/runbooks/backup-staleness.md` should be created — see §6).
+**Runbook:** See [`docs/runbooks/backup-recovery.md`](runbooks/backup-recovery.md)
+for backup staleness alert response and recovery procedures.
 
 ---
 
@@ -377,7 +377,7 @@ File issues to resolve them and update this section when resolved.
 
 | Issue | Alert / File | Status |
 |-------|-------------|--------|
-| `BackupStale`, `BackupCriticallyStale`, `BackupRestoreTestStale`, `BackupVerificationStale` reference `docs/runbooks/backup-staleness.md` in their `runbook_url`, but that file does not exist in this repo | `monitoring/alerts/backup.yml` | **Open** — create `docs/runbooks/backup-staleness.md` |
+| Backup alerts reference the current recovery runbook | `monitoring/alerts/backup.yml` | **Done** — `docs/runbooks/backup-recovery.md` |
 | `admin-alerts.yml` contains only a placeholder (247 bytes); no active alert rules | `monitoring/alerts/admin-alerts.yml` | **Open** — define rules or remove the file |
 | `payment_processing_latency.yml` and `payment_limits.yml` contain rules that are not fully documented in this inventory | `monitoring/alerts/payment_processing_latency.yml`, `monitoring/alerts/payment_limits.yml` | **Open** — complete §3.11 and §3.12 once rules are confirmed stable |
 | `horizon_failover.yml` is present but not listed above — review and add to inventory | `monitoring/alerts/horizon_failover.yml` | **Open** |
@@ -393,7 +393,7 @@ File issues to resolve them and update this section when resolved.
 | Wallet Rotation | `docs/runbooks/wallet-rotation.md` | Rotating the school Stellar wallet address |
 | Signer Key Rotation | `docs/runbooks/signer-key-rotation.md` | Rotating `SIGNER_MASTER_KEY` |
 | Incident Response | `docs/incident-response-checklist.md` | End-to-end incident handling |
-| Backup Staleness | `docs/runbooks/backup-staleness.md` | **Missing** — referenced by backup alerts; needs to be created |
+| Backup and Recovery | `docs/runbooks/backup-recovery.md` | Cadence, restore validation, RPO/RTO targets, and staleness escalation |
 
 ---
 

@@ -8,6 +8,10 @@ const INTERVAL_MS = parseInt(process.env.SESSION_CLEANUP_INTERVAL_MS, 10) || 60 
 let _timer = null;
 let _running = false;
 
+/**
+ * Manages expired sessions for sessionCleanupService.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function cleanupExpiredSessions() {
   if (_running) return;
   _running = true;
@@ -59,12 +63,20 @@ async function cleanupExpiredSessions() {
   }
 }
 
+/**
+ * Manages session cleanup scheduler for sessionCleanupService.
+ * @returns {void} Completes without a return value.
+ */
 function startSessionCleanupScheduler() {
   if (_timer) return;
   _timer = setInterval(cleanupExpiredSessions, INTERVAL_MS);
   _timer.unref();
 }
 
+/**
+ * Manages session cleanup scheduler for sessionCleanupService.
+ * @returns {void} Completes without a return value.
+ */
 function stopSessionCleanupScheduler() {
   if (_timer) { clearInterval(_timer); _timer = null; }
 }

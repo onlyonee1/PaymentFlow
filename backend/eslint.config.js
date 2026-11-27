@@ -2,6 +2,7 @@
 
 const js = require('@eslint/js');
 const pluginN = require('eslint-plugin-n');
+const pluginJsdoc = require('eslint-plugin-jsdoc');
 const globals = require('globals');
 const requireMigrationDown = require('./src/utils/eslint-rules/require-migration-down');
 
@@ -45,6 +46,22 @@ module.exports = [
     files: ['src/utils/logger.js'],
     rules: {
       'no-console': 'off',
+    },
+  },
+  {
+    files: ['src/services/**/*.js', 'src/utils/**/*.js', 'src/middleware/**/*.js'],
+    plugins: {
+      jsdoc: pluginJsdoc,
+    },
+    rules: {
+      'jsdoc/require-jsdoc': ['error', {
+        publicOnly: true,
+        require: {
+          ArrowFunctionExpression: true,
+          FunctionDeclaration: true,
+          FunctionExpression: true,
+        },
+      }],
     },
   },
   // Enforce down() in every migration file — see docs/migrations.md

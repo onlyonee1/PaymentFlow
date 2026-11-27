@@ -1,0 +1,19 @@
+{
+  "plugins": [
+    "plugins/markdown",
+    "./jsdoc-bigint-plugin.js"
+  ],
+  "source": {
+    "include": [
+      "src/services",
+      "src/utils",
+      "src/middleware"
+    ],
+    "includePattern": ".+\\.js$",
+    "excludePattern": "(^|\\/|\\\\)(node_modules|tests)(\\/|\\\\)"
+  },
+  "opts": {
+    "destination": "./node_modules/.cache/paymentflow-jsdoc",
+    "recurse": true
+  }
+}

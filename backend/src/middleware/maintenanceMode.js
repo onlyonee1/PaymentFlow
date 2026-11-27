@@ -7,6 +7,13 @@ const logger = require('../utils/logger').child('MaintenanceMode');
 
 const EXEMPT_PATHS = /^\/(health|metrics|api\/docs)/;
 
+/**
+ * Provides the maintenance mode operation in maintenanceMode.
+ * @param {object} req - Value used by maintenanceMode.
+ * @param {object} res - Value used by maintenanceMode.
+ * @param {Function} next - Value used by maintenanceMode.
+ * @returns {Promise<*>} Result produced by maintenanceMode.
+ */
 async function maintenanceMode(req, res, next) {
   try {
     if (EXEMPT_PATHS.test(req.path)) return next();

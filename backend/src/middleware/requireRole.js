@@ -23,7 +23,7 @@
  *   router.delete('/payment-limits/:id', requireAdminAuth, requireRole('super_admin'), handler);
  *
  * @param {...string} roles  One or more allowed role strings.
- * @returns {import('express').RequestHandler}
+ * @returns {Function} Express middleware enforcing the required role.
  */
 function requireRole(...roles) {
   if (roles.length === 0) {

@@ -10,6 +10,10 @@ let queue = null;
 let worker = null;
 let starting = null;
 
+/**
+ * Manages retention scheduler for retentionQueueService.
+ * @returns {Promise<*>} Result produced by startRetentionScheduler.
+ */
 async function startRetentionScheduler() {
   if (queue || starting) return starting;
   starting = (async () => {
@@ -66,6 +70,10 @@ async function startRetentionScheduler() {
   return starting;
 }
 
+/**
+ * Manages retention scheduler for retentionQueueService.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function stopRetentionScheduler() {
   if (starting) await starting;
   const activeWorker = worker;

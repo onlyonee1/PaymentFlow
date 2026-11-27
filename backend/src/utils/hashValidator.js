@@ -2,6 +2,11 @@
 
 const STELLAR_HASH_REGEX = /^[0-9a-fA-F]{64}$/;
 
+/**
+ * Validates transaction hash in hashValidator.
+ * @param {boolean} hash - Value used by validateTransactionHash.
+ * @returns {*} Result produced by validateTransactionHash.
+ */
 function validateTransactionHash(hash) {
   if (!hash) return { valid: false, error: 'Transaction hash is required', code: 'MISSING_HASH', normalized: null };
   if (typeof hash !== 'string') return { valid: false, error: 'Transaction hash must be a string', code: 'INVALID_HASH_TYPE', normalized: null };
@@ -13,6 +18,11 @@ function validateTransactionHash(hash) {
   return { valid: true, error: null, code: null, normalized: trimmed.toLowerCase() };
 }
 
+/**
+ * Validates hash middleware in hashValidator.
+ * @param {string} paramName - Value used by validateHashMiddleware.
+ * @returns {*} Result produced by validateHashMiddleware.
+ */
 function validateHashMiddleware(paramName = 'txHash') {
   return (req, res, next) => {
     const hash = req.params[paramName] || req.body[paramName] || req.query[paramName];
@@ -25,6 +35,11 @@ function validateHashMiddleware(paramName = 'txHash') {
   };
 }
 
+/**
+ * Validates transaction hashes in hashValidator.
+ * @param {boolean} hashes - Value used by validateTransactionHashes.
+ * @returns {*} Result produced by validateTransactionHashes.
+ */
 function validateTransactionHashes(hashes) {
   if (!Array.isArray(hashes)) return { valid: false, errors: ['Input must be an array'], normalized: [] };
   const results = hashes.map((h, i) => ({ i, ...validateTransactionHash(h) }));
@@ -35,6 +50,11 @@ function validateTransactionHashes(hashes) {
   };
 }
 
+/**
+ * Provides the sanitize hash operation in hashValidator.
+ * @param {boolean} hash - Value used by sanitizeHash.
+ * @returns {*} Result produced by sanitizeHash.
+ */
 function sanitizeHash(hash) {
   const v = validateTransactionHash(hash);
   return v.valid ? v.normalized : null;

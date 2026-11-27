@@ -84,6 +84,11 @@ async function refreshVolatileFields(body) {
   }
 }
 
+/**
+ * Provides the idempotency operation in idempotency.
+ * @param {object} opts - Value used by idempotency.
+ * @returns {*} Result produced by idempotency.
+ */
 function idempotency(opts = {}) {
   const failClosed = opts.failClosed ?? false; // Default to fail-open for backwards compatibility
   const criticalPaymentEndpoints = opts.criticalPaymentEndpoints ?? false;

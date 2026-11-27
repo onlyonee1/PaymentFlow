@@ -41,6 +41,11 @@ function getRedactFields() {
   return DEFAULT_REDACT_FIELDS;
 }
 
+/**
+ * Provides the redact operation in requestLogger.
+ * @param {*} obj - Value used by redact.
+ * @returns {*} Result produced by redact.
+ */
 function redact(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const fields = getRedactFields();
@@ -52,6 +57,11 @@ function redact(obj) {
   return redactLogValue(obj);
 }
 
+/**
+ * Provides the redact headers operation in requestLogger.
+ * @param {*} headers - Value used by redactHeaders.
+ * @returns {*} Result produced by redactHeaders.
+ */
 function redactHeaders(headers) {
   if (!headers || typeof headers !== 'object') return {};
   const out = {};
@@ -68,6 +78,10 @@ function generateRequestId() {
   return `${Date.now()}-${process.pid}-${String(_counter).padStart(6, '0')}`;
 }
 
+/**
+ * Provides the request logger operation in requestLogger.
+ * @returns {*} Result produced by requestLogger.
+ */
 function requestLogger() {
   return (req, res, next) => {
     const requestId = generateRequestId();

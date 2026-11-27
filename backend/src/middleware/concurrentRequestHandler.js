@@ -256,6 +256,14 @@ class RequestDeduplicator {
 }
 
 // ── In-memory rate-limit helper ────────────────────────────────────────────────
+/**
+ * Provides the in memory increment operation in concurrentRequestHandler.
+ * @param {*} store - Value used by _inMemoryIncrement.
+ * @param {string} key - Value used by _inMemoryIncrement.
+ * @param {*} now - Value used by _inMemoryIncrement.
+ * @param {*} windowStart - Value used by _inMemoryIncrement.
+ * @returns {*} Result produced by _inMemoryIncrement.
+ */
 function _inMemoryIncrement(store, key, now, windowStart) {
   let entry = store.get(key);
   if (!entry || entry.windowStart < windowStart) {
@@ -267,6 +275,11 @@ function _inMemoryIncrement(store, key, now, windowStart) {
 }
 
 // ── Middleware Factory ──────────────────────────────────────────────────────────
+/**
+ * Creates or prepares concurrent request middleware in concurrentRequestHandler.
+ * @param {object} options - Value used by createConcurrentRequestMiddleware.
+ * @returns {*} Result produced by createConcurrentRequestMiddleware.
+ */
 function createConcurrentRequestMiddleware(options = {}) {
   const circuitBreaker = new CircuitBreaker(options.circuitBreaker || {});
   const requestQueue = new RequestQueue(options.queue || {});
@@ -482,6 +495,11 @@ function createConcurrentRequestMiddleware(options = {}) {
 }
 
 // ── Express Route Handlers for Concurrent Requests ─────────────────────────────
+/**
+ * Creates or prepares concurrent payment routes in concurrentRequestHandler.
+ * @param {*} paymentProcessor - Value used by createConcurrentPaymentRoutes.
+ * @returns {*} Result produced by createConcurrentPaymentRoutes.
+ */
 function createConcurrentPaymentRoutes(paymentProcessor) {
   const express = require('express');
   const router = express.Router();
@@ -581,5 +599,9 @@ module.exports = {
   // exported for testing
   _inMemoryIncrement,
   _getRedisClient: getRedisClient,
+  /**
+ * Provides the reset redis client operation in concurrentRequestHandler.
+ * @returns {void} Completes without a return value.
+ */
   _resetRedisClient: () => { resetRedisClient(); },
 };

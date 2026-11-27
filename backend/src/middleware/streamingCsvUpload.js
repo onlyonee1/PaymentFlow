@@ -22,6 +22,11 @@ const Busboy = require('busboy');
 const csv = require('csv-parser');
 const mongoose = require('mongoose');
 
+/**
+ * Provides the streaming csv upload operation in streamingCsvUpload.
+ * @param {object} options - Value used by streamingCsvUpload.
+ * @returns {*} Result produced by streamingCsvUpload.
+ */
 function streamingCsvUpload(options = {}) {
   const maxSize = options.maxSize || parseInt(process.env.CSV_MAX_SIZE_BYTES, 10) || 10 * 1024 * 1024;
   const maxRows = options.maxRows || parseInt(process.env.CSV_MAX_ROWS, 10) || 50000;

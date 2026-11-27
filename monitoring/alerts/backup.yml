@@ -25,7 +25,7 @@ groups:
             `docker logs <backup-container>` and verify that
             BACKUP_NOTIFY_TOKEN is set correctly in both the backup
             and backend containers.
-          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+          runbook_url: "https://github.com/olarh0170-netizen/PaymentFlow/blob/main/docs/runbooks/backup-recovery.md"
 
       # ── Critical: backup is more than 2 days stale ───────────────────────
       - alert: BackupCriticallyStale
@@ -42,7 +42,7 @@ groups:
             {{ $value | humanizeDuration }} ago (threshold: 48 h).
             Financial and student data is at risk. Investigate and
             restore the backup schedule immediately.
-          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+          runbook_url: "https://github.com/olarh0170-netizen/PaymentFlow/blob/main/docs/runbooks/backup-recovery.md"
 
       # ── Warning: backup metric exists but has never been updated ─────────
       # Catches the case where BACKUP_NOTIFY_TOKEN is misconfigured or the
@@ -64,7 +64,7 @@ groups:
             set in both the backup and backend containers and that the
             backup container can reach the backend on
             BACKEND_INTERNAL_URL.
-          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+          runbook_url: "https://github.com/olarh0170-netizen/PaymentFlow/blob/main/docs/runbooks/backup-recovery.md"
 
       # ── Warning: weekly CI restore test has not succeeded within 8 days ──
       # last_backup_restore_test_age_seconds is recomputed on every scrape by
@@ -84,7 +84,7 @@ groups:
             {{ $value | humanizeDuration }} (threshold: 8 days). The
             weekly backup-restore-test CI workflow may have failed
             silently. Check the workflow run history in GitHub Actions.
-          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+          runbook_url: "https://github.com/olarh0170-netizen/PaymentFlow/blob/main/docs/runbooks/backup-recovery.md"
 
       # ── Warning: backup restore has not been verified within 8 days ──────
       # last_backup_verification_age_seconds is recomputed on every scrape by
@@ -105,4 +105,4 @@ groups:
             {{ $value | humanizeDuration }} (threshold: 8 days). The
             weekly backup-verify job may have failed silently. Check
             `docker logs <backup-verify-container>`.
-          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+          runbook_url: "https://github.com/olarh0170-netizen/PaymentFlow/blob/main/docs/runbooks/backup-recovery.md"

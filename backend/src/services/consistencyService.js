@@ -20,7 +20,7 @@ const DEFAULT_CHAIN_LOOKBACK_DAYS = parseInt(process.env.RECONCILIATION_CHAIN_LO
  * cover complete transaction histories beyond the first 200 records.
  *
  * @param {string} walletAddress
- * @param {{ lookbackDays?: number }} [options] lookbackDays <= 0 disables the window.
+ * @param {{ lookbackDays: number }} [options] lookbackDays <= 0 disables the window.
  * @returns {Promise<Array>} Array of all matching transactions
  */
 async function fetchChainTransactions(walletAddress, { lookbackDays = DEFAULT_CHAIN_LOOKBACK_DAYS } = {}) {
@@ -209,6 +209,10 @@ async function checkStudentBalanceConsistency(schoolId) {
   return mismatches;
 }
 
+/**
+ * Validates consistency in consistencyService.
+ * @returns {Promise<*>} Result produced by checkConsistency.
+ */
 async function checkConsistency() {
   const schools = await School.find({ isActive: true }).lean();
 

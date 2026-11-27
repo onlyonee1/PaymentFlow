@@ -571,7 +571,7 @@ Alert definitions live in `monitoring/alerts/`. All alerts route through Prometh
 |-------|-------|
 | Severity | `warning` |
 | Trigger | Last successful backup > 26 hours ago |
-| Runbook | [docs/runbooks/backup-staleness.md](runbooks/backup-staleness.md) |
+| Runbook | [docs/runbooks/backup-recovery.md](runbooks/backup-recovery.md) |
 | Owner | Infrastructure on-call engineer |
 
 **Typical cause:** Backup container failed silently; `BACKUP_NOTIFY_TOKEN` misconfigured.
@@ -589,7 +589,7 @@ Alert definitions live in `monitoring/alerts/`. All alerts route through Prometh
 |-------|-------|
 | Severity | `critical` |
 | Trigger | Last successful backup > 48 hours ago |
-| Runbook | [docs/runbooks/backup-staleness.md](runbooks/backup-staleness.md) |
+| Runbook | [docs/runbooks/backup-recovery.md](runbooks/backup-recovery.md) |
 | Owner | Infrastructure on-call engineer |
 
 **Typical cause:** Backup has been failing for 2+ consecutive scheduled runs.
@@ -607,7 +607,7 @@ Alert definitions live in `monitoring/alerts/`. All alerts route through Prometh
 |-------|-------|
 | Severity | `warning` |
 | Trigger | `backup_last_success_timestamp_seconds == 0` for 26 hours |
-| Runbook | [docs/runbooks/backup-staleness.md](runbooks/backup-staleness.md) |
+| Runbook | [docs/runbooks/backup-recovery.md](runbooks/backup-recovery.md) |
 | Owner | Infrastructure on-call engineer |
 
 **Typical cause:** Backend just restarted and has not yet received a successful backup heartbeat, or `BACKUP_NOTIFY_TOKEN` is misconfigured.
@@ -624,7 +624,7 @@ Alert definitions live in `monitoring/alerts/`. All alerts route through Prometh
 |-------|-------|
 | Severity | `warning` |
 | Trigger | `last_backup_restore_test_age_seconds > 691200` (8 days) |
-| Runbook | [docs/runbooks/backup-staleness.md](runbooks/backup-staleness.md) |
+| Runbook | [docs/runbooks/backup-recovery.md](runbooks/backup-recovery.md) |
 | Owner | Infrastructure on-call engineer |
 
 **Typical cause:** Weekly backup-restore-test CI workflow has failed silently.
@@ -641,7 +641,7 @@ Alert definitions live in `monitoring/alerts/`. All alerts route through Prometh
 |-------|-------|
 | Severity | `warning` |
 | Trigger | `last_backup_verification_age_seconds > 691200` (8 days) |
-| Runbook | [docs/runbooks/backup-staleness.md](runbooks/backup-staleness.md) |
+| Runbook | [docs/runbooks/backup-recovery.md](runbooks/backup-recovery.md) |
 | Owner | Infrastructure on-call engineer |
 
 **Typical cause:** Weekly backup-verify job failed silently.

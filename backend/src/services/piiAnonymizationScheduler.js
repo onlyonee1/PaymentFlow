@@ -35,6 +35,10 @@ function isAnonymizationEnabled() {
   return STUDENT_PII_RETENTION_DAYS > 0;
 }
 
+/**
+ * Provides the anonymize expired pii operation in piiAnonymizationScheduler.
+ * @returns {Promise<*>} Result produced by anonymizeExpiredPii.
+ */
 async function anonymizeExpiredPii() {
   if (!isAnonymizationEnabled()) {
     logger.debug('PII anonymization disabled (STUDENT_PII_RETENTION_DAYS <= 0)');
@@ -103,6 +107,10 @@ async function anonymizeExpiredPii() {
   }
 }
 
+/**
+ * Manages pii anonymization scheduler for piiAnonymizationScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function startPiiAnonymizationScheduler() {
   if (_timer) {
     logger.warn('PII anonymization scheduler already started');
@@ -121,6 +129,10 @@ function startPiiAnonymizationScheduler() {
   }, ANONYMIZATION_INTERVAL_MS);
 }
 
+/**
+ * Manages pii anonymization scheduler for piiAnonymizationScheduler.
+ * @returns {void} Completes without a return value.
+ */
 function stopPiiAnonymizationScheduler() {
   if (_timer) {
     clearInterval(_timer);
@@ -133,5 +145,9 @@ module.exports = {
   startPiiAnonymizationScheduler,
   stopPiiAnonymizationScheduler,
   anonymizeExpiredPii,
+  /**
+ * Retrieves last run at from piiAnonymizationScheduler.
+ * @returns {*} Result produced by getLastRunAt.
+ */
   getLastRunAt: () => _lastRunAt,
 };

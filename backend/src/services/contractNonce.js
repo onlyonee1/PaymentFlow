@@ -124,7 +124,7 @@ class NonceManager {
    * @param {string} schoolId
    * @param {string} operationType
    * @param {number} suppliedNonce – The nonce embedded in the signed envelope.
-   * @returns {Promise<{ accepted: boolean, reason?: string, nextNonce?: number }>}
+   * @returns {Promise<object>} Nonce acceptance result and next sequence when available.
    */
   async verifyAndConsumeNonce(schoolId, operationType, suppliedNonce) {
     this._assertOperationType(operationType);

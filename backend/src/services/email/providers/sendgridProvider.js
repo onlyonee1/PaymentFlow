@@ -34,6 +34,11 @@ function getMail() {
 module.exports = {
   name: 'sendgrid',
 
+  /**
+ * Dispatches the supplied value through sendgridProvider.
+ * @param {string} message - Value used by send.
+ * @returns {Promise<*>} Result produced by send.
+ */
   async send(message) {
     const mail = getMail();
     const [res] = await mail.send({
@@ -46,6 +51,10 @@ module.exports = {
     return { messageId: res?.headers?.['x-message-id'] || res?.headers?.['x-message-id'.toUpperCase()] };
   },
 
+  /**
+ * Validates the supplied value in sendgridProvider.
+ * @returns {Promise<*>} Result produced by verify.
+ */
   async verify() {
     try {
       getMail();
@@ -55,6 +64,10 @@ module.exports = {
     }
   },
 
+  /**
+ * Provides the reset operation in sendgridProvider.
+ * @returns {void} Completes without a return value.
+ */
   _reset() {
     _mail = null;
   },

@@ -21,6 +21,11 @@ const logger = require('../utils/logger').child('PaymentSavedSubscribers');
 
 // ── Webhook subscriber ────────────────────────────────────────────────────────
 
+/**
+ * Provides the on payment saved webhook operation in paymentSavedSubscribers.
+ * @param {object} payment - Value used by onPaymentSavedWebhook.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function onPaymentSavedWebhook(payment) {
   try {
     const school = await School.findOne({ schoolId: payment.schoolId });
@@ -65,6 +70,11 @@ async function onPaymentSavedWebhook(payment) {
 
 // ── Receipt subscriber ────────────────────────────────────────────────────────
 
+/**
+ * Provides the on payment saved receipt operation in paymentSavedSubscribers.
+ * @param {object} payment - Value used by onPaymentSavedReceipt.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function onPaymentSavedReceipt(payment) {
   try {
     await createReceipt(payment);
@@ -80,6 +90,11 @@ async function onPaymentSavedReceipt(payment) {
 
 // ── Reminder-cancellation subscriber ─────────────────────────────────────────
 
+/**
+ * Provides the on payment saved cancel reminder operation in paymentSavedSubscribers.
+ * @param {object} payment - Value used by onPaymentSavedCancelReminder.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function onPaymentSavedCancelReminder(payment) {
   try {
     // Only clear reminders when the student's fee is now fully paid.
@@ -105,6 +120,11 @@ async function onPaymentSavedCancelReminder(payment) {
 
 // ── Refund handler ────────────────────────────────────────────────────────────
 
+/**
+ * Provides the on refund status changed operation in paymentSavedSubscribers.
+ * @param {*} refundEvent - Value used by onRefundStatusChanged.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function onRefundStatusChanged(refundEvent) {
   try {
     if (refundEvent.newStatus === 'confirmed') {
@@ -146,6 +166,11 @@ async function onRefundStatusChanged(refundEvent) {
 
 // ── Processing duration subscriber ─────────────────────────────────────────
 
+/**
+ * Provides the on payment saved record duration operation in paymentSavedSubscribers.
+ * @param {object} payment - Value used by onPaymentSavedRecordDuration.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function onPaymentSavedRecordDuration(payment) {
   try {
     // Record payment processing duration (from detectedAt to confirmedAt)
@@ -163,6 +188,10 @@ async function onPaymentSavedRecordDuration(payment) {
 
 // ── Registration ──────────────────────────────────────────────────────────────
 
+/**
+ * Creates or prepares payment saved subscribers in paymentSavedSubscribers.
+ * @returns {void} Completes without a return value.
+ */
 function registerPaymentSavedSubscribers() {
   paymentEvents.on('payment.saved', onPaymentSavedWebhook);
   paymentEvents.on('payment.saved', onPaymentSavedReceipt);

@@ -13,6 +13,11 @@ const logger = require('../../../utils/logger').child('EmailProvider:console');
 module.exports = {
   name: 'console',
 
+  /**
+ * Dispatches the supplied value through consoleProvider.
+ * @param {string} message - Value used by send.
+ * @returns {Promise<*>} Result produced by send.
+ */
   async send(message) {
     logger.info('Email (console provider — not actually sent)', {
       to: message.to,
@@ -22,6 +27,10 @@ module.exports = {
     return { messageId: `console-${process.pid}-${message.to}-${message.subject}` };
   },
 
+  /**
+ * Validates the supplied value in consoleProvider.
+ * @returns {Promise<*>} Result produced by verify.
+ */
   async verify() {
     return { ok: true };
   },

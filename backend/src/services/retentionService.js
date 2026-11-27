@@ -49,6 +49,11 @@ const DEFAULTS = {
   auditLogs:         90,
 };
 
+/**
+ * Provides the retention days operation in retentionService.
+ * @param {*} scope - Value used by retentionDays.
+ * @returns {*} Result produced by retentionDays.
+ */
 function retentionDays(scope) {
   const ENV = {
     studentPii:        'STUDENT_PII_RETENTION_DAYS',
@@ -64,6 +69,11 @@ function retentionDays(scope) {
   return (Number.isFinite(raw) && raw > 0) ? raw : DEFAULTS[scope];
 }
 
+/**
+ * Provides the cutoff date operation in retentionService.
+ * @param {*} scope - Value used by cutoffDate.
+ * @returns {*} Result produced by cutoffDate.
+ */
 function cutoffDate(scope) {
   return new Date(Date.now() - retentionDays(scope) * 24 * 60 * 60 * 1000);
 }

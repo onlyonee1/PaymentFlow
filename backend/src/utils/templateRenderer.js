@@ -31,6 +31,12 @@ function buildI18nVars(locale) {
   return out;
 }
 
+/**
+ * Retrieves template from templateRenderer.
+ * @param {string} filename - Value used by loadTemplate.
+ * @param {object} options - Value used by loadTemplate.
+ * @returns {*} Result produced by loadTemplate.
+ */
 function loadTemplate(filename, { fresh = false } = {}) {
   if (!fresh && _cache.has(filename)) return _cache.get(filename);
   const contents = fs.readFileSync(path.join(TEMPLATES_DIR, filename), 'utf8');
@@ -38,6 +44,12 @@ function loadTemplate(filename, { fresh = false } = {}) {
   return contents;
 }
 
+/**
+ * Provides the render template operation in templateRenderer.
+ * @param {*} template - Value used by renderTemplate.
+ * @param {*} vars - Value used by renderTemplate.
+ * @returns {*} Result produced by renderTemplate.
+ */
 function renderTemplate(template, vars = {}) {
   const withConditionals = template.replace(
     /\{\{#if (\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,

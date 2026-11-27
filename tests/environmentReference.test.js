@@ -4,7 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
-const referencePath = path.join(repoRoot, 'docs/environment-reference.md');
+const referencePaths = [
+  path.join(repoRoot, 'docs/environment-reference.md'),
+  path.join(repoRoot, 'docs/configuration.md'),
+];
 
 function walkJsFiles(relativeDir) {
   const directory = path.join(repoRoot, relativeDir);
@@ -78,8 +81,14 @@ function collectExampleKeys() {
 }
 
 function collectReferenceKeys() {
-  const source = fs.readFileSync(referencePath, 'utf8');
-  return new Set([...source.matchAll(/`([A-Z][A-Z0-9_]*)`/g)].map((match) => match[1]));
+  const keys = new Set();
+  for (const referencePath of referencePaths) {
+    const source = fs.readFileSync(referencePath, 'utf8');
+    for (const match of source.matchAll(/`([A-Z][A-Z0-9_]*)`/g)) {
+      keys.add(match[1]);
+    }
+  }
+  return keys;
 }
 
 function withEnvironment(overrides, callback) {
@@ -108,8 +117,10 @@ describe('environment variable reference', () => {
   });
 
   it('does not contain secret assignments', () => {
-    const source = fs.readFileSync(referencePath, 'utf8');
-    expect(source).not.toMatch(/\b(?:SECRET|PASSWORD|TOKEN|API_KEY|AUTH_TOKEN)\b\s*=\s*\S+/i);
+    for (const referencePath of referencePaths) {
+      const source = fs.readFileSync(referencePath, 'utf8');
+      expect(source).not.toMatch(/\b(?:SECRET|PASSWORD|TOKEN|API_KEY|AUTH_TOKEN)\b\s*=\s*\S+/i);
+    }
   });
 
   it('describes the required startup failures', () => {

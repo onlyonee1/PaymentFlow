@@ -77,7 +77,7 @@ async function redisSet(key, record) {
  * Checks Redis first (if enabled), then Mongo; populates Redis on a Mongo hit.
  *
  * @param {string} key canonical idempotency key
- * @returns {Promise<{responseStatus:number, responseBody:*, scope:string}|null>}
+ * @returns {Promise<object|null>} Cached response data, or null when no record exists.
  */
 async function get(key) {
   if (!key) return null;
@@ -131,7 +131,7 @@ async function get(key) {
  * as success — the stored result is equivalent.
  *
  * @param {string} key canonical idempotency key
- * @param {{responseStatus:number, responseBody:*, scope?:string}} record
+ * @param {{responseStatus:number, responseBody:*, scope:string}} record
  * @returns {Promise<void>}
  */
 async function set(key, record) {
@@ -164,7 +164,7 @@ async function set(key, record) {
  * the HTTP idempotency middleware uses to make 200/409/422 decisions.
  *
  * @param {string} key canonical idempotency key
- * @returns {Promise<{state:string, requestFingerprint:string|null, responseStatus:number|null, responseBody:*, scope:string, createdAt:Date}|null>}
+ * @returns {Promise<object|null>} Full idempotency record, or null when absent.
  */
 async function getFull(key) {
   if (!key) return null;
@@ -230,7 +230,7 @@ async function getFull(key) {
  * atomically so a crashed request never wedges the key.
  *
  * @param {string} key canonical idempotency key
- * @param {{scope?:string, fingerprint?:string|null}} opts
+ * @param {object} opts - Scope and request fingerprint for the reservation.
  */
 async function reserve(key, { scope = '', fingerprint = null } = {}) {
   if (!key) return { reserved: false, record: null };
@@ -294,7 +294,7 @@ async function reserve(key, { scope = '', fingerprint = null } = {}) {
  * `completed`. Upserts so it is also correct if no reservation existed.
  *
  * @param {string} key canonical idempotency key
- * @param {{scope?:string, responseStatus:number, responseBody:*, fingerprint?:string|null}} record
+ * @param {object} record - Response status/body, scope, and request fingerprint.
  */
 async function complete(key, record) {
   if (!key) return;

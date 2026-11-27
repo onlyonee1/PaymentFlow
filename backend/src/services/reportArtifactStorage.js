@@ -35,6 +35,12 @@ async function storeReportArtifact(key, body, contentType, contentDisposition) {
   }));
 }
 
+/**
+ * Creates or prepares report download url in reportArtifactStorage.
+ * @param {string} key - Value used by createReportDownloadUrl.
+ * @param {*} expiresIn - Value used by createReportDownloadUrl.
+ * @returns {*} Result produced by createReportDownloadUrl.
+ */
 function createReportDownloadUrl(key, expiresIn = SIGNED_URL_TTL_SECONDS) {
   const command = new GetObjectCommand({
     Bucket: process.env.REPORTS_S3_BUCKET,

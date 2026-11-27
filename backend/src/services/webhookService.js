@@ -83,6 +83,10 @@ async function _isReplay(deliveryId) {
   return false;
 }
 
+/**
+ * Provides the reset nonces operation in webhookService.
+ * @returns {void} Completes without a return value.
+ */
 function _resetNonces() { _localNonces.clear(); }
 
 // ── HMAC helpers ─────────────────────────────────────────────────────────────
@@ -190,6 +194,11 @@ function verifySignatureV2(timestamp, deliveryId, rawBody, providedSignature, se
 //
 const WEBHOOK_MAX_BACKOFF_MS = parseInt(process.env.WEBHOOK_MAX_BACKOFF_MS || '900000', 10);
 
+/**
+ * Retrieves backoff delay from webhookService.
+ * @param {number} attemptNumber - Value used by getBackoffDelay.
+ * @returns {*} Result produced by getBackoffDelay.
+ */
 function getBackoffDelay(attemptNumber) {
   const delays = [60_000, 300_000, 900_000]; // 1 min, 5 min, 15 min
   const base = delays[Math.min(attemptNumber, delays.length - 1)];
@@ -225,7 +234,7 @@ function isPermanentError(statusCode) {
  * to a private IP) is caught at delivery time.
  *
  * @param {string} url
- * @returns {Promise<{ ok: boolean, reason?: string }>}
+ * @returns {Promise<object>} Verification result with an optional rejection reason.
  */
 async function _validateAtSendTime(url) {
   let parsed;
@@ -347,7 +356,7 @@ async function _writeDeliveryLog({
  * @param {string|null} opts.endpointId    ObjectId string of WebhookEndpoint (null for legacy)
  * @param {string|null} opts.schoolId
  * @param {number}  [opts.attemptCount=1]
- * @returns {Promise<{success: boolean, statusCode?: number, error?: string, deliveryId: string}>}
+ * @returns {Promise<object>} Delivery result and any associated status or error details.
  */
 async function _sendToUrl({
   url, event, filteredPayload, rawPayload, secret, deliveryId,
@@ -517,7 +526,7 @@ async function _sendToUrl({
  * @param {string} event
  * @param {object} rawPayload      Full payload (may contain PII)
  * @param {string[]|null} allowedFields  From school.webhookPayloadConfig.allowedFields
- * @returns {Promise<Array<{endpointId, success, statusCode?, error?, deliveryId}>>}
+ * @returns {Promise<Array.<object>>} Delivery result for each subscribed endpoint.
  */
 async function fireWebhookToEndpoints(schoolId, event, rawPayload, allowedFields = null) {
   // #867: build the PII-filtered payload once for all endpoints of this school
@@ -613,7 +622,7 @@ async function fireWebhookToEndpoints(schoolId, event, rawPayload, allowedFields
  * @param {string|null} deliveryId
  * @param {string|null} endpointId  ObjectId string if known (for delivery log)
  * @param {string|null} schoolId
- * @returns {Promise<{success, statusCode?, error?, queued?, deliveryId}>}
+ * @returns {Promise<object>} Delivery result and any associated status or error details.
  */
 async function fireWebhook(url, event, payload, secret = null, deliveryId = null, endpointId = null, schoolId = null) {
   const correlationId = payload?.correlationId || null;
@@ -667,6 +676,19 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
 }
 
 // ── Retry queue ───────────────────────────────────────────────────────────────
+/**
+ * Dispatches webhook retry through webhookService.
+ * @param {string} url - Value used by queueWebhookRetry.
+ * @param {object} event - Value used by queueWebhookRetry.
+ * @param {object} payload - Value used by queueWebhookRetry.
+ * @param {object} error - Value used by queueWebhookRetry.
+ * @param {*} secret - Value used by queueWebhookRetry.
+ * @param {string} deliveryId - Value used by queueWebhookRetry.
+ * @param {string} endpointId - Value used by queueWebhookRetry.
+ * @param {string} schoolId - Value used by queueWebhookRetry.
+ * @param {*} responseClass - Value used by queueWebhookRetry.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function queueWebhookRetry(url, event, payload, error, secret = null, deliveryId = null, endpointId = null, schoolId = null, responseClass = null) {
   const nextRetryAt = new Date(Date.now() + getBackoffDelay(0));
   const id = deliveryId || uuidv4();
@@ -763,6 +785,11 @@ async function processPendingRetries() {
   }
 }
 
+/**
+ * Dispatches webhook through webhookService.
+ * @param {*} retry - Value used by retryWebhook.
+ * @returns {Promise<void>} Completes without a return value.
+ */
 async function retryWebhook(retry) {
   const correlationId = retry.correlationId || retry.payload?.correlationId || null;
 
@@ -924,6 +951,14 @@ async function retryWebhook(retry) {
 // backward-compatibility with schools that still have only webhookUrl on the
 // School document.
 
+/**
+ * Provides the dispatch to school operation in webhookService.
+ * @param {string} schoolId - Value used by _dispatchToSchool.
+ * @param {object} event - Value used by _dispatchToSchool.
+ * @param {*} rawPayload - Value used by _dispatchToSchool.
+ * @param {object} school - Value used by _dispatchToSchool.
+ * @returns {Promise<*>} Result produced by _dispatchToSchool.
+ */
 async function _dispatchToSchool(schoolId, event, rawPayload, school) {
   // Try multi-endpoint path first
   const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
@@ -938,6 +973,14 @@ async function _dispatchToSchool(schoolId, event, rawPayload, school) {
   return results;
 }
 
+/**
+ * Dispatches payment confirmed through webhookService.
+ * @param {string} webhookUrl - Value used by notifyPaymentConfirmed.
+ * @param {object} payment - Value used by notifyPaymentConfirmed.
+ * @param {object} student - Value used by notifyPaymentConfirmed.
+ * @param {*} secret - Value used by notifyPaymentConfirmed.
+ * @returns {Promise<*>} Result produced by notifyPaymentConfirmed.
+ */
 async function notifyPaymentConfirmed(webhookUrl, payment, student, secret = null) {
   // Legacy direct-URL callers (e.g. paymentSavedSubscribers before migration)
   if (webhookUrl) {
@@ -962,6 +1005,13 @@ async function notifyPaymentConfirmed(webhookUrl, payment, student, secret = nul
   return null;
 }
 
+/**
+ * Dispatches payment pending through webhookService.
+ * @param {string} webhookUrl - Value used by notifyPaymentPending.
+ * @param {object} payment - Value used by notifyPaymentPending.
+ * @param {*} secret - Value used by notifyPaymentPending.
+ * @returns {Promise<*>} Result produced by notifyPaymentPending.
+ */
 async function notifyPaymentPending(webhookUrl, payment, secret = null) {
   if (webhookUrl) {
     return fireWebhook(webhookUrl, 'payment.pending', {
@@ -980,6 +1030,14 @@ async function notifyPaymentPending(webhookUrl, payment, secret = null) {
   return null;
 }
 
+/**
+ * Dispatches payment failed through webhookService.
+ * @param {string} webhookUrl - Value used by notifyPaymentFailed.
+ * @param {object} payment - Value used by notifyPaymentFailed.
+ * @param {string} reason - Value used by notifyPaymentFailed.
+ * @param {*} secret - Value used by notifyPaymentFailed.
+ * @returns {Promise<*>} Result produced by notifyPaymentFailed.
+ */
 async function notifyPaymentFailed(webhookUrl, payment, reason, secret = null) {
   if (webhookUrl) {
     return fireWebhook(webhookUrl, 'payment.failed', {
@@ -996,6 +1054,14 @@ async function notifyPaymentFailed(webhookUrl, payment, reason, secret = null) {
   return null;
 }
 
+/**
+ * Dispatches payment refunded through webhookService.
+ * @param {string} webhookUrl - Value used by notifyPaymentRefunded.
+ * @param {*} refundEvent - Value used by notifyPaymentRefunded.
+ * @param {object} student - Value used by notifyPaymentRefunded.
+ * @param {*} secret - Value used by notifyPaymentRefunded.
+ * @returns {Promise<*>} Result produced by notifyPaymentRefunded.
+ */
 async function notifyPaymentRefunded(webhookUrl, refundEvent, student, secret = null) {
   if (webhookUrl) {
     return fireWebhook(webhookUrl, 'payment.refunded', {
@@ -1012,6 +1078,14 @@ async function notifyPaymentRefunded(webhookUrl, refundEvent, student, secret = 
   return null;
 }
 
+/**
+ * Dispatches payment suspicious through webhookService.
+ * @param {string} webhookUrl - Value used by notifyPaymentSuspicious.
+ * @param {object} payment - Value used by notifyPaymentSuspicious.
+ * @param {string} reason - Value used by notifyPaymentSuspicious.
+ * @param {*} secret - Value used by notifyPaymentSuspicious.
+ * @returns {Promise<*>} Result produced by notifyPaymentSuspicious.
+ */
 async function notifyPaymentSuspicious(webhookUrl, payment, reason, secret = null) {
   if (webhookUrl) {
     return fireWebhook(webhookUrl, 'payment.suspicious', {

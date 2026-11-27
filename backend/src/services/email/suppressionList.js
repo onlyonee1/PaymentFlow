@@ -12,6 +12,11 @@
 const EmailSuppression = require('../../models/emailSuppressionModel');
 const logger = require('../../utils/logger').child('EmailSuppression');
 
+/**
+ * Computes or normalizes the supplied value in suppressionList.
+ * @param {string} email - Value used by normalize.
+ * @returns {*} Result produced by normalize.
+ */
 function normalize(email) {
   return (email || '').trim().toLowerCase();
 }
@@ -36,7 +41,7 @@ async function isSuppressed(email) {
  * of reminders so we stop generating sends to a dead/abusive address.
  *
  * @param {string} email
- * @param {{reason: string, bounceType?: string, source?: string, detail?: string}} opts
+ * @param {{reason: string, bounceType: string, source: string, detail: string}} opts
  */
 async function suppress(email, { reason, bounceType = null, source = null, detail = null } = {}) {
   const addr = normalize(email);
@@ -58,10 +63,22 @@ async function suppress(email, { reason, bounceType = null, source = null, detai
   return record;
 }
 
+/**
+ * Creates or prepares bounce in suppressionList.
+ * @param {string} email - Value used by recordBounce.
+ * @param {object} options - Value used by recordBounce.
+ * @returns {Promise<*>} Result produced by recordBounce.
+ */
 async function recordBounce(email, { bounceType = 'hard', source = null, detail = null } = {}) {
   return suppress(email, { reason: 'bounce', bounceType, source, detail });
 }
 
+/**
+ * Creates or prepares complaint in suppressionList.
+ * @param {string} email - Value used by recordComplaint.
+ * @param {object} options - Value used by recordComplaint.
+ * @returns {Promise<*>} Result produced by recordComplaint.
+ */
 async function recordComplaint(email, { source = null, detail = null } = {}) {
   return suppress(email, { reason: 'complaint', source, detail });
 }

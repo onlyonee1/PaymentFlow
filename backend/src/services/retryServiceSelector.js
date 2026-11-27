@@ -15,6 +15,10 @@ const logger = require('../utils/logger').child('RetryServiceSelector');
 
 let _selected = null; // 'bullmq' | 'mongodb'
 
+/**
+ * Provides the use bull mq operation in retryServiceSelector.
+ * @returns {*} Result produced by useBullMQ.
+ */
 function useBullMQ() {
   return Boolean(process.env.REDIS_HOST);
 }
@@ -34,6 +38,10 @@ function getReplicaCount() {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
+/**
+ * Manages the module lifecycle for retryServiceSelector.
+ * @returns {void} Completes without a return value.
+ */
 function start() {
   if (useBullMQ()) {
     _selected = 'bullmq';
@@ -63,6 +71,10 @@ function start() {
   }
 }
 
+/**
+ * Manages the module lifecycle for retryServiceSelector.
+ * @returns {void} Completes without a return value.
+ */
 function stop() {
   if (_selected === 'mongodb') {
     const { stopRetryWorker } = require('./retryService');
@@ -71,6 +83,10 @@ function stop() {
   // BullMQ shutdown is handled by retryQueueSetup.js gracefulShutdown
 }
 
+/**
+ * Validates running in retryServiceSelector.
+ * @returns {*} Result produced by isRunning.
+ */
 function isRunning() {
   if (_selected === 'mongodb') {
     const { isRetryWorkerRunning } = require('./retryService');
@@ -79,6 +95,10 @@ function isRunning() {
   return false; // BullMQ workers are managed internally
 }
 
+/**
+ * Retrieves selected backend from retryServiceSelector.
+ * @returns {*} Result produced by getSelectedBackend.
+ */
 function getSelectedBackend() {
   return _selected;
 }

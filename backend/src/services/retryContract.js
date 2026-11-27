@@ -49,7 +49,7 @@ const TRANSIENT_MESSAGE_PATTERNS = [
 
 /**
  * Classify an error for the retry decision.
- * @param {{code?: string, message?: string}} error
+ * @param {object} error - Error code and message returned by a provider.
  * @returns {'permanent'|'transient'|'unknown'}
  */
 function classifyError(error) {
