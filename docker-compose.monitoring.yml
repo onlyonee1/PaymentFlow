@@ -58,6 +58,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
+      - loki
     networks:
       - monitoring
 
