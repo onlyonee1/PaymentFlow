@@ -35,6 +35,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "speakeasy": "^2.0.0",
+    "stellar-hd-wallet": "1.0.2",
     "supertest": "^6.3.0"
   },
   "jest": {
@@ -60,7 +61,7 @@
       "^.+\\.[jt]sx?$": "babel-jest"
     },
     "transformIgnorePatterns": [
-      "/node_modules/(?!(@stellar/stellar-sdk)/)"
+      "/node_modules/(?!(@stellar/stellar-sdk|stellar-hd-wallet)/)"
     ],
     "setupFilesAfterEnv": [
       "./tests/setup/blockRealHttp.js"
