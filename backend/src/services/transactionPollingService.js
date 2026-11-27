@@ -105,12 +105,22 @@ async function processTransaction(tx, school, fencingToken) {
   _incFunnel('received', schoolId);
 
   // Extract and validate payment
-  const valid = await extractValidPayment(tx, stellarAddress);
+  const valid = await extractValidPayment(tx, stellarAddress, schoolId);
   if (!valid) {
-    return { processed: false, reason: 'invalid_payment' };
+    const { captureUnmatchedPayments } = require('./orphanedPaymentIngestion');
+    const captured = await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+    return { processed: false, reason: captured ? 'orphaned_payment' : 'invalid_payment' };
   }
 
   const { payOp, memo, asset } = valid;
+  // Find student by memo (studentId)
+  const student = await Student.findOne({ schoolId, studentId: memo });
+  if (!student) {
+    const { captureUnmatchedPayments } = require('./orphanedPaymentIngestion');
+    await captureUnmatchedPayments(tx, schoolId, stellarAddress);
+    return { processed: false, reason: 'student_not_found' };
+  }
+
   // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
   const paymentAmount = normalizeToNumber(payOp.amount);
 
@@ -132,17 +142,6 @@ async function processTransaction(tx, school, fencingToken) {
 
   // Funnel: payment passed amount/memo validation
   _incFunnel('validated', schoolId);
-
-  const txDate = new Date(tx.created_at);
-  const intent = parentPaymentMemoPattern.test(memo)
-    ? await PaymentIntent.findOne({ schoolId, memo, createdAt: { $lte: txDate }, expiresAt: { $gt: txDate } })
-    : null;
-  const studentId = intent?.studentId || memo;
-  const student = await Student.findOne({ schoolId, studentId });
-  if (!student) {
-    logger.warn('Student not found for memo', { txHash: tx.hash, correlationId, schoolId, memo });
-    return { processed: false, reason: 'student_not_found' };
-  }
 
   // Funnel: student matched by memo
   _incFunnel('matched', schoolId);

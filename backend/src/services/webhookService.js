@@ -395,7 +395,8 @@ async function _sendToUrl({
     // #868: record success metric
     try {
       const { recordDeliverySuccess } = require('../metrics/webhookMetrics');
-      recordDeliverySuccess(event, durationMs, response.status);
+      if (schoolId) recordDeliverySuccess(event, durationMs, response.status, schoolId);
+      else recordDeliverySuccess(event, durationMs, response.status);
     } catch (_) {}
 
     if (endpointId) {

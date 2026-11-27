@@ -59,13 +59,19 @@ const {
   validateSubmitTransaction,
   validatePagination,
 } = require('../middleware/validate');
+const { createBatchPaymentIntent, confirmBatchPayment } = require('../controllers/batchPaymentController');
 const { resolveSchool } = require('../middleware/schoolContext');
 const idempotencyMiddleware = require('../middleware/idempotency');
 const { auditContext } = require('../middleware/auditContext');
-const { strictLimiter, verifyLimiter, syncLimiter } = require('../middleware/rateLimiter');
+const { rl, strictLimiter, verifyLimiter, syncLimiter } = require('../middleware/rateLimiter');
 const { contractPaused } = require('../middleware/contractPaused');
 
+const { getBulkPaymentStatus } = require('../controllers/bulkPaymentStatusController');
+
 const router = express.Router();
+const bulkStatusLimiter = rl(60_000, 20, undefined, {
+  keyGenerator: (req) => `bulk-payment-status:${req.schoolId}`,
+});
 
 // Idempotency middleware for critical payment endpoints that must fail-closed
 // when the datastore becomes unreachable to prevent duplicate submissions.
@@ -174,6 +180,14 @@ router.post(
   createPaymentIntent,
 );
 router.post(
+  "/batch-intent",
+  resolveSchool,
+  contractPaused,
+  idempotencyMiddleware({ criticalPaymentEndpoints: true, schoolScoped: true }),
+  createBatchPaymentIntent,
+);
+router.post("/batch-confirm", resolveSchool, contractPaused, confirmBatchPayment);
+router.post(
   "/submit",
   validateSubmitTransaction,
   idempotency,
@@ -187,11 +201,13 @@ router.use(resolveSchool);
 
 // Payment read endpoints now require authentication (Issue #1040)
 router.get("/", requireSchoolAuth(), validatePagination, getAllPayments);
+router.post("/bulk-status", requireSchoolAuth(), bulkStatusLimiter, getBulkPaymentStatus);
 router.get("/summary", requireSchoolAuth(), getPaymentSummary);
 router.get("/accepted-assets", requireSchoolAuth(), getAcceptedAssets);
 router.get("/limits", requireSchoolAuth(), getPaymentLimitsEndpoint);
 router.get("/sync/status", requireSchoolAuth(), getSyncStatus);
 router.get("/events", requireSchoolAuth(), streamPaymentEvents);
+router.get("/stream", requireSchoolAuth(), streamPaymentEvents);
 router.get("/overpayments", requireSchoolAuth(), getOverpayments);
 router.get("/suspicious", requireSchoolAuth(), getSuspiciousPayments);
 router.get("/pending", requireSchoolAuth(), getPendingPayments);

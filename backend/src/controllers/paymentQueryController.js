@@ -388,19 +388,7 @@ async function getExchangeRates(req, res, next) {
     const { _getRates } = require('../services/currencyConversionService');
     const rateEntry = await _getRates(targetCurrency);
 
-    if (!rateEntry) {
-      return res.json({
-        available: false,
-        currency: targetCurrency,
-        rates: null,
-        lastFetchedAt: null,
-        stale: false,
-        staleAge: null,
-        message: 'Price feed is currently unavailable. Amounts are shown in XLM only.',
-      });
-    }
-
-    res.json({
+    const payload = rateEntry ? {
       available: true,
       currency: targetCurrency,
       rates: rateEntry.rates,
@@ -408,7 +396,24 @@ async function getExchangeRates(req, res, next) {
       stale: rateEntry.stale || false,
       staleAge: rateEntry.staleAge || null,
       rateTimestamp: rateEntry.fetchedAt.toISOString(),
-    });
+    } : {
+      available: false,
+      currency: targetCurrency,
+      rates: null,
+      lastFetchedAt: null,
+      stale: false,
+      staleAge: null,
+      message: 'Price feed is currently unavailable. Amounts are shown in XLM only.',
+    };
+
+    // The same URL can serve different school currencies. Request credentials
+    // also affect access, so shared caches must key on them.
+    for (const field of ['X-School-ID', 'X-School-Slug', 'Authorization', 'Cookie']) {
+      res.vary(field);
+    }
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+    res.removeHeader('Pragma');
+    res.json(payload);
   } catch (err) {
     next(err);
   }
