@@ -72,6 +72,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Standalone Redis for local development and CI smoke tests.
+    # For high-availability (Sentinel) mode in local dev, use:
+    #   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up
+    # Set REDIS_SENTINEL_HOSTS in backend env to activate the Sentinel-aware
+    # client (backend/src/redisClient.js). See deploy/runbook-redis-sentinel.md.
     networks:
       - backend-db
     mem_limit: ${REDIS_MEM_LIMIT:-128m}
