@@ -337,6 +337,8 @@ async function getDisputeById(req, res, next) {
  * Lifts the student's disputeHold when the dispute reaches a terminal state (#993).
  */
 async function resolveDispute(req, res, next) {
+  let claim;
+  let writeStarted = false;
   try {
     const { schoolId, user } = req;
     const { resolutionNote, status, assignedTo, evidence } = req.body;
@@ -361,6 +363,18 @@ async function resolveDispute(req, res, next) {
     }
     if (resolutionNoteTrimmed.length > 1000) {
       return res.status(400).json({ error: 'resolutionNote must not exceed 1000 characters.', code: 'VALIDATION_ERROR' });
+    }
+
+    const eventId = req.headers?.['x-event-id'] ?? req.body.eventId;
+    if (eventId !== undefined || req.disputeSync) {
+      if (typeof eventId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(eventId)) {
+        return res.status(400).json({ error: 'A valid dispute sync event ID is required.' });
+      }
+      const { claimDisputeEvent } = require('../services/disputeSyncGuard');
+      claim = await claimDisputeEvent(req, eventId);
+      if (claim.duplicate) return res.status(200).json({ duplicate: true });
+      if (claim.conflict) return res.status(409).json({ error: 'This event ID already has a different payload.' });
+      if (claim.processing) return res.status(503).set('Retry-After', '1').json({ error: 'This event is still being processed.' });
     }
 
     // Load current dispute to know its existing status (#895 — validate transition)
@@ -405,6 +419,7 @@ async function resolveDispute(req, res, next) {
       update.$push = { evidence: { $each: evidence } };
     }
 
+    writeStarted = true;
     const dispute = await Dispute.findOneAndUpdate(
       { _id: req.params.id, schoolId },
       update,
@@ -461,8 +476,15 @@ async function resolveDispute(req, res, next) {
       logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
     }
 
+    if (claim?.complete) await claim.complete();
     res.json(dispute);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    if (!writeStarted && claim?.release) {
+      await claim.release().catch(err => logger.warn('Failed to release dispute sync event', { error: err.message }));
+    }
+  }
 }
 
 /**

@@ -21,6 +21,10 @@ router.get('/:id',      getDisputeById);
 
 // Only admins can update dispute status / resolve / add evidence
 router.patch('/:id/resolve', requireAdminAuth, auditContext, resolveDispute);
+router.post('/:id/sync', requireAdminAuth, auditContext, (req, res, next) => {
+  req.disputeSync = true;
+  return resolveDispute(req, res, next);
+});
 router.post('/:id/evidence', requireAdminAuth, auditContext, addEvidence);
 
 module.exports = router;
