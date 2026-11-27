@@ -1,8 +1,9 @@
 'use strict';
 
-// #467 — GET /api/students always returns { students, total, page, pages }
+// #467 — GET /api/students always returns { students, pagination }
 // Tests the controller directly to avoid app-level dependency issues.
 
+process.env.JWT_SECRET ||= 'test-only-student-pagination-secret';
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
@@ -62,30 +63,22 @@ describe('#467 GET /api/students consistent response shape', () => {
     return { req, res, next };
   }
 
-  it('always returns { students, total, page, pages }', async () => {
+  it('always returns { students, pagination }', async () => {
     const { req, res, next } = makeReqRes();
     await getAllStudents(req, res, next);
 
     expect(res.json).toHaveBeenCalledTimes(1);
     const body = res.json.mock.calls[0][0];
-    expect(body).toHaveProperty('students');
-    expect(body).toHaveProperty('total');
-    expect(body).toHaveProperty('page');
-    expect(body).toHaveProperty('pages');
-    expect(Array.isArray(body.students)).toBe(true);
-    expect(typeof body.total).toBe('number');
-    expect(typeof body.page).toBe('number');
-    expect(typeof body.pages).toBe('number');
+    expect(body.students).toEqual(mockStudents);
+    expect(body.pagination).toEqual({ limit: 50, nextCursor: null, prevCursor: null, hasMore: false });
   });
 
-  it('returns correct pagination values', async () => {
-    const { req, res, next } = makeReqRes({ page: '1', limit: '10' });
+  it('applies the requested limit without a numeric offset', async () => {
+    const { req, res, next } = makeReqRes({ page: '2', limit: '10' });
     await getAllStudents(req, res, next);
-
-    const body = res.json.mock.calls[0][0];
-    expect(body.page).toBe(1);
-    expect(body.total).toBe(2);
-    expect(body.pages).toBe(1); // ceil(2/10) = 1
+    expect(res.json.mock.calls[0][0].pagination.limit).toBe(10);
+    expect(mockChainable.limit).toHaveBeenCalledWith(11);
+    expect(mockChainable.skip).not.toHaveBeenCalled();
   });
 
   it('response is never a bare array', async () => {

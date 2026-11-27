@@ -6,7 +6,7 @@ const FeeStructure = require('../models/feeStructureModel');
 const { POOL_CONFIG } = require('../config/database');
 
 function localDateStartUtc(dateString, timezone) {
-  const [year, month, day] = dateString.split('-').map(Number);
+  const [year, month, day] = dateString.slice(0, 10).split('-').map(Number);
   const target = Date.UTC(year, month - 1, day);
   let candidate = target;
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -32,7 +32,7 @@ function localDateStartUtc(dateString, timezone) {
 }
 
 function nextDateString(dateString) {
-  const date = new Date(`${dateString}T00:00:00.000Z`);
+  const date = new Date(`${dateString.slice(0, 10)}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
@@ -144,18 +144,46 @@ function paymentClassStages({ className, classAt, timezone }) {
  *
  * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
  */
-async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC', className, classAt } = {}) {
-  const match = confirmedPaymentMatch({ schoolId, startDate, endDate, timezone });
+const UNCONFIRMED = '__unconfirmed';
+
+function reportDateRange(startDate, endDate, timezone) {
+  return {
+    ...(startDate ? {
+      $gte: startDate.length === 10 ? localDateStartUtc(startDate, timezone) : new Date(startDate),
+    } : {}),
+    ...(endDate ? endDate.length === 10
+      ? { $lt: localDateStartUtc(nextDateString(endDate), timezone) }
+      : { $lte: new Date(endDate) } : {}),
+  };
+}
+
+async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC', groupBy } = {}) {
+  const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
+  const field = groupBy === 'createdAt' ? 'createdAt' : 'confirmedAt';
+  const range = reportDateRange(startDate, endDate, timezone);
+  const hasRange = Boolean(startDate || endDate);
+
+  if (groupBy === 'confirmedAt') {
+    delete match.status;
+    match.$or = [
+      { status: 'SUCCESS', confirmedAt: hasRange ? range : { $ne: null } },
+      {
+        status: { $in: ['SUCCESS', 'PENDING'] },
+        confirmedAt: null,
+        ...(hasRange ? { createdAt: range } : {}),
+      },
+    ];
+  } else if (hasRange) {
+    match[field] = range;
+  }
+
+  const date = groupBy ? `$${field}` : { $ifNull: ['$confirmedAt', '$updatedAt'] };
   const rows = await Payment.aggregate([
     { $match: match },
     ...(className ? paymentClassStages({ className, classAt, timezone }) : []),
     {
       $group: {
-        // #1362 — confirmedAt may be null for payments recorded but not yet
-        // confirmed (e.g. recorded via sync before the horizon confirmation).
-        // Fall back to updatedAt so these payments are bucketed to a real date
-        // rather than grouped under a null key and sorted before all real dates.
-        _id: { $dateToString: { format: '%Y-%m-%d', date: { $ifNull: ['$confirmedAt', '$updatedAt'] }, timezone } },
+        _id: { $dateToString: { format: '%Y-%m-%d', date, timezone, onNull: UNCONFIRMED } },
         totalAmount:   { $sum: '$amount' },
         paymentCount:  { $sum: 1 },
         validCount:    { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'valid'] }, 1, 0] } },
@@ -183,7 +211,7 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
     },
     { $sort: { date: 1 } },
   ], {
-    hint: { schoolId: 1, status: 1, confirmedAt: -1 },
+    ...(!groupBy ? { hint: { schoolId: 1, status: 1, confirmedAt: -1 } } : {}),
     maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS,
   });
 
@@ -196,11 +224,13 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
  *
  * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
  */
-async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', className, classAt } = {}) {
-  const classFilter = { className, classAt, timezone };
-  const byDate = await aggregateByDate({ schoolId, startDate, endDate, ...classFilter });
+async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', groupBy } = {}) {
+  const rows = await aggregateByDate({ schoolId, startDate, endDate, timezone, groupBy });
+  const byDate = rows.map((row) => row.date === UNCONFIRMED
+    ? { ...row, date: 'Pending Confirmation', bucket: UNCONFIRMED }
+    : row);
 
-  const totals = byDate.reduce(
+  const totals = rows.filter((row) => row.date !== UNCONFIRMED).reduce(
     (acc, row) => {
       acc.totalAmount    = parseFloat((acc.totalAmount + row.totalAmount).toFixed(7));
       acc.paymentCount  += row.paymentCount;
@@ -212,14 +242,15 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', 
     { totalAmount: 0, paymentCount: 0, validCount: 0, overpaidCount: 0, underpaidCount: 0 }
   );
 
-  const match = confirmedPaymentMatch({ schoolId, startDate, endDate, timezone });
-  const paidStudentIds = className
-    ? (await Payment.aggregate([
-      { $match: match },
-      ...paymentClassStages(classFilter),
-      { $group: { _id: '$studentId' } },
-    ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS })).map(({ _id }) => _id)
-    : await Payment.distinct('studentId', match);
+  // Count students who have fully paid within the period
+  const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
+  const field = groupBy === 'createdAt' ? 'createdAt' : 'confirmedAt';
+  const dateFilter = startDate || endDate
+    ? { [field]: reportDateRange(startDate, endDate, timezone) }
+    : groupBy === 'confirmedAt' ? { confirmedAt: { $ne: null } } : {};
+  Object.assign(match, dateFilter);
+
+  const paidStudentIds = await Payment.distinct('studentId', match);
   const fullyPaidCount = await Student.countDocuments({
     schoolId,
     studentId: { $in: paidStudentIds },
@@ -248,7 +279,9 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', 
               paymentCount: { $sum: 1 },
             },
           },
-          { $set: { _reportClass: '$_id' } },
+          {
+            $match: dateFilter,
+          },
         ],
       },
     },
@@ -278,14 +311,15 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', 
   // Calculate dateRangeDays to indicate actual range returned
   let dateRangeDays = null;
   if (startDate && endDate) {
-    const start = new Date(startDate + 'T00:00:00.000Z');
-    const end = new Date(endDate + 'T00:00:00.000Z');
-    dateRangeDays = (end - start) / (1000 * 60 * 60 * 24) + 1;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    dateRangeDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
   }
 
   return {
     generatedAt: new Date().toISOString(),
     schoolId,
+    timezone,
     period: { startDate: startDate || null, endDate: endDate || null },
     dateRangeDays,
     summary: { ...totals, fullyPaidStudentCount: fullyPaidCount },
@@ -341,7 +375,7 @@ function reportToCsv(report) {
   lines.push(`Fully Paid Students,${csvEscape(report.summary.fullyPaidStudentCount)}`);
   lines.push('');
   lines.push('--- Daily Breakdown ---');
-  lines.push('Date,Total Amount,Payment Count,Valid,Overpaid,Underpaid,Unique Students');
+  lines.push(`Date (${report.timezone || 'UTC'}),Total Amount,Payment Count,Valid,Overpaid,Underpaid,Unique Students`);
   for (const row of report.byDate) {
     lines.push([
       csvEscape(row.date),

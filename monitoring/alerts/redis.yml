@@ -1,0 +1,80 @@
+groups:
+  - name: redis
+    interval: 60s
+    rules:
+      # ── Warning: Redis memory above 80% ───────────────────────────────────
+      # redis_memory_used_bytes and redis_memory_max_bytes are exported by
+      # oliver006/redis_exporter (job: redis in prometheus.yml).
+      # A maxmemory of 0 (unlimited) means redis_memory_max_bytes is 0;
+      # the clamp_min avoids a division-by-zero false positive and suppresses
+      # the alert for unconstrained instances — only instances with an
+      # explicit maxmemory configured will fire.
+      - alert: RedisMemoryHigh
+        expr: >
+          (
+            redis_memory_used_bytes
+              /
+            clamp_min(redis_memory_max_bytes, 1)
+          ) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage above 80%"
+          description: >
+            Redis is using {{ $value | humanizePercentage }} of its configured
+            maxmemory. At current growth rate evictions may start, causing rate
+            limit counters and idempotency keys to be dropped. Review memory
+            usage and consider increasing maxmemory or purging stale keys.
+
+      # ── Critical: Redis memory above 95% ─────────────────────────────────
+      - alert: RedisMemoryCritical
+        expr: >
+          (
+            redis_memory_used_bytes
+              /
+            clamp_min(redis_memory_max_bytes, 1)
+          ) > 0.95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis memory critically high — evictions imminent"
+          description: >
+            Redis is using {{ $value | humanizePercentage }} of its configured
+            maxmemory. Key evictions are likely already occurring. Rate limit
+            counters and session data may be lost. Page on-call.
+
+      # ── Warning: Redis replication — no connected replicas ────────────────
+      # redis_connected_slaves is 0 on a standalone instance or when all
+      # replicas have disconnected. In Sentinel mode this means the primary
+      # has no replication target and a failover will lose un-replicated writes.
+      - alert: RedisNoReplicasConnected
+        expr: redis_connected_slaves == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis has no connected replicas"
+          description: >
+            The Redis primary has no connected replicas. If this is a Sentinel
+            deployment, an automatic failover cannot be completed safely until
+            at least one replica reconnects. Check replica container health and
+            network connectivity between sentinels and replicas.
+
+      # ── Warning: Redis replication lag above 5 s ──────────────────────────
+      # redis_replication_lag is exposed by redis_exporter when replication is
+      # configured. A lag above 5 s means a forced failover would lose up to
+      # 5 s of writes — the threshold defined in the Sentinel quorum config.
+      - alert: RedisReplicationLagHigh
+        expr: redis_replication_lag > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis replication lag above 5 s"
+          description: >
+            Redis replication lag is {{ $value | printf "%.1f" }}s — above the
+            5 s threshold. A failover at this lag would lose writes not yet
+            replicated to the replica. Investigate network latency between
+            primary and replica, or disk I/O contention on the primary.

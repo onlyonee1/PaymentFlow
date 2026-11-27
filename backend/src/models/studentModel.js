@@ -64,6 +64,8 @@ const studentSchema = new mongoose.Schema(
     lastReminderSentAt: { type: Date, default: null },
     reminderCount: { type: Number, default: 0 },
     reminderOptOut: { type: Boolean, default: false },
+    paymentConfirmationOptOut: { type: Boolean, default: false },
+    disputeUpdateOptOut: { type: Boolean, default: false },
     parentEmailSuppressed: { type: Boolean, default: false },
     parentEmailSuppressionReason: { type: String, default: null },
     parentEmailSuppressedAt: { type: Date, default: null },
@@ -130,6 +132,7 @@ studentSchema.virtual('totalPaidFromFees').get(function () {
   return this.totalPaid || 0;
 });
 
+studentSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 studentSchema.index({ studentId: 1, schoolId: 1 }, { unique: true });
 studentSchema.index({ schoolId: 1, class: 1 });
 studentSchema.index({ schoolId: 1, feePaid: 1 });

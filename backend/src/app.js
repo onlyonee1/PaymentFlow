@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { shutdownTracing } = require('./tracing/bootstrap');
 const config = require('./config');
 const express = require('express');
 const cors = require('cors');
@@ -21,6 +22,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const orphanedPaymentRoutes = require('./routes/orphanedPaymentRoutes');
 const feeRoutes = require('./routes/feeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
@@ -71,7 +73,7 @@ const { requestLogger } = require('./middleware/requestLogger');
 const { correlationIdMiddleware } = require('./middleware/correlationId');
 const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRequestHandler');
 const { requireAdminAuth } = require('./middleware/auth');
-const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
+const { jsonDepthGuard, sanitizeBody, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
 const { healthCheck, healthLive, healthReady } = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
@@ -93,9 +95,9 @@ try {
 
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-const { parseAllowedOrigins } = require('./utils/corsOrigins');
+const { createOriginPolicy } = require('./utils/corsOrigins');
 
-const allowedOrigins = parseAllowedOrigins();
+const originPolicy = createOriginPolicy();
 
 const app = express();
 
@@ -107,14 +109,33 @@ const app = express();
 // (see config/index.js) instead of silently becoming NaN here.
 app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
+// Correlation ID must be resolved before requestLogger so the logger uses the
+// same ID that will be reflected in the response header.
+app.use(correlationIdMiddleware);
+app.use((req, res, next) => {
+  const json = res.json;
+  res.json = function sendJson(body) {
+    if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+      return json.call(this, { ...body, requestId: req.requestId });
+    }
+    return json.call(this, body);
+  };
+  next();
+});
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use((req, res, next) => {
+  res.vary('Origin');
+  next();
+});
 app.use(cors({
-  origin: allowedOrigins,
+  origin: originPolicy,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID', 'traceparent', 'tracestate'],
   exposedHeaders: ['X-Correlation-ID'],
   credentials: true,
+  maxAge: 86400,
 }));
+app.options('*', (_req, res) => res.sendStatus(204));
 app.use(cookieParser());
 // The backend serves only JSON API responses — no HTML, scripts, or styles.
 // CSP directives for HTML content (scriptSrc, styleSrc, imgSrc, etc.) are
@@ -137,9 +158,6 @@ app.use(express.json({
     req.rawBody = buf.toString('utf8');
   },
 }));
-// Correlation ID must be resolved before requestLogger so the logger uses the
-// same ID that will be reflected in the response header.
-app.use(correlationIdMiddleware);
 const API_VERSION = process.env.API_VERSION || '1.0.0';
 app.use((req, res, next) => {
   res.setHeader('X-API-Version', API_VERSION);
@@ -150,10 +168,10 @@ app.use(requestLogger());
 // ── Cache-Control: no-store on auth and sensitive data routes ─────────────────
 // Prevents intermediaries (CDNs, shared proxies) from caching tokens,
 // payment data, audit logs, and other sensitive JSON responses.
-const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)\b/;
+const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)(?:\/|$)/i;
 app.use((req, res, next) => {
   if (SENSITIVE_PATH_RE.test(req.path)) {
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Pragma', 'no-cache');
   }
   next();
@@ -161,6 +179,7 @@ app.use((req, res, next) => {
 
 // ── JSON depth / array-bomb guard + query-param de-pollution ──────────────────
 app.use(jsonDepthGuard);
+app.use(sanitizeBody);
 app.use(deduplicateQueryParams);
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({
@@ -185,11 +204,15 @@ app.use(maintenanceMode);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
 app.use('/api/students', studentRoutes);
+app.use('/api/payments/orphaned', orphanedPaymentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
+app.use('/api/parent-pay', require('./routes/parentPaymentRoutes'));
 app.use('/api/reports', reportRoutes);
+app.get('/unsubscribe', require('./controllers/reminderController').unsubscribeViaToken);
 app.use('/api/reminders', reminderRoutes);
 app.use('/api/disputes', disputeRoutes);
+app.use('/api/sse', require('./routes/sse'));
 app.use('/api/source-rules', sourceValidationRuleRoutes);
 app.use('/api/receipts', receiptsRoutes);
 app.use('/api/fee-adjustments', feeAdjustmentRoutes);
@@ -214,6 +237,24 @@ app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);
 app.get('/health/ready', healthReady);
+app.get('/worker/health', (req, res) => {
+  const { checkLiveness } = require('./services/workerHeartbeat');
+  const liveness = checkLiveness();
+  const now = Date.now();
+  const staleLimitMs = parseInt(process.env.WORKER_HEALTH_STALE_MS || '60000', 10);
+  const staleWorkers = Object.entries(liveness.workers).filter(([, worker]) => {
+    if (worker.lastBeatMs == null) return true;
+    return now - worker.lastBeatMs > staleLimitMs;
+  });
+  const healthy = staleWorkers.length === 0;
+  return res.status(healthy ? 200 : 503).json({
+    status: healthy ? 'healthy' : 'unhealthy',
+    timestamp: new Date().toISOString(),
+    staleLimitMs,
+    staleWorkers: staleWorkers.map(([name]) => name),
+    workers: liveness.workers,
+  });
+});
 
 // Issue #671: OpenAPI/Swagger documentation
 try {
@@ -262,6 +303,8 @@ connectDatabase().then(async () => {
     logger.error('[Startup] Failed to resolve signer master key from SIGNER_KEY_SOURCE', { error: err.message });
     throw err;
   }
+
+  await require('./services/providers/registry').initializePaymentProviders();
 
   // Start heap monitoring to detect memory leaks early
   startHeapMonitoring();
@@ -320,11 +363,17 @@ connectDatabase().then(async () => {
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
     startJobRecoveryScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').startSignerRotationWorker();
+    }
   };
 
   const stopLeaderSchedulers = () => {
     logger.info('[Leader] Stopping leader-only schedulers');
     stopConsistencyScheduler();
+    if (process.env.STELLAR_MANAGED_SIGNER_ACCOUNT) {
+      require('./services/stellarSignerRotation').stopSignerRotationWorker();
+    }
     stopReminderScheduler();
     stopSessionCleanupScheduler();
     stopReconciliationScheduler();
@@ -387,6 +436,13 @@ const PORT = config.PORT;
 const server = require.main === module
   ? app.listen(PORT, () => logger.info(`Server running on port ${PORT}`))
   : { close: (cb) => cb && cb() };
+const workerHealthServer = require.main === module
+  ? require('./workerHealthServer')
+      .createWorkerHealthServer()
+      .listen(parseInt(process.env.WORKER_HEALTH_PORT || '9090', 10), () => {
+        logger.info(`Worker health server running on port ${process.env.WORKER_HEALTH_PORT || '9090'}`);
+      })
+  : null;
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 const {
@@ -453,6 +509,9 @@ async function shutdown(signal) {
     const serverDrainDurationMs = Date.now() - serverCloseStart;
     logger.info('HTTP server drained in-flight requests and closed', { durationMs: serverDrainDurationMs });
     const mongoCloseStart = Date.now();
+    if (workerHealthServer) {
+      workerHealthServer.close();
+    }
     try {
       await mongoose.disconnect();
       const mongoDurationMs = Date.now() - mongoCloseStart;
@@ -461,6 +520,7 @@ async function shutdown(signal) {
         mongoDurationMs,
         totalShutdownDurationMs,
       });
+      await runStep('shutdownTracing', shutdownTracing);
       clearTimeout(forceExitTimer);
       process.exit(0);
     } catch (err) {

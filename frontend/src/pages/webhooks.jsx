@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import RequireAdmin from "../components/RequireAdmin";
 import PageHero from "../components/PageHero";
@@ -35,6 +36,7 @@ const EVENT_OPTIONS = [
 function WebhooksPage() {
   const { t } = useTranslation();
   const [endpoints, setEndpoints] = useState([]);
+  const [pagination, setPagination] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -59,12 +61,14 @@ function WebhooksPage() {
     fetchEndpoints();
   }, []);
 
-  const fetchEndpoints = async () => {
+  const fetchEndpoints = async (cursor = null) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiCall('GET', '/webhook-endpoints', null, signal);
+      const path = cursor ? `/webhook-endpoints?cursor=${encodeURIComponent(cursor)}` : '/webhook-endpoints';
+      const data = await apiCall('GET', path, null, signal);
       setEndpoints(data.endpoints || []);
+      setPagination(data);
     } catch (err) {
       // Silently ignore requests cancelled on unmount or navigation.
       if (err?.name === 'AbortError') return;
@@ -169,6 +173,7 @@ function WebhooksPage() {
     <RequireAdmin>
       <div className="page">
         <PageHero title={t("webhooks.title")} subtitle={t("webhooks.subtitle")} />
+        <Link href="/admin/webhooks">{t("webhooks.deliveryHistory", { defaultValue: "Delivery history" })}</Link>
 
         {error && (
           <div className="alert alert-danger">
@@ -186,6 +191,14 @@ function WebhooksPage() {
             </div>
           </div>
           <div className="card-body">
+            {(pagination.prevCursor || pagination.nextCursor) && (
+              <nav>
+                <button className="page-btn" disabled={loading || !pagination.prevCursor}
+                  onClick={() => fetchEndpoints(pagination.prevCursor)}>{t('actions.previousPage')}</button>
+                <button className="page-btn" disabled={loading || !pagination.nextCursor}
+                  onClick={() => fetchEndpoints(pagination.nextCursor)}>{t('actions.nextPage')}</button>
+              </nav>
+            )}
             {loading ? (
               <SkeletonTable columns={["100%", 70, 65, 110, 70, 110, 60]} rows={5} className="table table-sm" />
             ) : endpoints.length === 0 ? (
@@ -239,7 +252,7 @@ function WebhooksPage() {
                               disabled={testingId === ep._id}
                               title={t("webhooks.sendTestEvent")}
                             >
-                              <IconRefresh />
+                              <IconRefreshCw />
                             </button>
                             <button
                               className="btn btn-outline-secondary"

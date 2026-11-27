@@ -1,5 +1,7 @@
 'use strict';
 
+const { withVersion, versionFilter, staleOrMissing } = require('../middleware/optimisticLock');
+
 const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
 const { get, set, del, KEYS, TTL } = require('../cache');
@@ -7,9 +9,11 @@ const csv = require('csv-parser');
 const { Readable } = require('stream');
 const { logAudit } = require('../services/auditService');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
-const { encodeListCursor, decodeListCursor, cursorCondition } = require('../utils/listCursor');
+const { paginateList } = require('../utils/listCursor');
 const { validateDecimalAmount } = require('../utils/decimalPrecision');
 const { classAssignment, getClassHistory } = require('../utils/studentClassHistory');
+
+const { studentLimit, quotaUsage, quotaExceeded, upgradeUrl } = require('../services/studentQuotaService');
 
 async function registerStudent(req, res, next) {
   // Declared in the function scope (not inside try) so the 11000 duplicate-key
@@ -47,18 +51,8 @@ async function registerStudent(req, res, next) {
       return next(err);
     }
 
-    // Check student quota (reuse the school already resolved by resolveSchool
-    // instead of a second lookup).
-    const school = req.school;
-    if (school && school.maxStudents) {
-      const studentCount = await Student.countDocuments({ schoolId, deletedAt: null });
-      if (studentCount >= school.maxStudents) {
-        const err = new Error(`School has reached maximum student quota of ${school.maxStudents}`);
-        err.code = 'STUDENT_QUOTA_EXCEEDED';
-        err.status = 403;
-        return next(err);
-      }
-    }
+    const usage = await quotaUsage(req.school);
+    if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(res, usage);
 
     // Check if student was previously soft-deleted
     const deletedStudent = await Student.findOne({ schoolId, studentId }).includeDeleted();
@@ -164,8 +158,7 @@ async function registerStudent(req, res, next) {
 
 async function getAllStudents(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit, 10) || 50);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const filter = { schoolId: req.schoolId };
 
     if (req.query.class) {
@@ -193,44 +186,14 @@ async function getAllStudents(req, res, next) {
       filter.$or = [{ name: re }, { studentId: re }];
     }
 
-    const legacyOffset = req.legacyOffsetPagination && !req.query.cursor;
-    let students;
-    let pagination;
-
-    if (legacyOffset) {
-      const skip = (page - 1) * limit;
-      const [offsetStudents, total] = await Promise.all([
-        Student.find(filter, req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 })
-          .sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit),
-        Student.countDocuments(filter),
-      ]);
-      students = offsetStudents;
-      pagination = { page, limit, total, pages: Math.ceil(total / limit), hasNext: page < Math.ceil(total / limit), hasPrev: page > 1 };
-    } else {
-      const cursorFilters = {
-        schoolId: req.schoolId,
-        class: req.query.class || null,
-        status: req.query.status || null,
-        search: req.query.search || null,
-      };
-      const cursorPayload = req.query.cursor ? decodeListCursor(req.query.cursor, cursorFilters) : null;
-      const cursorFilter = cursorPayload
-        ? { $and: [filter, cursorCondition(cursorPayload)] }
-        : filter;
-      const results = await Student.find(cursorFilter, req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 })
-        .sort({ createdAt: -1, _id: -1 })
-        .limit(limit + 1);
-      const hasNextPage = results.length > limit;
-      students = results.slice(0, limit);
-      pagination = {
-        limit,
-        nextCursor: hasNextPage && students.length
-          ? encodeListCursor(students[students.length - 1], cursorFilters)
-          : null,
-        hasPreviousPage: Boolean(cursorPayload),
-        hasNextPage,
-      };
-    }
+    const projection = req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 };
+    const { items: students, pagination } = await paginateList({
+      find: (query) => Student.find(query, projection),
+      scope: 'students',
+      filter,
+      cursor: req.query.cursor,
+      limit,
+    });
 
     res.json({ students, pagination });
   } catch (err) {
@@ -328,6 +291,9 @@ async function restoreStudent(req, res, next) {
       return next(err);
     }
 
+    const usage = await quotaUsage(req.school);
+    if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(res, usage);
+
     const before = student.toObject();
     const previousDeletedAt = student.deletedAt;
 
@@ -392,20 +358,14 @@ async function getDeletedStudentPayments(req, res, next) {
 
     const Payment = require('../models/paymentModel');
 
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const skip = (page - 1) * limit;
-
-    // Include payments regardless of studentDeleted flag — this is the audit path
-    const [total, payments] = await Promise.all([
-      Payment.countDocuments({ schoolId: req.schoolId, studentId }).includeDeleted(),
-      Payment.find({ schoolId: req.schoolId, studentId })
-        .includeDeleted()
-        .sort({ confirmedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
+    const { items: payments, pagination } = await paginateList({
+      find: (query) => Payment.find(query).includeDeleted().lean(),
+      scope: 'deleted-student-payments',
+      filter: { schoolId: req.schoolId, studentId },
+      cursor: req.query.cursor,
+      limit,
+    });
 
     res.json({
       student: {
@@ -416,9 +376,7 @@ async function getDeletedStudentPayments(req, res, next) {
         isDeleted: student.deletedAt !== null,
       },
       payments,
-      total,
-      page,
-      pages: Math.ceil(total / limit),
+      pagination,
     });
   } catch (err) {
     next(err);
@@ -460,37 +418,20 @@ async function updateStudent(req, res, next) {
       update.feeAmount = amount.value.toNumber();
     }
     if (reminderOptOut !== undefined) update.reminderOptOut = Boolean(reminderOptOut);
+    for (const field of ['paymentConfirmationOptOut', 'disputeUpdateOptOut']) {
+      if (req.body[field] === undefined) continue;
+      update[field] = req.body[field];
+    }
     if (graduatedAt !== undefined) update.graduatedAt = graduatedAt;
 
-    const filter = { schoolId: req.schoolId, studentId };
-    const classChanged = className !== undefined && className !== original.class;
-    if (className !== undefined) {
-      // Guard the class projection even when an unchanged class is submitted.
-      filter.class = original.class;
-      const historyLength = original.classHistory?.length ?? 0;
-      filter[`classHistory.${historyLength}`] = { $exists: false };
-      if (historyLength > 0) {
-        filter[`classHistory.${historyLength - 1}.from`] = original.classHistory.at(-1).from;
-      }
-    }
-    if (classChanged) {
-      const history = getClassHistory(original);
-      const current = history.at(-1);
-      const from = new Date(Math.max(Date.now(), new Date(current.from).getTime() + 1));
-      update.classHistory = [
-        ...history.slice(0, -1),
-        { ...current, to: from },
-        classAssignment(className, from, req.auditContext?.performedBy ?? req.user?.userId),
-      ];
-    }
+    const target = { schoolId: req.schoolId, studentId };
+    const student = await Student.findOneAndUpdate(
+      { ...target, ...versionFilter(req.expectedVersion) },
+      { $set: update, $inc: { __v: 1 } },
+      { new: true, runValidators: true },
+    );
 
-    const student = await Student.findOneAndUpdate(filter, update, { new: true, runValidators: true });
-    if (!student) {
-      return res.status(409).json({
-        error: 'Student changed while this update was in progress. Reload the student and try again.',
-        code: 'STUDENT_UPDATE_CONFLICT',
-      });
-    }
+    if (!student) return staleOrMissing(res, next, Student.findOne(target));
 
     del(KEYS.student(studentId));
     if (classChanged) {
@@ -517,7 +458,7 @@ async function updateStudent(req, res, next) {
       });
     }
 
-    res.json(student);
+    withVersion(res, student).json(student);
   } catch (err) {
     if (err.name === 'ValidationError') {
       return res.status(400).json({ error: err.message, code: 'VALIDATION_ERROR' });
@@ -546,10 +487,6 @@ async function getStudentClassHistory(req, res, next) {
 async function getStudent(req, res, next) {
   try {
     const { studentId } = req.params;
-    const cacheKey = KEYS.student(studentId);
-    const cached = get(cacheKey);
-    if (cached !== undefined) return res.json(cached);
-
     const student = await Student.findOne({ schoolId: req.schoolId, studentId });
     if (!student) {
       const err = new Error('Student not found');
@@ -557,8 +494,7 @@ async function getStudent(req, res, next) {
       return next(err);
     }
 
-    set(cacheKey, student, TTL.STUDENT);
-    res.json(student);
+    withVersion(res, student).json(student);
   } catch (err) {
     next(err);
   }
@@ -575,7 +511,7 @@ async function getPublicStudentInfo(req, res, next) {
     const cached = get(cacheKey);
     if (cached !== undefined) return res.json(cached);
 
-    const student = await Student.findOne({ schoolId: req.schoolId, studentId }, {
+    const student = await Student.findOne({ schoolId: req.schoolId, studentId, deletedAt: null }, {
       name: 1,
       class: 1,
       feePaid: 1,
@@ -634,7 +570,13 @@ async function getPaymentSummary(req, res, next) {
 
     const counts = summary.reduce((acc, s) => { acc[s.status] = (acc[s.status] || 0) + 1; return acc; }, {});
 
-    res.json({ total: students.length, counts, students: summary });
+    const studentQuota = {
+      used: students.length,
+      limit: studentLimit(req.school),
+      tier: req.school?.subscriptionTier || 'free',
+      upgrade_url: upgradeUrl,
+    };
+    res.json({ total: students.length, counts, students: summary, studentQuota });
   } catch (err) {
     next(err);
   }
@@ -779,11 +721,8 @@ async function bulkImportStudents(req, res, next) {
 
     const results = { total: rows.length, created: 0, failed: 0, details: [] };
 
-    // Check student quota (reuse the school already resolved by resolveSchool
-    // instead of a second lookup).
-    const school = req.school;
-    const currentStudentCount = await Student.countDocuments({ schoolId, deletedAt: null });
-    const quotaRemaining = school && school.maxStudents ? school.maxStudents - currentStudentCount : Infinity;
+    const usage = await quotaUsage(req.school);
+    const quotaRemaining = usage.limit === null ? Infinity : usage.limit - usage.used;
 
     // Pre-fetch fee structures for all unique class names (one query per unique class, not per row)
     const uniqueClasses = [...new Set(rows.map(r => r.class?.trim()).filter(Boolean))];
@@ -831,7 +770,7 @@ async function bulkImportStudents(req, res, next) {
           results.details.push({
             row: i + 2,
             studentId: row.studentId,
-            error: `School has reached maximum student quota of ${school.maxStudents}`,
+            error: `School has reached maximum student quota of ${usage.limit}`,
             code: 'STUDENT_QUOTA_EXCEEDED',
           });
         }
@@ -957,21 +896,28 @@ async function bulkImportStudents(req, res, next) {
 
 async function getOverdueStudents(req, res, next) {
   try {
-    const now = new Date();
-    const students = await Student.find({
-      schoolId: req.schoolId,
-      feePaid: false,
-      paymentDeadline: { $lt: now, $ne: null },
-    }).lean();
-    // .lean() bypasses the decrypt-on-load hook in studentModel.js, so
-    // parentEmail/parentPhone (encrypted at rest, issue #1480) must be
-    // decrypted explicitly here before they reach the API response.
-    res.json(students.map(s => ({
-      ...s,
-      parentEmail: decryptStudentPii(s.parentEmail),
-      parentPhone: decryptStudentPii(s.parentPhone),
-      isOverdue: true,
-    })));
+    const { items: students, pagination } = await paginateList({
+      find: (query) => Student.find(query).lean(),
+      scope: 'overdue-students',
+      filter: {
+        schoolId: req.schoolId,
+        feePaid: false,
+        paymentDeadline: { $ne: null },
+        $expr: { $lt: ['$paymentDeadline', '$$NOW'] },
+      },
+      cursor: req.query.cursor,
+      limit: Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50)),
+    });
+    // Lean queries bypass the decrypt-on-load hook.
+    res.json({
+      students: students.map((student) => ({
+        ...student,
+        parentEmail: decryptStudentPii(student.parentEmail),
+        parentPhone: decryptStudentPii(student.parentPhone),
+        isOverdue: true,
+      })),
+      pagination,
+    });
   } catch (err) {
     next(err);
   }
@@ -1097,81 +1043,120 @@ async function reconcileStudent(req, res, next) {
   }
 }
 
-// GET /api/students/export
-const MAX_EXPORT_ROWS = 50000;
+// Student exports use the verified school and an explicit CSV field whitelist.
+const { studentExportPermissions } = require('../config/rolePermissions');
+const {
+  MAX_EXPORT_ROWS, ASYNC_EXPORT_THRESHOLD, csvCell, exportQuery, currentExportPermissions,
+} = require('../services/studentExportService');
 
 async function exportStudents(req, res, next) {
   try {
     const { schoolId } = req;
+    const { format = 'csv', class: className, status } = req.query;
     const includeDeleted = req.query.includeDeleted === 'true';
-
-    const filter = { schoolId };
-    if (!includeDeleted) {
-      filter.deletedAt = null;
+    const { allowed, defaults, admin } = req.user
+      ? await currentExportPermissions(req.user, schoolId)
+      : studentExportPermissions({ role: 'admin' }, false);
+    if (!allowed.length || (includeDeleted && !admin)) {
+      return res.status(403).json({ error: 'Student export access denied' });
     }
-    if (req.query.class) {
-      filter.class = req.query.class;
-    }
-    if (req.query.status) {
-      const status = req.query.status;
-      if (status === 'paid') {
-        filter.feePaid = true;
-      } else if (status === 'unpaid') {
-        filter.feePaid = false;
-        filter.totalPaid = { $lte: 0 };
-      } else if (status === 'partial') {
-        filter.feePaid = false;
-        filter.totalPaid = { $gt: 0 };
-      } else {
-        return res.status(400).json({ error: 'status must be paid, unpaid, or partial', code: 'VALIDATION_ERROR' });
-      }
+    const requested = req.query.columns;
+    const columns = requested === undefined
+      ? [...defaults, ...(includeDeleted ? ['deletedAt'] : [])]
+      : typeof requested === 'string' ? requested.split(',').map((column) => column.trim()) : [];
+    if (format !== 'csv' || !columns.length || new Set(columns).size !== columns.length ||
+        columns.some((column) => !allowed.includes(column)) ||
+        (className !== undefined && typeof className !== 'string')) {
+      return res.status(400).json({
+        error: 'Select supported CSV columns and filters', code: 'VALIDATION_ERROR', allowedColumns: allowed,
+      });
     }
 
-    const rowCount = await Student.countDocuments(filter);
+    const filters = {};
+    if (!includeDeleted) filters.deletedAt = null;
+    if (className) filters.class = className;
+    if (status === 'paid') {
+      filters.feePaid = true;
+    } else if (status === 'unpaid') {
+      filters.feePaid = false;
+      filters.totalPaid = { $lte: 0 };
+    } else if (status === 'partial') {
+      filters.feePaid = false;
+      filters.totalPaid = { $gt: 0 };
+    } else if (status !== undefined) {
+      return res.status(400).json({ error: 'status must be paid, unpaid, or partial', code: 'VALIDATION_ERROR' });
+    }
+
+    const filter = { ...filters, schoolId };
+    const count = req.user ? Student.countDocuments(filter) : null;
+    if (req.user && includeDeleted) count.includeDeleted();
+    const rowCount = await count;
     if (rowCount > MAX_EXPORT_ROWS) {
       return res.status(400).json({
-        error: `Export exceeds maximum of ${MAX_EXPORT_ROWS} rows. Current matching records: ${rowCount}. Please apply filters to reduce the result set.`,
+        error: `Export exceeds maximum of ${MAX_EXPORT_ROWS} rows. Please apply filters.`,
         code: 'EXPORT_TOO_LARGE',
         maxRows: MAX_EXPORT_ROWS,
         matchingRows: rowCount,
       });
     }
+    if (rowCount > ASYNC_EXPORT_THRESHOLD) {
+      const { enqueueReportJob } = require('../queue/reportQueue');
+      const { jobId } = await enqueueReportJob({
+        schoolId, type: 'student_export', format, columns, filters, includeDeleted,
+        requestedBy: req.user.userId,
+        globalAdmin: req.user.role === 'admin' && req.user.userId === 'super_admin',
+      });
+      return res.status(202).json({ jobId, statusUrl: `/api/students/export/${jobId}` });
+    }
 
     const date = new Date().toISOString().slice(0, 10);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="students-${date}.csv"`);
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    const baseColumns = ['studentId', 'name', 'class', 'feeAmount', 'totalPaid', 'remainingBalance', 'feePaid', 'createdAt'];
-    const columns = includeDeleted ? [...baseColumns, 'deletedAt'] : baseColumns;
-
-    res.write(columns.join(',') + '\n');
-
-    const query = Student.find(filter).sort({ createdAt: -1 });
-    if (includeDeleted) query.includeDeleted();
+    res.setHeader('Cache-Control', 'private, no-store');
+    const query = req.user ? exportQuery(filter, includeDeleted).select(columns.join(' ')) :
+      Student.find(filter).sort({ createdAt: -1 });
     const cursor = query.cursor();
 
+    res.write(columns.join(',') + '\n');
     cursor.on('data', (doc) => {
-      const row = columns.map((col) => {
-        const val = doc[col];
-        if (val == null) return '';
-        const str = String(val);
-        // Quote fields that contain commas, quotes, or newlines
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return '"' + str.replace(/"/g, '""') + '"';
-        }
-        return str;
-      });
-      res.write(row.join(',') + '\n');
+      if (!res.write(columns.map((column) => csvCell(doc[column])).join(',') + '\n') && cursor.pause) {
+        cursor.pause();
+        res.once('drain', () => cursor.resume());
+      }
     });
+    if (cursor.close) res.on('close', () => cursor.close().catch(next));
+    cursor.on('error', next);
+    cursor.on('end', () => res.end());
+  } catch (err) {
+    if (err.code === 'QUEUE_UNAVAILABLE') {
+      return res.status(503).json({ error: 'Student export queue is temporarily unavailable', code: err.code });
+    }
+    next(err);
+  }
+}
 
-    cursor.on('error', (err) => {
-      next(err);
-    });
+async function getStudentExport(req, res, next) {
+  try {
+    const { ReportJob, REPORT_STATUSES } = require('../models/reportJobModel');
+    const job = await ReportJob.findOne({
+      jobId: req.params.jobId, schoolId: req.schoolId, type: 'student_export', requestedBy: req.user.userId,
+    }).lean();
+    if (!job) return res.status(404).json({ error: 'Export job not found' });
 
-    cursor.on('end', () => {
-      res.end();
-    });
+    const { allowed, admin } = await currentExportPermissions(req.user, req.schoolId);
+    if (!allowed.length || (job.studentExport.includeDeleted && !admin) ||
+        job.studentExport.columns.some((column) => !allowed.includes(column))) {
+      return res.status(403).json({ error: 'Student export access denied' });
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (job.status !== REPORT_STATUSES.READY) {
+      return res.json({ jobId: job.jobId, status: job.status });
+    }
+    const seconds = Math.floor((job.downloadExpiresAt - Date.now()) / 1000);
+    if (seconds <= 0) return res.status(410).json({ error: 'Student export has expired' });
+    const { createReportDownloadUrl } = require('../services/reportArtifactStorage');
+    const downloadUrl = await createReportDownloadUrl(job.artifactKey, Math.min(seconds, 60));
+    return res.json({ jobId: job.jobId, status: job.status, downloadUrl });
   } catch (err) {
     next(err);
   }
@@ -1195,29 +1180,17 @@ async function getFeeHistory(req, res, next) {
   try {
     const { schoolId } = req;
     const { studentId } = req.params;
-    // A non-positive page or limit is treated as unspecified rather than
-    // clamped to 1: `Math.max(1, parseInt('-5'))` would silently answer with a
-    // single row per page, which reads as data loss to whoever is auditing.
-    const parsePositive = (value, fallback) => {
-      const parsed = parseInt(value, 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-    };
-
-    const page = parsePositive(req.query.page, 1);
-    const limit = Math.min(FEE_HISTORY_MAX_LIMIT, parsePositive(req.query.limit, 50));
-    const skip = (page - 1) * limit;
-
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const limit = Math.min(FEE_HISTORY_MAX_LIMIT, requestedLimit > 0 ? requestedLimit : 50);
     const StudentFeeHistory = require('../models/studentFeeHistoryModel');
-    const filter = { schoolId, studentId };
-
-    const [history, total] = await Promise.all([
-      StudentFeeHistory.find(filter)
-        .sort({ archivedAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      StudentFeeHistory.countDocuments(filter),
-    ]);
+    const { items: history, pagination } = await paginateList({
+      find: (query) => StudentFeeHistory.find(query).lean(),
+      scope: 'student-fee-history',
+      filter: { schoolId, studentId },
+      cursor: req.query.cursor,
+      limit,
+      timestamp: 'archivedAt',
+    });
 
     res.json({
       studentId,
@@ -1225,14 +1198,7 @@ async function getFeeHistory(req, res, next) {
       // `archived: true` so a client rendering these alongside the live `fees`
       // array can label them, rather than inferring it from the route.
       archived: true,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: skip + history.length < total,
-        hasPrev: page > 1,
-      },
+      pagination,
     });
   } catch (err) {
     next(err);
@@ -1317,4 +1283,4 @@ async function adjustStudentCredit(req, res, next) {
   }
 }
 
-module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, getStudentClassHistory, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getFeeHistory, FEE_HISTORY_MAX_LIMIT, adjustStudentCredit };
+module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getStudentExport, getFeeHistory, FEE_HISTORY_MAX_LIMIT, adjustStudentCredit };

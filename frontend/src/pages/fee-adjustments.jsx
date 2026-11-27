@@ -316,7 +316,7 @@ export default function FeeAdjustments() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit}>
+            <form id="fee-adjustment-form" onSubmit={handleSubmit}>
               <div className="fa-form-grid">
                 <div className="form-group">
                   <label className="form-label">{t("feeAdjustments.nameLabel")}</label>
