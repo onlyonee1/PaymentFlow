@@ -65,7 +65,7 @@ const { getReport } = require('../backend/src/controllers/reportController');
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function makeReq(query = {}) {
-  return { query, schoolId: 'school-1' };
+  return { query: { async: false, ...query }, schoolId: 'school-1' };
 }
 
 function makeRes() {

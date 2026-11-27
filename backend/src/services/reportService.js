@@ -6,7 +6,7 @@ const FeeStructure = require('../models/feeStructureModel');
 const { POOL_CONFIG } = require('../config/database');
 
 function localDateStartUtc(dateString, timezone) {
-  const [year, month, day] = dateString.split('-').map(Number);
+  const [year, month, day] = dateString.slice(0, 10).split('-').map(Number);
   const target = Date.UTC(year, month - 1, day);
   let candidate = target;
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -32,7 +32,7 @@ function localDateStartUtc(dateString, timezone) {
 }
 
 function nextDateString(dateString) {
-  const date = new Date(`${dateString}T00:00:00.000Z`);
+  const date = new Date(`${dateString.slice(0, 10)}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
@@ -229,6 +229,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC', 
   return {
     generatedAt: new Date().toISOString(),
     schoolId,
+    timezone,
     period: { startDate: startDate || null, endDate: endDate || null },
     dateRangeDays,
     summary: { ...totals, fullyPaidStudentCount: fullyPaidCount },
@@ -284,7 +285,7 @@ function reportToCsv(report) {
   lines.push(`Fully Paid Students,${csvEscape(report.summary.fullyPaidStudentCount)}`);
   lines.push('');
   lines.push('--- Daily Breakdown ---');
-  lines.push('Date,Total Amount,Payment Count,Valid,Overpaid,Underpaid,Unique Students');
+  lines.push(`Date (${report.timezone || 'UTC'}),Total Amount,Payment Count,Valid,Overpaid,Underpaid,Unique Students`);
   for (const row of report.byDate) {
     lines.push([
       csvEscape(row.date),

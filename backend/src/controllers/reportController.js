@@ -89,9 +89,8 @@ async function getReport(req, res, next) {
 
     if (format === 'accounting_csv') {
       const dataVersion = await getDataVersion(req.schoolId);
-      const timezone = (await School.findOne({ schoolId: req.schoolId }).lean())?.timezone || 'UTC';
-      const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
-      let cached = get(cacheKey);
+      const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone) + ':accounting';
+      const cached = get(cacheKey);
       if (cached !== undefined) {
         const csv = cached.csv;
         const version = cached.schemaVersion;
@@ -103,7 +102,7 @@ async function getReport(req, res, next) {
         else if (e) filename = `accounting-v${version || schema_version || ACCOUNTING_SCHEMA_VERSION}-to-${e}.csv`;
         else filename = `accounting-v${version || schema_version || ACCOUNTING_SCHEMA_VERSION}-all-time.csv`;
         res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
         res.setHeader('X-Export-Schema-Version', String(ACCOUNTING_SCHEMA_VERSION));
         return res.send(csv);
       }
@@ -119,13 +118,11 @@ async function getReport(req, res, next) {
       else if (e) filename = `accounting-v${schemaVersion}-to-${e}.csv`;
       else filename = `accounting-v${schemaVersion}-all-time.csv`;
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
       res.setHeader('X-Export-Schema-Version', String(schemaVersion));
       return res.send(csv);
     }
 
-    const school = await School.findOne({ schoolId: req.schoolId }).lean();
-    const timezone = school?.timezone || 'UTC';
     const dataVersion = await getDataVersion(req.schoolId);
     const baseKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
     const cacheKey = groupBy ? `${baseKey}:${groupBy}` : baseKey;
@@ -144,7 +141,7 @@ async function getReport(req, res, next) {
       else if (e) filename = `report-all-time-to-${e}.csv`;
       else filename = 'report-all-time.csv';
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.csv$/, zoneSuffix + '.csv')}"`);
       return res.send(reportToCsv(report));
     }
 
