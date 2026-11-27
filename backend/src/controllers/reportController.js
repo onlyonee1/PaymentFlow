@@ -27,10 +27,9 @@ function getDaysBetween(startDate, endDate) {
 
 async function getReport(req, res, next) {
   try {
-    const { startDate, endDate, format = 'json', schema_version } = req.query;
-    // req.query values are always strings; coerce explicitly so ?async=false is
-    // treated as false rather than the truthy string "false".
-    const isAsync = req.query.async === 'true';
+    const { startDate, endDate, format = 'json', schema_version, groupBy } = req.query;
+    const isAsync = req.query.async === true || req.query.async === 'true';
+    const isSync = req.query.async === false || req.query.async === 'false';
     const isLargeReport = !startDate || !endDate || getDaysBetween(startDate, endDate) >= LARGE_REPORT_THRESHOLD_DAYS;
 
     // Audit report exports — exports can contain PII so they are a privileged read
@@ -54,7 +53,7 @@ async function getReport(req, res, next) {
       });
     }
 
-    if (isAsync || isLargeReport) {
+    if (isAsync || (isLargeReport && !isSync)) {
       try {
         const job = await enqueueReportJob({
           schoolId: req.schoolId,
@@ -63,6 +62,7 @@ async function getReport(req, res, next) {
           startDate,
           endDate,
           timezone: (await School.findOne({ schoolId: req.schoolId }).lean())?.timezone || 'UTC',
+          ...(groupBy ? { groupBy } : {}),
           schemaVersion: schema_version || (format === 'accounting_csv' ? ACCOUNTING_SCHEMA_VERSION : null),
         });
 
@@ -127,11 +127,12 @@ async function getReport(req, res, next) {
     const school = await School.findOne({ schoolId: req.schoolId }).lean();
     const timezone = school?.timezone || 'UTC';
     const dataVersion = await getDataVersion(req.schoolId);
-    const cacheKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
-    let report = get(cacheKey);
+    const baseKey = KEYS.report(req.schoolId, startDate, endDate, dataVersion, timezone);
+    const cacheKey = groupBy ? `${baseKey}:${groupBy}` : baseKey;
+    let report = groupBy === 'confirmedAt' ? undefined : get(cacheKey);
     if (report === undefined) {
-      report = await generateReport({ schoolId: req.schoolId, startDate, endDate, timezone });
-      set(cacheKey, report, TTL.REPORT);
+      report = await generateReport({ schoolId: req.schoolId, startDate, endDate, timezone, ...(groupBy ? { groupBy } : {}) });
+      if (groupBy !== 'confirmedAt') set(cacheKey, report, TTL.REPORT);
     }
 
     if (format === 'csv') {
@@ -167,7 +168,7 @@ async function getDashboard(req, res, next) {
 async function getReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });
@@ -193,7 +194,7 @@ async function getReportJob(req, res, next) {
 async function downloadReportJob(req, res, next) {
   try {
     const { jobId } = req.params;
-    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId }).lean();
+    const job = await ReportJob.findOne({ jobId, schoolId: req.schoolId, type: { $ne: 'student_export' } }).lean();
 
     if (!job) {
       return res.status(404).json({ error: 'Report job not found' });

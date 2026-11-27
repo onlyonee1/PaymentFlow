@@ -88,3 +88,24 @@ Indexers maintaining projections must:
 1. Maintain a persistent set or index of processed `eventId` values.
 2. If `eventId` is already present in the store, acknowledge the event immediately as a no-op without mutating projection balances.
 3. Validate `eventVersion` — reject unsupported major versions while tolerating additive non-breaking fields in minor/patch versions.
+
+## Payment Registry batch fees
+
+`POST /api/payments/batch-intent` accepts `studentId`, the payer's Stellar
+public key as `payer`, and 1–10 distinct `feeIds` (the student's fee category
+identifiers). Include the school context and an idempotency key. The response
+contains intent IDs, their amounts, the transaction hash, and unsigned XDR.
+The payer signs the XDR and submits it to the configured Soroban network.
+To record the payment, call `POST /api/payments/batch-confirm` in the same
+school context with the original `txHash` and its inclusion `ledger`. Retry
+while it returns HTTP 202. This flow requires `PAYMENT_REGISTRY_CONTRACT_ID`,
+`SOROBAN_RPC_URL`, and transactional MongoDB.
+
+A successful registry invocation emits one contract event with topics
+`["registry", "PaymentsBatchRegistered"]`. Its data map contains
+`schemaVersion: 1`, `payment_ids`, `payments` (each containing
+`payment_id` and `amount_stroops`), `payer`, `recipient`, and `asset`.
+Amounts are i128 stroops. The backend checks every item against the original
+batch intent and expected XLM asset contract before crediting the fees. It
+retains the shared ledger hash as `transactionHash` on each resulting
+payment record.

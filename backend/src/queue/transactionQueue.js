@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTraceContext, runTracedJob } = require('../tracing/spans');
+
 /**
  * Transaction Processing Queue
  *
@@ -109,6 +111,7 @@ async function persistJob(txHash, context = {}) {
         txHash,
         schoolId,
         studentId: context.studentId || null,
+        ...(context.traceContext && { traceContext: context.traceContext }),
         correlationId: resolveCorrelationId(context.correlationId, txHash),
         status: 'pending',
         attempts: 0,
@@ -183,7 +186,8 @@ async function markInterrupted(txHash, reason) {
  */
 async function enqueueTransaction(txHash, context = {}) {
   const correlationId = resolveCorrelationId(context.correlationId || context.requestId, txHash);
-  const enrichedContext = { ...context, correlationId, requestId: correlationId };
+  const traceContext = captureTraceContext();
+  const enrichedContext = { ...context, correlationId, requestId: correlationId, ...(traceContext && { traceContext }) };
 
   // 1. Persist to MongoDB (durable, idempotent)
   await persistJob(txHash, enrichedContext);
@@ -249,7 +253,7 @@ async function recoverPendingJobs() {
 
       await transactionQueue.add(
         'verify-transaction',
-        { txHash: doc.txHash, schoolId: doc.schoolId, studentId: doc.studentId, correlationId },
+        { txHash: doc.txHash, schoolId: doc.schoolId, studentId: doc.studentId, correlationId, ...(doc.traceContext?.traceparent && { traceContext: doc.traceContext }) },
         { jobId: doc.txHash }
       );
       recovered++;
@@ -384,7 +388,8 @@ function startTransactionWorker(processor) {
      return null;
    }
 
-   worker = new Worker(QUEUE_NAME, processor, {
+   worker = new Worker(QUEUE_NAME, (job) =>
+     runTracedJob('queue.verify-transaction', job.data, () => processor(job)), {
      connection,
      concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
    });
