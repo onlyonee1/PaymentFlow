@@ -6,18 +6,16 @@ import StudentForm from "../components/StudentForm";
 import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
 import RequireAdmin from "../components/RequireAdmin";
-import EmptyState from "../components/EmptyState";
 import EmptyState, { StandaloneEmptyState } from "../components/EmptyState";
 import BlockchainStatusBadge from "../components/BlockchainStatusBadge";
 import { TableDensityControl, useTableDensity } from "../components/TableDensityControl";
 import AccessiblePagination from "../components/AccessiblePagination";
 import { SkeletonStatCard, SkeletonTableRow } from "../components/Skeleton";
-import FilterChips from "../components/FilterChips"; // Issue #107
 import Pagination from "../components/Pagination";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
+import { usePaymentStream } from "../hooks/usePaymentStream";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useRouteChangeAbort } from "../hooks/useRouteChangeAbort";
-import { getStudent, getSchool } from "../services/api";
 import useGridCellNavigation from "../hooks/useGridCellNavigation";
 import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
@@ -86,6 +84,33 @@ function Dashboard() {
         fetchSummary();
         fetchStudents(page, debouncedSearch, statusFilter, classFilter);
       }
+    },
+  });
+
+  // Real-time live payment stream (Issue #553) — updates payment status badges without page reload and fires toast on confirmed.
+  const { toast: paymentToast, dismissToast: dismissPaymentToast } = usePaymentStream({
+    onPaymentUpdate: (updatedPayment) => {
+      if (updatedPayment?.studentId) {
+        setStudents((prev) =>
+          prev.map((s) => {
+            if (s.studentId === updatedPayment.studentId) {
+              const paymentStatus = String(updatedPayment.status || '').toLowerCase();
+              let newStatus = s.status;
+              if (paymentStatus === 'confirmed' || paymentStatus === 'success') {
+                newStatus = 'paid';
+              } else if (paymentStatus === 'submitted' || paymentStatus === 'pending') {
+                newStatus = 'partial';
+              }
+              return { ...s, status: newStatus };
+            }
+            return s;
+          })
+        );
+      }
+    },
+    onConfirmed: () => {
+      invalidateDashboardData();
+      fetchSummary();
     },
   });
 
@@ -436,6 +461,45 @@ function Dashboard() {
           {mutationToast}
         </div>
       )}
+      {paymentToast && paymentToast.visible && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="alert alert-success"
+          style={{
+            position: "fixed",
+            right: "1rem",
+            top: "4.5rem",
+            zIndex: 1100,
+            maxWidth: "min(32rem, calc(100vw - 2rem))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <IconCheck size={18} />
+            <span>{paymentToast.message}</span>
+          </div>
+          <button
+            onClick={dismissPaymentToast}
+            style={{
+              background: "none",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: "1rem",
+              lineHeight: 1,
+              padding: "0.2rem",
+            }}
+            aria-label="Dismiss notification"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="page-wrap dash-wrap">
 
@@ -463,6 +527,16 @@ function Dashboard() {
             <IconAlertTriangle size={16} />
             <span>{error}</span>
           </div>
+        )}
+
+        {summary?.studentQuota && (
+          <section className="card" aria-label="Student quota" style={{ marginBottom: "1rem" }}>
+            <strong>Student quota</strong>
+            <p>{summary.studentQuota.used} students {summary.studentQuota.limit === null ? "· Unlimited" : `of ${summary.studentQuota.limit}`} · {summary.studentQuota.tier}</p>
+            {summary.studentQuota.limit !== null && summary.studentQuota.used >= summary.studentQuota.limit && (
+              <a href={summary.studentQuota.upgrade_url}>Upgrade student capacity</a>
+            )}
+          </section>
         )}
 
         {/* ── Stat Cards ────────────────────────────── */}

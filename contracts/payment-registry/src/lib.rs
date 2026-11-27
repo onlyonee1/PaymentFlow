@@ -17,7 +17,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env,
-    Map, Symbol, Vec,
+    token, Map, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +79,35 @@ pub enum Error {
     NoPaymentsFound = 5,
     /// Contract has not been initialized.
     NotInitialized = 6,
+    InvalidBatchSize = 7,
+    InvalidBatchParties = 8,
+}
+
+pub const MAX_BATCH_SIZE: u32 = 10;
+const BATCH_LIMIT: Symbol = symbol_short!("BATCH_MAX");
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchPayment {
+    pub payment_id: Symbol,
+    pub amount_stroops: i128,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub enum BatchKey {
+    Payment(Address, Address, Address, Symbol),
+}
+
+#[contracttype]
+#[allow(non_snake_case)]
+pub struct PaymentsBatchRegistered {
+    pub schemaVersion: u32,
+    pub payment_ids: Vec<Symbol>,
+    pub payments: Vec<BatchPayment>,
+    pub payer: Address,
+    pub recipient: Address,
+    pub asset: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +204,60 @@ impl PaymentRegistry {
         Ok(new_count)
     }
 
+    /// Set a lower batch size without redeploying the contract.
+    pub fn set_batch_limit(env: Env, limit: u32) -> Result<(), Error> {
+        let admin = Self::get_admin(&env).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        if limit == 0 || limit > MAX_BATCH_SIZE {
+            return Err(Error::InvalidBatchSize);
+        }
+        env.storage().instance().set(&BATCH_LIMIT, &limit);
+        Ok(())
+    }
+
+    /// Atomically register fee IDs and transfer their aggregate amount.
+    /// Indexers must verify the asset, recipient, and amounts against their intents.
+    pub fn batch_register_payment(
+        env: Env,
+        payer: Address,
+        recipient: Address,
+        asset: Address,
+        payments: Vec<BatchPayment>,
+    ) -> Result<(), Error> {
+        payer.require_auth();
+        let limit: u32 = env.storage().instance().get(&BATCH_LIMIT).unwrap_or(MAX_BATCH_SIZE);
+        if payments.is_empty() || payments.len() > limit {
+            return Err(Error::InvalidBatchSize);
+        }
+        if payer == recipient {
+            return Err(Error::InvalidBatchParties);
+        }
+
+        let mut total: i128 = 0;
+        let mut payment_ids = Vec::new(&env);
+        for payment in payments.iter() {
+            if payment.amount_stroops <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            let key = BatchKey::Payment(payer.clone(), recipient.clone(), asset.clone(), payment.payment_id.clone());
+            if env.storage().persistent().has(&key) || payment_ids.contains(&payment.payment_id) {
+                return Err(Error::DuplicatePayment);
+            }
+            total = total.checked_add(payment.amount_stroops).ok_or(Error::InvalidAmount)?;
+            payment_ids.push_back(payment.payment_id);
+        }
+        token::Client::new(&env, &asset).transfer(&payer, &recipient, &total);
+        for payment in payments.iter() {
+            let key = BatchKey::Payment(payer.clone(), recipient.clone(), asset.clone(), payment.payment_id.clone());
+            env.storage().persistent().set(&key, &payment.amount_stroops);
+        }
+        env.events().publish(
+            (symbol_short!("registry"), Symbol::new(&env, "PaymentsBatchRegistered")),
+            PaymentsBatchRegistered { schemaVersion: 1, payment_ids, payments, payer, recipient, asset },
+        );
+        Ok(())
+    }
+
     /// Get all payment records for a given student.
     pub fn get_payments(env: Env, student_id: Symbol) -> Result<Vec<PaymentRecord>, Error> {
         let payments: Map<Symbol, Vec<PaymentRecord>> = env
@@ -244,6 +327,33 @@ mod tests {
         let (env, admin, client) = setup();
         let other = Address::generate(&env);
         client.initialize(&other); // should panic
+    }
+
+    #[test]
+    fn batch_transfer_is_atomic_and_rejects_duplicate_ids() {
+        let (env, admin, client) = setup();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = env.register_stellar_asset_contract_v2(admin).address();
+        token::StellarAssetClient::new(&env, &asset).mint(&payer, &1000);
+        let balance = token::Client::new(&env, &asset);
+        let first = BatchPayment { payment_id: symbol_short!("first"), amount_stroops: 100 };
+        let invalid = BatchPayment { payment_id: symbol_short!("invalid"), amount_stroops: 0 };
+        let second = BatchPayment { payment_id: symbol_short!("second"), amount_stroops: 200 };
+
+        assert!(client.try_batch_register_payment(
+            &payer, &recipient, &asset, &vec![&env, first.clone(), invalid],
+        ).is_err());
+        assert_eq!(balance.balance(&payer), 1000);
+        assert_eq!(balance.balance(&recipient), 0);
+
+        let payments = vec![&env, first, second];
+        client.batch_register_payment(&payer, &recipient, &asset, &payments);
+        assert_eq!(balance.balance(&payer), 700);
+        assert_eq!(balance.balance(&recipient), 300);
+        assert!(client.try_batch_register_payment(&payer, &recipient, &asset, &payments).is_err());
+        assert_eq!(balance.balance(&recipient), 300);
     }
 
     // ── register_payment ────────────────────────────────────────────────────

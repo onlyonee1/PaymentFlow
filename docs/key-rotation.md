@@ -265,3 +265,49 @@ within these ceilings to avoid mid-rotation failures (see
 - [`docs/runbooks/wallet-rotation.md`](runbooks/wallet-rotation.md) — school wallet rotation
 - [`scripts/rotate-signer-key.js`](../scripts/rotate-signer-key.js) — the automation script
 - [`scripts/rotate-signer-master-key.js`](../scripts/rotate-signer-master-key.js) — master key rotation
+
+## Live Stellar account signer rotation
+
+This ceremony replaces a Stellar account signing key. The existing master
+encryption key rotation scripts rotate the key that encrypts stored seeds.
+
+### Set up once
+
+1. Set `STELLAR_MANAGED_SIGNER_ACCOUNT` to the stable Stellar source account
+   on all backend replicas. Use a dedicated funded sequence and fee account
+   for rotation and configure its secret as
+   `STELLAR_ROTATION_FEE_SOURCE_SECRET`. It must differ from the managed
+   account and must remain stable during an active ceremony.
+2. Run `node backend/scripts/provision-stellar-signer.js` with the same
+   database, network, and signer encryption configuration as the backend,
+   passing the current signing seed as `STELLAR_BOOTSTRAP_SIGNER_SECRET`
+   through your secret manager. The provisioner validates on-chain signer
+   weight and only inserts initial state. Keep this seed out of the backend
+   runtime environment.
+3. Use `createTransactionManager()` for server-signed operations on this
+   account. It resolves the active signer at signature time and leaves the
+   source account unchanged. The account needs sufficient reserve to add
+   one signer, and the current signer must independently meet all thresholds.
+
+### Rotate
+
+1. A superadmin calls `POST /api/admin/rotate-signer`. HTTP 202 means the
+   encrypted replacement has been staged. The response lists its public key.
+2. The leader adds the new signer at the previous signer's weight and waits
+   for Horizon to show the new signer before activating it. Set Options runs
+   from the separate fee account, preserving the payment account's sequence.
+3. During the overlap, the old public key remains valid for previously
+   signed envelopes. The default window is 15 minutes. Set
+   `KEY_ROTATION_WINDOW_MINUTES` consistently across replicas and keep
+   managed transaction lifetimes at least 30 seconds shorter than the window.
+4. The leader removes the old signer after the deadline. If it was the
+   account's master signer, the leader sets its weight to zero. Thresholds
+   stay unchanged. The backend keeps the previous public key only until
+   it observes retirement on chain.
+
+Use Horizon to verify that the new key is authorized and the old weight is
+zero. The backend resumes unfinished steps from MongoDB after restart or
+leader failover. A ceremony exceeding the one-hour incident target needs
+operator investigation. Check leader status, Horizon, fee balance, account
+reserve, and the public signer weights. Keep the state document so the worker
+can reconcile on-chain submissions.

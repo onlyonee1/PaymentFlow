@@ -21,8 +21,8 @@ All SLOs use **30-day rolling windows** unless stated otherwise.
 | Field | Value |
 |-------|-------|
 | **What** | Fraction of HTTP requests that return a non-5xx response |
-| **Target** | ≥ 99.5 % |
-| **Error budget** | 0.5 % → ~3.6 hours/month of fully-down equivalent |
+| **Target** | ≥ 99.9 % |
+| **Error budget** | 0.1 % → 43.2 minutes per 30 days of fully-down equivalent |
 | **Window** | 30-day rolling |
 | **Owner** | Platform |
 | **Metric** | `http_request_duration_seconds_count{status!~"5.."}` / `http_request_duration_seconds_count` |
@@ -31,8 +31,8 @@ All SLOs use **30-day rolling windows** unless stated otherwise.
 
 | Alert name | Burn rate | Window | Severity | Action |
 |------------|-----------|--------|----------|--------|
-| `SLOApiAvailabilityFastBurn` | > 14× | 5 m | critical | Page on-call immediately |
-| `SLOApiAvailabilitySlowBurn` | > 6× | 30 m | warning | Investigate within 30 min |
+| `SLOApiAvailabilityFastBurn` | > 14.4× | 5 m and 1 h | critical | Page on-call immediately |
+| `SLOApiAvailabilitySlowBurn` | > 6× | 30 m and 6 h | warning | Investigate within 30 min |
 
 Runbook: [`docs/runbooks/slo-api-availability.md`](runbooks/slo-api-availability.md)
 
