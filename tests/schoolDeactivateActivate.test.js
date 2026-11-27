@@ -4,7 +4,7 @@
 // without MONGO_URI.
 process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-1234567890abcdef';
 
 /**
  * Tests for PATCH /api/schools/:id/deactivate and /activate — issue #453

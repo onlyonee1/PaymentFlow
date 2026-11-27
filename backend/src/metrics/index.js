@@ -6,6 +6,31 @@ const registry = new client.Registry();
 
 client.collectDefaultMetrics({ register: registry });
 
+new client.Gauge({
+  name: 'school_student_quota_used',
+  help: 'Number of active student records per school',
+  labelNames: ['schoolId'],
+  registers: [registry],
+  async collect() {
+    try {
+      const School = require('../models/schoolModel');
+      const Student = require('../models/studentModel');
+      const [schools, counts] = await Promise.all([
+        School.find().select('schoolId').lean(),
+        Student.aggregate([
+          { $match: { deletedAt: null } },
+          { $group: { _id: '$schoolId', count: { $sum: 1 } } },
+        ]).option({ _bypassTenantScope: true }),
+      ]);
+      const bySchool = new Map(counts.map(({ _id, count }) => [_id, count]));
+      this.reset();
+      for (const { schoolId } of schools) this.set({ schoolId }, bySchool.get(schoolId) || 0);
+    } catch {
+      // MongoDB can be unavailable during startup.
+    }
+  },
+});
+
 // payments_total{status} — queried live from MongoDB on each scrape so the
 // count is accurate even after a process restart (counters would reset to 0).
 new client.Gauge({
@@ -263,7 +288,7 @@ const httpRequestDurationSeconds = new client.Histogram({
   name: 'http_request_duration_seconds',
   help: 'HTTP request duration in seconds',
   labelNames: ['method', 'route', 'status'],
-  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1, 2.5, 5],
   registers: [registry],
 });
 
@@ -509,6 +534,27 @@ const leaderElectionTenureSeconds = new client.Gauge({
   },
 });
 
+// worker_is_leader{worker_id} — the issue-683 metric contract. It mirrors
+// leader_election_is_leader while identifying the replica in Prometheus.
+const workerIsLeader = new client.Gauge({
+  name: 'worker_is_leader',
+  help: 'Whether this worker instance currently holds singleton job leadership (1 = leader, 0 = follower)',
+  labelNames: ['worker_id'],
+  registers: [registry],
+  collect() {
+    try {
+      const leaderElection = require('../services/leaderElection');
+      this.reset();
+      this.set(
+        { worker_id: leaderElection.getWorkerId() },
+        leaderElection.isLeader() ? 1 : 0
+      );
+    } catch (_) {
+      // Leader election may not be wired up in a deployment variant.
+    }
+  },
+});
+
 // last_backup_verification_age_seconds — seconds since the most recent
 // successful backup restore-verification (scripts/test-backup-recovery.sh),
 // recorded via POST /api/internal/backup-verification-heartbeat. Recomputed
@@ -655,6 +701,7 @@ module.exports = {
   horizonUnreachableSince,
   leaderElectionIsLeader,
   leaderElectionTenureSeconds,
+  workerIsLeader,
   lastBackupVerificationAgeSeconds,
   recordBackupVerificationSuccess,
   lastBackupRestoreTestAgeSeconds,

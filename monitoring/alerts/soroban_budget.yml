@@ -1,0 +1,35 @@
+groups:
+  - name: soroban_instruction_budget
+    interval: 60s
+    rules:
+      - alert: SorobanInstructionBudgetHigh
+        expr: soroban_instructions_used > 80000000
+        for: 5m
+        labels:
+          severity: warning
+          routing: slack
+          owner: payments
+        annotations:
+          summary: "Soroban instruction budget above 80% for {{ $labels.invocation_type }}"
+          description: >
+            The {{ $labels.invocation_type }} invocation type is consuming
+            {{ $value | humanize }} instructions — above the 80% warning threshold
+            (80,000,000 of 100,000,000). Investigate for contract logic growth
+            before transactions start failing. See runbook for remediation steps.
+          runbook: "docs/runbooks/soroban-budget.md"
+
+      - alert: SorobanInstructionBudgetCritical
+        expr: soroban_instructions_used > 90000000
+        for: 2m
+        labels:
+          severity: critical
+          routing: pagerduty
+          owner: payments
+        annotations:
+          summary: "Soroban instruction budget above 90% for {{ $labels.invocation_type }}"
+          description: >
+            The {{ $labels.invocation_type }} invocation type is consuming
+            {{ $value | humanize }} instructions — above the 90% critical
+            threshold. Contract transactions are at immediate risk of budget
+            overrun and silent failure. Escalate immediately.
+          runbook: "docs/runbooks/soroban-budget.md"

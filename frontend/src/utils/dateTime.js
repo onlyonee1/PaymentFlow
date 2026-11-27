@@ -103,9 +103,11 @@ function parseISO(isoString) {
 export function formatTimestamp(isoString, options = {}) {
   const {
     mode = DISPLAY_MODE.LOCALE,
-    locale,
+    locale: explicitLocale,
     fallback = '—',
   } = options;
+
+  const locale = explicitLocale || (typeof window !== 'undefined' && window.localStorage?.getItem('locale')) || undefined;
 
   // Resolve timeZone: prefer explicit option, then browser TZ
   const timeZone = options.timeZone || getBrowserTimeZone();
@@ -172,9 +174,11 @@ export function formatTimestamp(isoString, options = {}) {
 export function formatDateOnly(isoString, options = {}) {
   const {
     mode = DISPLAY_MODE.LOCALE,
-    locale,
+    locale: explicitLocale,
     fallback = '—',
   } = options;
+
+  const locale = explicitLocale || (typeof window !== 'undefined' && window.localStorage?.getItem('locale')) || undefined;
 
   const timeZone = options.timeZone || getBrowserTimeZone();
 

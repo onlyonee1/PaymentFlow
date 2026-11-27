@@ -84,6 +84,7 @@ const webhookEndpointSchema = new mongoose.Schema(
 );
 
 // Compound index: look up active endpoints for a given school + event
+webhookEndpointSchema.index({ schoolId: 1, createdAt: -1, _id: -1 });
 webhookEndpointSchema.index({ schoolId: 1, subscribedEvents: 1, isActive: 1 });
 
 // toJSON: strip the secret from serialised output (never expose it over API)

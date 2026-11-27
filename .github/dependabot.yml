@@ -1,0 +1,86 @@
+# Dependabot configuration — issue #673
+#
+# Automatically opens patch-version PRs for npm and Cargo dependencies.
+# High/critical CVEs are caught by the weekly vulnerability scan workflow
+# (.github/workflows/vulnerability-scan.yml) and by the `audit` CI job on
+# every PR; Dependabot handles the routine patch upgrade cadence.
+#
+# Groups are used to batch patch-level bumps into fewer PRs.
+
+version: 2
+
+updates:
+  # ── Root package.json ────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      root-patch-updates:
+        update-types:
+          - patch
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+      - automated
+
+  # ── Backend package.json ─────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      backend-patch-updates:
+        update-types:
+          - patch
+    commit-message:
+      prefix: "chore(deps)(backend)"
+    labels:
+      - dependencies
+      - automated
+      - backend
+
+  # ── Frontend package.json ────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      frontend-patch-updates:
+        update-types:
+          - patch
+    commit-message:
+      prefix: "chore(deps)(frontend)"
+    labels:
+      - dependencies
+      - automated
+      - frontend
+
+  # ── GitHub Actions ────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencies
+      - automated
+      - github-actions

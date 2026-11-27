@@ -1,5 +1,7 @@
 'use strict';
 
+const { setTraceAttributes } = require('../tracing/spans');
+
 const School = require('../models/schoolModel');
 const cache = require('../cache');
 const jwt = require('jsonwebtoken');
@@ -127,6 +129,7 @@ async function resolveSchool(req, res, next) {
 
     req.school   = school;
     req.schoolId = school.schoolId;
+    setTraceAttributes({ schoolId: school.schoolId });
     next();
   } catch (err) {
     next(err);

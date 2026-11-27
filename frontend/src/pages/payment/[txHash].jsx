@@ -19,6 +19,7 @@ import {
 } from "../../components/Icons";
 import { getStudentPayments, flagDispute, initiateRefund } from "../../services/api";
 import { PAYMENT_STATUS } from "../../utils/paymentStatus";
+import ReceiptDownloadButton from "../../components/ReceiptDownloadButton";
 
 const STELLAR_EXPLORER_BASE =
   process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
@@ -747,6 +748,12 @@ function PaymentDetailContent({ studentId, txHash }) {
 
           {/* Sidebar: contextual actions */}
           <div className="pd-sidebar" style={{ width: 280, flexShrink: 0 }}>
+            {/* PDF receipt download — Issue #604 (confirmed payments only) */}
+            {payment.status === PAYMENT_STATUS.SUCCESS && (
+              <div style={{ marginBottom: "1rem" }}>
+                <ReceiptDownloadButton txHash={payment.txHash} />
+              </div>
+            )}
             <ActionPanel payment={payment} onActionComplete={load} />
 
             {/* Audit trail summary */}
