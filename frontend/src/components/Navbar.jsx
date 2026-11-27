@@ -9,6 +9,7 @@ import { useTheme } from "../pages/_app";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 import { prefetchDashboardData } from "../hooks/useDashboardLoader";
 import { SUPPORTED_LOCALES, LOCALE_NAMES } from "../i18n";
+import { PriceTicker } from "./PriceFeedWidget";
 
 /**
  * Navigation link definitions — Issue #357: role-aware navigation.
@@ -520,6 +521,7 @@ export default function Navbar() {
           </div>
 
           <div className="nav-right">
+            <PriceTicker />
             <select
               className="nav-lang"
               value={i18n.resolvedLanguage || "en"}
