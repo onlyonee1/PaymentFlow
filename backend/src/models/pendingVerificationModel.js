@@ -14,6 +14,7 @@ const pendingVerificationSchema = new mongoose.Schema(
     txHash: { type: String, required: true, unique: true, index: true },
     studentId: { type: String, default: null },
     // Correlation ID for tracing this job across the async pipeline.
+    traceContext: { traceparent: String, tracestate: String },
     correlationId: { type: String, default: null, index: true },
     attempts: { type: Number, default: 0 },
     lastAttemptAt: { type: Date, default: null },
@@ -25,6 +26,19 @@ const pendingVerificationSchema = new mongoose.Schema(
       index: true,
     },
     lastError: { type: String, default: null },
+    failureReason: { type: String, default: null },
+    failureCode: { type: String, default: null },
+    attemptHistory: [
+      {
+        attemptNumber: { type: Number, required: true },
+        attemptedAt: { type: Date, default: Date.now },
+        error: { type: String, default: null },
+        errorCode: { type: String, default: null },
+      },
+    ],
+    safePayload: { type: mongoose.Schema.Types.Mixed, default: null },
+    replayCount: { type: Number, default: 0 },
+    lastReplayedAt: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
   },
   { timestamps: true },

@@ -9,13 +9,12 @@
  * so the collection has been growing without bound there — one document per
  * delivery attempt, per endpoint, per school.
  *
- * Retention comes from WEBHOOK_DELIVERY_RETENTION_DAYS (default 90). The older
+ * Retention comes from WEBHOOK_DELIVERY_RETENTION_DAYS (default 30). The older
  * WEBHOOK_DELIVERY_TTL_SECONDS still takes precedence when set, so a
  * deployment that already configured it keeps the retention it chose.
  */
 
 const mongoose = require('mongoose');
-const { resolveTtlSeconds } = require('../src/models/webhookDeliveryModel');
 
 const VERSION = '028_add_webhook_delivery_ttl_index';
 const COLLECTION = 'webhookdeliveries';
@@ -50,7 +49,9 @@ async function dropCreatedAtTtl(collection, label) {
 
 async function up() {
   const collection = mongoose.connection.collection(COLLECTION);
-  const ttlSeconds = resolveTtlSeconds();
+  const seconds = parseInt(process.env.WEBHOOK_DELIVERY_TTL_SECONDS, 10);
+  const days = parseInt(process.env.WEBHOOK_DELIVERY_RETENTION_DAYS, 10);
+  const ttlSeconds = seconds > 0 ? seconds : (days > 0 ? days : 30) * 86400;
 
   await dropCreatedAtTtl(collection, 'Dropped');
 
