@@ -1,5 +1,7 @@
 "use strict";
 
+const { setTraceAttributes } = require("../tracing/spans");
+
 const Payment = require("../models/paymentModel");
 const Outbox = require("../models/outboxModel");
 const { generateReferenceCode } = require("../utils/generateReferenceCode");
@@ -37,6 +39,7 @@ async function savePayment(data, options = {}) {
   }
   try {
     const payment = new Payment(data);
+    setTraceAttributes({ schoolId: payment.schoolId, paymentId: payment._id });
     await payment.save(session ? { session } : {});
 
     const eventId = uuidv4();

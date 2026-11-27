@@ -20,6 +20,7 @@
 import '@testing-library/jest-dom';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import Dashboard from '../frontend/src/pages/dashboard';
+import { invalidateDashboardData } from '../frontend/src/hooks/useDashboardLoader';
 import * as api from '../frontend/src/services/api';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ describe('Dashboard duplicate /students request on mount (#1214)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    invalidateDashboardData();
     setupApiDefaults();
   });
 
@@ -100,7 +102,7 @@ describe('Dashboard duplicate /students request on mount (#1214)', () => {
     expect(api.getStudents).toHaveBeenCalledTimes(1);
   });
 
-  test('getStudents is called with page=1 on initial mount', async () => {
+  test('getStudents is called without a cursor on initial mount', async () => {
     render(<Dashboard />);
 
     await waitFor(() => {
@@ -108,13 +110,13 @@ describe('Dashboard duplicate /students request on mount (#1214)', () => {
     });
 
     const [page] = api.getStudents.mock.calls[0];
-    expect(page).toBe(1);
+    expect(page).toBeNull();
   });
 
   test('getStudents is called a second time when page changes (next page button)', async () => {
     // Provide enough total/pages so the Next button is enabled.
     api.getStudents.mockResolvedValue({
-      data: { students: [], pages: 3, total: 60 },
+      data: { students: [], pagination: { nextCursor: 'page-two', hasMore: true } },
     });
 
     render(<Dashboard />);
@@ -133,7 +135,7 @@ describe('Dashboard duplicate /students request on mount (#1214)', () => {
 
     // Verify the second call uses page 2.
     const [page2] = api.getStudents.mock.calls[1];
-    expect(page2).toBe(2);
+    expect(page2).toBe('page-two');
   });
 
   test('filter change triggers exactly one new getStudents call', async () => {

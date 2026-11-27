@@ -25,18 +25,14 @@ process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 process.env.JWT_SECRET = 'ci-security-regression-test-secret-not-used-in-prod';
 
+process.env.ADMIN_USERNAME = 'admin';
+process.env.ADMIN_PASSWORD = 'ci-invalid-login-fixture-only';
+delete process.env.ADMIN_PASSWORD_HASH;
+
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 // ── Mock heavy dependencies (same pattern as authentication-enforcement.test.js)
-
-jest.mock('mongoose', () => ({
-  connect: jest.fn().mockResolvedValue(true),
-  Schema: class {
-    constructor() { this.index = jest.fn(); }
-  },
-  model: jest.fn().mockReturnValue({}),
-}));
 
 jest.mock('../backend/src/models/studentModel', () => ({
   findOne: jest.fn(),
@@ -123,7 +119,7 @@ jest.mock('../backend/src/services/retryService', () => ({
  */
 const SAFE_FIELDS = new Set([
   'error', 'message', 'code', 'details', 'success', 'status',
-  'isAdmin', 'expiresIn', 'refreshExpiresIn',
+  'isAdmin', 'expiresIn', 'refreshExpiresIn', 'requestId',
 ]);
 
 /**
@@ -339,55 +335,43 @@ describe('Service failure paths — 5xx responses do not expose internals', () =
     delete process.env.APP_URL;
   });
 
-  test('When service throws with stack trace in message, 5xx response hides it', async () => {
-    const { syncPaymentsForSchool } = require('../backend/src/services/stellarService');
-    syncPaymentsForSchool.mockRejectedValueOnce(
-      Object.assign(new Error('Internal error'), {
-        stack: 'Error: Internal error\n    at /workspaces/PaymentFlow/src/db.js:15:3',
-      })
-    );
+  test.each(['staging', 'production'])('%s redacts database failures over HTTP', async (env) => {
+    process.env.NODE_ENV = env;
+    const Student = require('../backend/src/models/studentModel');
+    const failure = Object.assign(new Error('MongoServerError: db.students.find({ schoolId: "private" })'), {
+      code: 123,
+      details: { collection: 'students', query: { schoolId: 'private' } },
+    });
+    failure.stack = 'Error: query failed\n    at /workspaces/PaymentFlow/node_modules/mongoose/query.js:15:3';
+    Student.find.mockImplementationOnce(() => { throw failure; });
 
     const res = await request(app)
-      .post('/api/payments/sync')
+      .get('/api/students')
       .set('X-School-ID', 'school-a')
       .set('Authorization', `Bearer ${validAdminToken()}`)
       .expect(500);
-
-    const violations = assertResponseSafe(res.body, 'sync 500 — stack trace');
-    expect(violations).toEqual([]);
+    expect(res.body.error).toEqual({
+      code: 'INTERNAL_ERROR',
+      message: 'An internal server error occurred.',
+      category: 'INTERNAL',
+    });
+    expect(res.body.requestId).toBeTruthy();
+    expect(res.body.requestId).toBe(res.headers['x-request-id']);
+    expect(assertResponseSafe(res.body, 'database query failure')).toEqual([]);
+    expect(res.text).not.toContain('db.students.find');
   });
 
-  test('When service throws with mongodb:// in message, it is not included in response', async () => {
+  test('provider failures omit the internal connection URL', async () => {
     const { syncPaymentsForSchool } = require('../backend/src/services/stellarService');
-    syncPaymentsForSchool.mockRejectedValueOnce(
-      new Error('Failed to connect: mongodb://admin:supersecret@mongo-host:27017/db')
-    );
+    syncPaymentsForSchool.mockRejectedValueOnce(new Error('Could not connect to mongodb://mongo-host/db'));
 
     const res = await request(app)
       .post('/api/payments/sync')
       .set('X-School-ID', 'school-a')
       .set('Authorization', `Bearer ${validAdminToken()}`)
-      .expect(500);
-
-    const body = JSON.stringify(res.body);
-    expect(body).not.toContain('mongodb://');
-    expect(body).not.toContain('supersecret');
-  });
-
-  test('5xx response uses generic message, not raw internal error string', async () => {
-    const { syncPaymentsForSchool } = require('../backend/src/services/stellarService');
-    syncPaymentsForSchool.mockRejectedValueOnce(
-      new Error('Cannot read properties of undefined (reading "schoolId")')
-    );
-
-    const res = await request(app)
-      .post('/api/payments/sync')
-      .set('X-School-ID', 'school-a')
-      .set('Authorization', `Bearer ${validAdminToken()}`)
-      .expect(500);
-
-    const msg = res.body?.error?.message || res.body?.message || '';
-    expect(msg).toBe('An internal server error occurred.');
+      .expect(502);
+    expect(res.body.error.message).toBe('An internal server error occurred.');
+    expect(assertResponseSafe(res.body, 'payment sync provider failure')).toEqual([]);
   });
 });
 
@@ -521,6 +505,21 @@ describe('globalErrorHandler — production mode safety', () => {
     expect(JSON.stringify(body)).not.toContain('Cannot read properties');
   });
 
+  test.each(['staging', 'production'])('%s: database failures expose only public fields', (environment) => {
+    process.env.NODE_ENV = environment;
+    const err = Object.assign(new Error('MongoServerError: db.paymentIntents.find({ studentId: "private" })'), {
+      code: 123,
+      details: { collection: 'paymentIntents', query: { studentId: 'private' } },
+    });
+    const res = makeRes();
+    globalErrorHandler(err, { ...makeReq(), requestId: 'ci-request-id' }, res, jest.fn());
+    expect(res._calls[0]).toEqual({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'An internal server error occurred.', category: 'INTERNAL' },
+      requestId: 'ci-request-id',
+    });
+  });
+
   test('production: JWT_SECRET value never appears in any response body', () => {
     process.env.NODE_ENV = 'production';
     const err = new Error(`JWT_SECRET=${process.env.JWT_SECRET}`);
@@ -556,6 +555,8 @@ describe('Error response shape — code field present on auth failures', () => {
       // Must have a code
       const code = res.body.code || res.body?.error?.code;
       expect(code).toBeTruthy();
+      expect(res.body.requestId).toBeTruthy();
+      expect(res.body.requestId).toBe(res.headers['x-request-id']);
 
       // Must be safe
       const violations = assertResponseSafe(res.body, `${method.toUpperCase()} ${path}`);

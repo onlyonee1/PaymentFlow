@@ -1,49 +1,51 @@
-import { useState, useEffect, useCallback } from "react";
-import { convertXlmToFiat } from "../services/currencyService";
+import { useState, useEffect } from 'react';
+import { getConversionRates } from '../services/api';
 
 /**
- * Hook for live real-time XLM to fiat (USD/USDC) price conversion.
+ * Fetches the XLM→USD conversion rate and computes a fiat amount for a given
+ * XLM amount. Clears stale state immediately when xlmAmount changes so the
+ * previous value never flashes during a new fetch.
  *
- * @param {number} xlmAmount
- * @param {string} [currency="USD"]
- * @returns {{ fiatAmount: number|null, rate: number|null, currency: string, loading: boolean, error: string|null, refresh: Function }}
+ * @param {number|null} xlmAmount – XLM amount to convert. null/0 returns idle state.
+ * @returns {{ fiatAmount: number|null, rate: number|null, currency: string, loading: boolean, error: string|null }}
  */
-export function useFiatConversion(xlmAmount = 0, currency = "USD") {
+export function useFiatConversion(xlmAmount) {
   const [fiatAmount, setFiatAmount] = useState(null);
-  const [rate, setRate] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const convert = useCallback(async () => {
-    if (xlmAmount == null || isNaN(xlmAmount) || xlmAmount < 0) {
-      setFiatAmount(null);
-      return;
-    }
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await convertXlmToFiat(Number(xlmAmount), currency);
-      setFiatAmount(res.fiatAmount);
-      setRate(res.rate);
-    } catch (err) {
-      setError(err.message || "Unable to fetch live price feed");
-    } finally {
-      setLoading(false);
-    }
-  }, [xlmAmount, currency]);
+  const [rate, setRate]             = useState(null);
+  const [currency, setCurrency]     = useState('USD');
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState(null);
 
   useEffect(() => {
-    convert();
-  }, [convert]);
+    // Clear stale values synchronously before any async work.
+    setFiatAmount(null);
+    setRate(null);
+    setError(null);
 
-  return {
-    fiatAmount,
-    rate,
-    currency,
-    loading,
-    error,
-    refresh: convert,
-  };
+    if (xlmAmount == null || xlmAmount <= 0) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+
+    getConversionRates()
+      .then(({ data }) => {
+        const fetchedRate = data?.rates?.USD ?? data?.USD ?? null;
+        if (fetchedRate == null) throw new Error('Rate unavailable');
+        setRate(fetchedRate);
+        setCurrency('USD');
+        setFiatAmount(parseFloat((xlmAmount * fetchedRate).toFixed(2)));
+      })
+      .catch((err) => {
+        setError(err.message || 'Failed to fetch conversion rate');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [xlmAmount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { fiatAmount, rate, currency, loading, error };
 }
 
 export default useFiatConversion;

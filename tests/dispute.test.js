@@ -207,6 +207,7 @@ jest.mock('../backend/src/services/reminderService', () => ({
   stopReminderScheduler:  jest.fn(),
   processReminders:       jest.fn().mockResolvedValue({ schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0 }),
 }));
+jest.mock('../backend/src/services/instalmentReminderService', () => ({ startInstalmentReminderScheduler: jest.fn(), stopInstalmentReminderScheduler: jest.fn(), processInstalmentReminders: jest.fn().mockResolvedValue({ plans: 0, reminders: 0, graceNotices: 0, failed: 0, skipped: 0 }), getInstalmentReminderStatus: jest.fn().mockReturnValue({ schedulerRunning: false }), }));
 
 jest.mock('../backend/src/services/stellarService', () => ({
   syncPayments:              jest.fn().mockResolvedValue(undefined),
@@ -287,7 +288,7 @@ function api(method, path) {
 
 const ADMIN_TOKEN = require('jsonwebtoken').sign(
   { role: 'admin', email: 'admin@school.test', sub: 'admin-1' },
-  'test-secret',
+  process.env.JWT_SECRET,
   { expiresIn: '1h' },
 );
 
@@ -459,7 +460,7 @@ describe('PATCH /api/disputes/:id/resolve — state machine, auth, audit, SSE, p
   });
 
   test('403 — non-admin token rejected', async () => {
-    const userToken = require('jsonwebtoken').sign({ role: 'user' }, 'test-secret', { expiresIn: '1h' });
+    const userToken = require('jsonwebtoken').sign({ role: 'user' }, process.env.JWT_SECRET, { expiresIn: '1h' });
     const res = await api('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
       .set('Authorization', `Bearer ${userToken}`)
       .send({ resolutionNote: 'Trying' });
@@ -755,7 +756,7 @@ describe('Dispute creation — notifications and hold', () => {
   let Dispute, Payment, Student, sseService, webhookService, auditService, School;
   const ADMIN_TOKEN = require('jsonwebtoken').sign(
     { role: 'admin', sub: 'admin-1' },
-    'test-secret',
+    process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
 
@@ -912,7 +913,7 @@ describe('Dispute resolution — hold lifted on terminal status', () => {
   let Dispute, Student, School, sseService, webhookService, auditService;
   const ADMIN_TOKEN = require('jsonwebtoken').sign(
     { role: 'admin', sub: 'admin-1' },
-    'test-secret',
+    process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
 
@@ -1057,5 +1058,87 @@ describe('Dispute resolution — hold lifted on terminal status', () => {
         result:     'success',
       })
     );
+  });
+});
+
+// ─── POST /api/disputes/:id/attachments ───────────────────────────────────────
+
+describe('POST /api/disputes/:id/attachments — upload file attachment', () => {
+  let Dispute;
+
+  beforeEach(() => {
+    Dispute = require('../backend/src/models/disputeModel');
+    jest.clearAllMocks();
+  });
+
+  test('201 — uploads image attachment and appends to dispute evidence', async () => {
+    const updated = {
+      ...MOCK_DISPUTE,
+      evidence: [
+        {
+          type: 'screenshot',
+          url: 'data:image/png;base64,ZmFrZS1wbmctYnl0ZXM=',
+          description: 'Payment receipt',
+          uploadedAt: new Date(),
+        },
+      ],
+    };
+    Dispute.findOneAndUpdate.mockResolvedValueOnce(updated);
+
+    const res = await api('post', `/api/disputes/${MOCK_DISPUTE._id}/attachments`)
+      .field('notes', 'Payment receipt')
+      .attach('file', Buffer.from('fake-png-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.attachment).toBeDefined();
+    expect(res.body.attachment.type).toBe('screenshot');
+    expect(res.body.dispute).toBeDefined();
+  });
+
+  test('201 — uploads PDF document attachment', async () => {
+    const updated = {
+      ...MOCK_DISPUTE,
+      evidence: [
+        {
+          type: 'document',
+          url: 'data:application/pdf;base64,JVBERi0xLjQK',
+          description: 'bank_statement.pdf',
+          uploadedAt: new Date(),
+        },
+      ],
+    };
+    Dispute.findOneAndUpdate.mockResolvedValueOnce(updated);
+
+    const res = await api('post', `/api/disputes/${MOCK_DISPUTE._id}/attachments`)
+      .attach('file', Buffer.from('%PDF-1.4\n'), { filename: 'bank_statement.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.attachment.type).toBe('document');
+  });
+
+  test('400 — rejects when no file is attached', async () => {
+    const res = await api('post', `/api/disputes/${MOCK_DISPUTE._id}/attachments`)
+      .send({ notes: 'no file' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('FILE_REQUIRED');
+  });
+
+  test('400 — rejects unsupported file mime types', async () => {
+    const res = await api('post', `/api/disputes/${MOCK_DISPUTE._id}/attachments`)
+      .attach('file', Buffer.from('binary-exe-bytes'), { filename: 'malicious.exe', contentType: 'application/x-msdownload' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_FILE_TYPE');
+  });
+
+  test('404 — returns 404 when dispute is not found', async () => {
+    Dispute.findOneAndUpdate.mockResolvedValueOnce(null);
+
+    const res = await api('post', `/api/disputes/${MOCK_DISPUTE._id}/attachments`)
+      .attach('file', Buffer.from('png-data'), { filename: 'receipt.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
   });
 });

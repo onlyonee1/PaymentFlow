@@ -15,11 +15,14 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
     parentEmail: "",
     parentPhone: "",
     reminderOptOut: false,
+    paymentConfirmationOptOut: false,
+    disputeUpdateOptOut: false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
+  const [touchedFields, setTouchedFields] = useState({});
 
   useEffect(() => {
     if (student) {
@@ -28,18 +31,43 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
         class: student.class || "",
         parentEmail: student.parentEmail || "",
         parentPhone: student.parentPhone || "",
-        reminderOptOut: student.reminderOptOut || false,
+        reminderOptOut: Boolean(student.reminderOptOut),
+        paymentConfirmationOptOut: Boolean(student.paymentConfirmationOptOut),
+        disputeUpdateOptOut: Boolean(student.disputeUpdateOptOut),
       });
     }
   }, [student]);
 
+  function validateField(name, value) {
+    if (name === "name") {
+      if (!value || !value.trim()) return t("studentForm.nameRequired");
+    }
+    if (name === "parentEmail") {
+      if (value && value.trim() && !EMAIL_RE.test(value.trim())) {
+        return t("studentForm.parentEmailInvalid");
+      }
+    }
+    return null;
+  }
+
   function validate() {
     const errs = {};
-    if (!formData.name.trim()) errs.name = t("studentForm.nameRequired");
-    if (formData.parentEmail.trim() && !EMAIL_RE.test(formData.parentEmail.trim())) {
-      errs.parentEmail = t("studentForm.parentEmailInvalid");
-    }
+    const nameErr = validateField("name", formData.name);
+    if (nameErr) errs.name = nameErr;
+    const emailErr = validateField("parentEmail", formData.parentEmail);
+    if (emailErr) errs.parentEmail = emailErr;
     return errs;
+  }
+
+  function handleBlur(e) {
+    const { name, value } = e.target;
+    if (name === "reminderOptOut") return;
+    setTouchedFields(prev => ({ ...prev, [name]: true }));
+    const err = validateField(name, value);
+    setFieldErrors(prev => ({
+      ...prev,
+      [name]: err || undefined,
+    }));
   }
 
   async function handleSubmit(e) {
@@ -50,14 +78,20 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
       setFieldErrors(validationErrors);
+      // Mark all validated fields as touched so errors show
+      setTouchedFields(prev => ({ ...prev, name: true, parentEmail: true }));
       return;
     }
     setFieldErrors({});
     setLoading(true);
 
     try {
-      onOptimisticUpdate?.(student.studentId, formData);
-      await updateStudent(student.studentId, formData);
+      const updates = { ...formData };
+      for (const field of ["reminderOptOut", "paymentConfirmationOptOut", "disputeUpdateOptOut"]) {
+        if (updates[field] === Boolean(student[field])) delete updates[field];
+      }
+      onOptimisticUpdate?.(student.studentId, updates);
+      await updateStudent(student.studentId, updates);
       setSuccess(t("studentForm.updateSuccess"));
       setTimeout(() => {
         if (onSave) onSave();
@@ -65,7 +99,9 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
       }, 1000);
     } catch (err) {
       const data = err.response?.data;
-      const message = getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed");
+      const message = err.response?.status === 412
+        ? t("studentForm.stale", { defaultValue: "Someone else changed this — please refresh" })
+        : getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed");
       setError(message);
       onRollback?.(message);
     } finally {
@@ -73,9 +109,6 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
     }
   }
 
-  // Text fields get HTML tags stripped as the user types — defense-in-depth
-  // against stored XSS via student name/class (issue #1391), on top of the
-  // backend's own sanitization/escaping.
   const TEXT_FIELDS = new Set(["name", "class"]);
 
   function handleChange(e) {
@@ -86,6 +119,21 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
       ...prev,
       [name]: nextValue,
     }));
+    // If this field already has an error, re-validate immediately so error
+    // clears as soon as the value becomes valid.
+    if (fieldErrors[name] !== undefined) {
+      const err = validateField(name, nextValue);
+      setFieldErrors(prev => ({
+        ...prev,
+        [name]: err || undefined,
+      }));
+    }
+  }
+
+  function fieldBorderColor(name) {
+    if (fieldErrors[name]) return "#f87171";
+    if (touchedFields[name] && !fieldErrors[name] && formData[name]) return "#22c55e";
+    return "var(--border)";
   }
 
   if (!student) return null;
@@ -172,7 +220,7 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-name" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -181,29 +229,46 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
             }}>
               {t("studentForm.name")}
             </label>
-            <input
-              type="text"
-              name="name"
-              value={formData.name}
-              onChange={handleChange}
-              aria-invalid={!!fieldErrors.name}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                border: `1px solid ${fieldErrors.name ? "#f87171" : "var(--border)"}`,
-                borderRadius: "6px",
-                background: "var(--bg)",
-                color: "var(--text)",
-                boxSizing: "border-box",
-              }}
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                id="sf-name"
+                type="text"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                aria-invalid={!!fieldErrors.name}
+                aria-describedby={fieldErrors.name ? "sf-name-error" : undefined}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  paddingRight: touchedFields.name && !fieldErrors.name && formData.name ? "2.25rem" : "0.75rem",
+                  border: `1px solid ${fieldBorderColor("name")}`,
+                  borderRadius: "6px",
+                  background: "var(--bg)",
+                  color: "var(--text)",
+                  boxSizing: "border-box",
+                }}
+              />
+              {touchedFields.name && !fieldErrors.name && formData.name && (
+                <span
+                  aria-hidden="true"
+                  style={{ position: "absolute", right: "0.75rem", top: "50%", transform: "translateY(-50%)", color: "#22c55e", fontWeight: 700 }}
+                >✓</span>
+              )}
+            </div>
             {fieldErrors.name && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
+              <span
+                id="sf-name-error"
+                role="alert"
+                aria-live="polite"
+                style={{ color: "#dc2626", fontSize: "0.78rem" }}
+              >{fieldErrors.name}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-class" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -212,25 +277,35 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
             }}>
                {t("studentForm.className")}
             </label>
-            <input
-              type="text"
-              name="class"
-              value={formData.class}
-              onChange={handleChange}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                border: "1px solid var(--border)",
-                borderRadius: "6px",
-                background: "var(--bg)",
-                color: "var(--text)",
-                boxSizing: "border-box",
-              }}
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                id="sf-class"
+                type="text"
+                name="class"
+                value={formData.class}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  border: `1px solid ${fieldBorderColor("class")}`,
+                  borderRadius: "6px",
+                  background: "var(--bg)",
+                  color: "var(--text)",
+                  boxSizing: "border-box",
+                }}
+              />
+              {touchedFields.class && !fieldErrors.class && formData.class && (
+                <span
+                  aria-hidden="true"
+                  style={{ position: "absolute", right: "0.75rem", top: "50%", transform: "translateY(-50%)", color: "#22c55e", fontWeight: 700 }}
+                >✓</span>
+              )}
+            </div>
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-parentEmail" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -239,29 +314,46 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
             }}>
               {t("studentForm.parentEmail")}
             </label>
-            <input
-              type="email"
-              name="parentEmail"
-              value={formData.parentEmail}
-              onChange={handleChange}
-              aria-invalid={!!fieldErrors.parentEmail}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                border: `1px solid ${fieldErrors.parentEmail ? "#f87171" : "var(--border)"}`,
-                borderRadius: "6px",
-                background: "var(--bg)",
-                color: "var(--text)",
-                boxSizing: "border-box",
-              }}
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                id="sf-parentEmail"
+                type="email"
+                name="parentEmail"
+                value={formData.parentEmail}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                aria-invalid={!!fieldErrors.parentEmail}
+                aria-describedby={fieldErrors.parentEmail ? "sf-parentEmail-error" : undefined}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  paddingRight: touchedFields.parentEmail && !fieldErrors.parentEmail && formData.parentEmail ? "2.25rem" : "0.75rem",
+                  border: `1px solid ${fieldBorderColor("parentEmail")}`,
+                  borderRadius: "6px",
+                  background: "var(--bg)",
+                  color: "var(--text)",
+                  boxSizing: "border-box",
+                }}
+              />
+              {touchedFields.parentEmail && !fieldErrors.parentEmail && formData.parentEmail && (
+                <span
+                  aria-hidden="true"
+                  style={{ position: "absolute", right: "0.75rem", top: "50%", transform: "translateY(-50%)", color: "#22c55e", fontWeight: 700 }}
+                >✓</span>
+              )}
+            </div>
             {fieldErrors.parentEmail && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
+              <span
+                id="sf-parentEmail-error"
+                role="alert"
+                aria-live="polite"
+                style={{ color: "#dc2626", fontSize: "0.78rem" }}
+              >{fieldErrors.parentEmail}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-parentPhone" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -271,14 +363,16 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
               {t("studentForm.parentPhone")}
             </label>
             <input
+              id="sf-parentPhone"
               type="tel"
               name="parentPhone"
               value={formData.parentPhone}
               onChange={handleChange}
+              onBlur={handleBlur}
               style={{
                 width: "100%",
                 padding: "0.75rem",
-                border: "1px solid var(--border)",
+                border: `1px solid ${fieldBorderColor("parentPhone")}`,
                 borderRadius: "6px",
                 background: "var(--bg)",
                 color: "var(--text)",
@@ -327,6 +421,18 @@ export default function StudentForm({ student, onClose, onSave, onOptimisticUpda
               </span>
             </label>
           </div>
+
+          <fieldset style={{ marginBottom: "1rem" }}>
+            <legend>Email preferences</legend>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="paymentConfirmationOptOut" checked={formData.paymentConfirmationOptOut} onChange={handleChange} />
+              Disable payment confirmation emails
+            </label>
+            <label style={{ display: "block" }}>
+              <input type="checkbox" name="disputeUpdateOptOut" checked={formData.disputeUpdateOptOut} onChange={handleChange} />
+              Disable dispute update emails
+            </label>
+          </fieldset>
 
           <PaymentPlanForm
             student={student}

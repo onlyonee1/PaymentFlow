@@ -1,5 +1,7 @@
 'use strict';
 
+const { paginateList } = require('../utils/listCursor');
+
 const Refund = require('../models/refundModel');
 const Payment = require('../models/paymentModel');
 const Outbox = require('../models/outboxModel');
@@ -268,14 +270,22 @@ async function updateRefundStatus(refundId, newStatus, txHash = null, failureRea
   }
 }
 
-async function getRefundsByPayment(schoolId, originalTxHash) {
-  return Refund.find({ schoolId, originalTxHash }).sort({ createdAt: -1 }).lean();
+function listRefunds(scope, filter, { cursor, limit } = {}) {
+  return paginateList({
+    find: (query) => Refund.find(query).lean(),
+    scope,
+    filter,
+    cursor,
+    limit: Math.min(100, Math.max(1, parseInt(limit, 10) || 50)),
+  });
 }
 
-async function getRefundsBySchool(schoolId, status = null) {
-  const query = { schoolId };
-  if (status) query.status = status;
-  return Refund.find(query).sort({ createdAt: -1 }).lean();
+function getRefundsByPayment(schoolId, originalTxHash, pagination) {
+  return listRefunds('payment-refunds', { schoolId, originalTxHash }, pagination);
+}
+
+function getRefundsBySchool(schoolId, status, pagination) {
+  return listRefunds('school-refunds', { schoolId, ...(status && { status }) }, pagination);
 }
 
 module.exports = {

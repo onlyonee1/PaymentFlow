@@ -278,9 +278,8 @@ function Refunds() {
   const [refunds, setRefunds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
+  const [cursor, setCursor] = useState(null);
+  const [pagination, setPagination] = useState({});
   const [statusFilter, setStatusFilter] = useState("approval_pending");
   const [user, setUser] = useState(null);
 
@@ -298,15 +297,14 @@ function Refunds() {
     setLoading(true);
     setError(null);
     const params = {
-      page,
+      ...(cursor && { cursor }),
       limit: PAGE_SIZE,
       ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
     };
     getSchoolRefunds(params, { signal })
       .then(({ data }) => {
         setRefunds(Array.isArray(data.refunds) ? data.refunds : []);
-        setPages(data.pages || 1);
-        setTotal(data.total || 0);
+        setPagination(data.pagination || {});
       })
       .catch((err) => {
         // Silently ignore requests cancelled on unmount or navigation.
@@ -314,7 +312,7 @@ function Refunds() {
         setError(t("refunds.failedToLoad"));
       })
       .finally(() => setLoading(false));
-  }, [page, statusFilter, t, signal]);
+  }, [cursor, statusFilter, t, signal]);
 
   useEffect(() => {
     fetchRefunds();
@@ -369,7 +367,7 @@ function Refunds() {
             key={opt.value}
             onClick={() => {
               setStatusFilter(opt.value);
-              setPage(1);
+              setCursor(null);
             }}
             style={{
               padding: "0.5rem 1rem",
@@ -434,58 +432,13 @@ function Refunds() {
             ))}
           </div>
 
-          {pages > 1 && (
-            <div style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "1.5rem",
-              paddingTop: "1rem",
-              borderTop: "1px solid var(--border)",
-            }}>
-              <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                {t("refunds.showingRange", { start: (page - 1) * PAGE_SIZE + 1, end: Math.min(page * PAGE_SIZE, total), total })}
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    border: "1px solid var(--border)",
-                    background: page === 1 ? "var(--bg-subtle)" : "var(--bg)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: page === 1 ? "not-allowed" : "pointer",
-                    opacity: page === 1 ? 0.5 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.375rem",
-                  }}
-                >
-                  <IconChevronLeft size={16} />
-                </button>
-                <span style={{ fontSize: "0.8125rem", padding: "0.5rem 0.75rem" }}>
-                  {t("refunds.pageOf", { page, total: pages })}
-                </span>
-                <button
-                  onClick={() => setPage(p => Math.min(pages, p + 1))}
-                  disabled={page === pages}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    border: "1px solid var(--border)",
-                    background: page === pages ? "var(--bg-subtle)" : "var(--bg)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: page === pages ? "not-allowed" : "pointer",
-                    opacity: page === pages ? 0.5 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.375rem",
-                  }}
-                >
-                  <IconChevronRight size={16} />
-                </button>
-              </div>
-            </div>
+          {(pagination.prevCursor || pagination.nextCursor) && (
+            <nav>
+              <button className="page-btn" disabled={loading || !pagination.prevCursor}
+                onClick={() => setCursor(pagination.prevCursor)}>{t("actions.previousPage")}</button>
+              <button className="page-btn" disabled={loading || !pagination.nextCursor}
+                onClick={() => setCursor(pagination.nextCursor)}>{t("actions.nextPage")}</button>
+            </nav>
           )}
         </>
       )}

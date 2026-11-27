@@ -1,0 +1,6 @@
+{
+  "description": "Per-entrypoint gzipped bundle size budgets. CI fails if any entrypoint exceeds its budget.",
+  "unit": "KB",
+  "main": 300,
+  "chunk": 100
+}
