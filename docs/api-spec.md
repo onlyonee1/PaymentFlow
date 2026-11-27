@@ -77,21 +77,21 @@ HTTP 400
 
 ## Request Body Size Limits
 
-To protect against oversized payload attacks, the API enforces JSON body size limits:
+To protect against oversized payload attacks, the API enforces these request body limits:
 
 | Endpoint | Limit |
 |----------|-------|
-| JSON endpoints | `50kb` |
+| JSON and URL-encoded requests | `100kb` ceiling |
 | Multipart CSV imports | `5mb` per uploaded CSV file |
 
 Requests that exceed the applicable limit are rejected before reaching any handler:
 
 ```json
 HTTP 413
-{ "errors": [{ "field": "body", "message": "Request body must not exceed 50KB" }], "code": "PAYLOAD_TOO_LARGE" }
+{ "errors": [{ "field": "body", "message": "Request body exceeds the configured size limit" }], "code": "PAYLOAD_TOO_LARGE" }
 ```
 
-The JSON limit is fixed. Multipart imports use the streaming file-size limit and do not use the JSON parser.
+Set `MAX_BODY_SIZE` to lower the JSON and URL-encoded limit. Multipart CSV imports use a separate streaming file-size limit. The API strips harmless markup from parsed text fields and rejects disallowed markup with HTTP 400 before storage.
 
 ## Cursor Pagination
 

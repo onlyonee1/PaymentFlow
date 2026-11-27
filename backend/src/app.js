@@ -73,7 +73,7 @@ const { requestLogger } = require('./middleware/requestLogger');
 const { correlationIdMiddleware } = require('./middleware/correlationId');
 const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRequestHandler');
 const { requireAdminAuth } = require('./middleware/auth');
-const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
+const { jsonDepthGuard, sanitizeBody, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
 const { healthCheck, healthLive, healthReady } = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
@@ -179,6 +179,7 @@ app.use((req, res, next) => {
 
 // ── JSON depth / array-bomb guard + query-param de-pollution ──────────────────
 app.use(jsonDepthGuard);
+app.use(sanitizeBody);
 app.use(deduplicateQueryParams);
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({

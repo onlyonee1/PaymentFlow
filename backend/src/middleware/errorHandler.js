@@ -60,7 +60,7 @@ function globalErrorHandler(err, req, res, next) {
       contentLength: req.headers['content-length'],
     });
     return res.status(413).json({
-      errors: [{ field: 'body', message: 'Request body must not exceed 50KB' }],
+      errors: [{ field: 'body', message: 'Request body exceeds the configured size limit' }],
       code: 'PAYLOAD_TOO_LARGE',
       requestId: req.requestId,
     });
