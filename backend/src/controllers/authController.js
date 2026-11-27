@@ -771,6 +771,14 @@ async function handleLogout(req, res) {
 
 // ── Me ────────────────────────────────────────────────────────────────────────
 
+// Feature flags exposed to the frontend via /auth/me so clients can gate UI
+// without a separate config endpoint. Add boolean entries here as new
+// server-controlled features are rolled out.
+const FEATURE_FLAGS = Object.freeze({
+  refreshTokenRotation: true,   // #614 — silent re-auth via refresh token rotation
+  httpOnlyCookies:      true,   // #821 — tokens delivered as HttpOnly cookies only
+});
+
 async function handleMe(req, res) {
   const p = req.admin;
   let timezone = 'UTC';
@@ -787,7 +795,7 @@ async function handleMe(req, res) {
     schoolId: p.schoolId || null,
     timezone,
     roles:    Array.isArray(p.roles) ? p.roles : (p.role ? [p.role] : []),
-    features,
+    features: FEATURE_FLAGS,
     exp:      p.exp      || null,
   });
 }

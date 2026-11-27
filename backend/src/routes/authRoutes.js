@@ -20,6 +20,9 @@ const loginLimiter = rl(
 );
 
 // ── Core auth routes ──────────────────────────────────────────────────────────
+// #614 — Refresh token rotation: POST /refresh issues a new access + refresh
+// token pair, invalidates the old refresh token, and detects reuse (token theft).
+// Both tokens are delivered exclusively as HttpOnly, SameSite=Strict cookies.
 router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
