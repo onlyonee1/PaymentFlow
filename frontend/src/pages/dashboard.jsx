@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import SyncButton from "../components/SyncButton";
-import ErrorBoundary from "../components/ErrorBoundary";
+import ErrorBoundary, { WidgetErrorBoundary } from "../components/ErrorBoundary";
 import StudentForm from "../components/StudentForm";
 import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
@@ -512,7 +512,7 @@ function Dashboard() {
         )}
 
         {/* ── Stat Cards ────────────────────────────── */}
-        <ErrorBoundary>
+        <WidgetErrorBoundary label="payment summary">
           {summaryError ? (
             <div role="alert" className="alert alert-danger" style={{ marginBottom: "1.5rem" }}>
               <span style={{ flex: 1 }}>{summaryError}</span>
@@ -528,7 +528,7 @@ function Dashboard() {
               }
             </div>
           )}
-        </ErrorBoundary>
+        </WidgetErrorBoundary>
 
         {/* ── Student Table ─────────────────────────── */}
         <div className="card">
@@ -666,7 +666,7 @@ function Dashboard() {
           </div>
 
           {/* Table */}
-          <ErrorBoundary>
+          <WidgetErrorBoundary label="student table">
             {studentsError ? (
               <div className="card-body">
                 <EmptyState
@@ -833,7 +833,7 @@ function Dashboard() {
                 actionDisabled={importingStudents}
               />
             )}
-          </ErrorBoundary>
+          </WidgetErrorBoundary>
 
           {/* Pagination */}
           {(pagination.prevCursor || pagination.nextCursor) && (
