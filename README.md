@@ -251,9 +251,11 @@ StellarEduPay is a three-tier application:
 
 ## Getting Started
 
+> **New to the project?** Follow the [Developer Quick Start guide](docs/quickstart.md) to be up and running in under 15 minutes — it covers exact versions, environment setup, a first payment walkthrough, devcontainer support, and a troubleshooting FAQ.
+
 ### Prerequisites
 
-- **Node.js** ≥ 20 ([download](https://nodejs.org/))
+- **Node.js** 20.11.0 ([download](https://nodejs.org/) or use `nvm use` with the included `.nvmrc`)
 - **MongoDB 7** running as a **replica set** (required for multi-document transactions)
 - **Redis 7** (required for BullMQ; the service degrades gracefully without it but Redis is recommended for production)
 - **Git**
