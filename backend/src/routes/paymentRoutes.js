@@ -207,6 +207,7 @@ router.get("/accepted-assets", requireSchoolAuth(), getAcceptedAssets);
 router.get("/limits", requireSchoolAuth(), getPaymentLimitsEndpoint);
 router.get("/sync/status", requireSchoolAuth(), getSyncStatus);
 router.get("/events", requireSchoolAuth(), streamPaymentEvents);
+router.get("/stream", requireSchoolAuth(), streamPaymentEvents);
 router.get("/overpayments", requireSchoolAuth(), getOverpayments);
 router.get("/suspicious", requireSchoolAuth(), getSuspiciousPayments);
 router.get("/pending", requireSchoolAuth(), getPendingPayments);

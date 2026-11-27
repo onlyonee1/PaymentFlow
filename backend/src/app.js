@@ -210,6 +210,7 @@ app.use('/api/reports', reportRoutes);
 app.get('/unsubscribe', require('./controllers/reminderController').unsubscribeViaToken);
 app.use('/api/reminders', reminderRoutes);
 app.use('/api/disputes', disputeRoutes);
+app.use('/api/sse', require('./routes/sse'));
 app.use('/api/source-rules', sourceValidationRuleRoutes);
 app.use('/api/receipts', receiptsRoutes);
 app.use('/api/fee-adjustments', feeAdjustmentRoutes);

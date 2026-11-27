@@ -13,6 +13,7 @@ import AccessiblePagination from "../components/AccessiblePagination";
 import { SkeletonStatCard, SkeletonTableRow } from "../components/Skeleton";
 import Pagination from "../components/Pagination";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
+import { usePaymentStream } from "../hooks/usePaymentStream";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useRouteChangeAbort } from "../hooks/useRouteChangeAbort";
 import useGridCellNavigation from "../hooks/useGridCellNavigation";
@@ -83,6 +84,33 @@ function Dashboard() {
         fetchSummary();
         fetchStudents(page, debouncedSearch, statusFilter, classFilter);
       }
+    },
+  });
+
+  // Real-time live payment stream (Issue #553) — updates payment status badges without page reload and fires toast on confirmed.
+  const { toast: paymentToast, dismissToast: dismissPaymentToast } = usePaymentStream({
+    onPaymentUpdate: (updatedPayment) => {
+      if (updatedPayment?.studentId) {
+        setStudents((prev) =>
+          prev.map((s) => {
+            if (s.studentId === updatedPayment.studentId) {
+              const paymentStatus = String(updatedPayment.status || '').toLowerCase();
+              let newStatus = s.status;
+              if (paymentStatus === 'confirmed' || paymentStatus === 'success') {
+                newStatus = 'paid';
+              } else if (paymentStatus === 'submitted' || paymentStatus === 'pending') {
+                newStatus = 'partial';
+              }
+              return { ...s, status: newStatus };
+            }
+            return s;
+          })
+        );
+      }
+    },
+    onConfirmed: () => {
+      invalidateDashboardData();
+      fetchSummary();
     },
   });
 
@@ -431,6 +459,45 @@ function Dashboard() {
       {mutationToast && (
         <div role="alert" aria-live="assertive" className="alert alert-danger" style={{ position: "fixed", right: "1rem", bottom: "1rem", zIndex: 1100, maxWidth: "min(32rem, calc(100vw - 2rem))" }}>
           {mutationToast}
+        </div>
+      )}
+      {paymentToast && paymentToast.visible && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="alert alert-success"
+          style={{
+            position: "fixed",
+            right: "1rem",
+            top: "4.5rem",
+            zIndex: 1100,
+            maxWidth: "min(32rem, calc(100vw - 2rem))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <IconCheck size={18} />
+            <span>{paymentToast.message}</span>
+          </div>
+          <button
+            onClick={dismissPaymentToast}
+            style={{
+              background: "none",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: "1rem",
+              lineHeight: 1,
+              padding: "0.2rem",
+            }}
+            aria-label="Dismiss notification"
+          >
+            ✕
+          </button>
         </div>
       )}
 
