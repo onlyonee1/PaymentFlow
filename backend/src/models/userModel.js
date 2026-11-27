@@ -12,6 +12,7 @@ const userSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    passwordChangedAt: { type: Date },
     passwordHash: { type: String, required: true },
     // null schoolId = super-admin (break-glass only; prefer env super-admin)
     schoolId: { type: String, default: null, index: true },

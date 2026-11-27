@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const { isPasswordSessionCurrent } = require('../services/passwordSessionService');
 const logger = require('../utils/logger');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { get, set, del } = require('../cache');
@@ -55,7 +56,17 @@ function makeRedisStore(client) {
   return {
     // Store token metadata keyed by SHA-256(raw token).
     async setToken(token, ttlSeconds, meta) {
-      await client.set(`refresh:token:${hashToken(token)}`, JSON.stringify(meta), 'EX', ttlSeconds);
+      const tokenKey = `refresh:token:${hashToken(token)}`;
+      const familyKey = `refresh:family-token:${meta.familyId}`;
+      const script = [
+        "if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end",
+        "redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])",
+        "redis.call('SET', KEYS[2], KEYS[1], 'EX', ARGV[2])",
+        'return 1',
+      ].join('\n');
+      const stored = await client.eval(script, 3, tokenKey, familyKey,
+        `refresh:revoked:${meta.familyId}`, JSON.stringify(meta), String(ttlSeconds));
+      if (stored !== 1) throw new Error('Refresh token family has been revoked');
     },
     async getToken(token) {
       const raw = await client.get(`refresh:token:${hashToken(token)}`);
@@ -126,6 +137,9 @@ function makeRedisStore(client) {
       ).select('expiresAt').lean();
       const remainingTtl = Math.max(1, Math.ceil((family.expiresAt.getTime() - Date.now()) / 1000));
       await client.set(`refresh:revoked:${familyId}`, '1', 'EX', remainingTtl);
+      const tokenIndex = `refresh:family-token:${familyId}`;
+      const tokenKey = await client.get(tokenIndex);
+      if (tokenKey) await client.del(tokenKey, tokenIndex);
       await client.del(`refresh:family:${familyId}`);
     },
     async isFamilyRevoked(familyId) {
@@ -138,7 +152,8 @@ function makeRedisStore(client) {
       await client.set(`session:${sessionId}`, JSON.stringify(data), 'EX', ttlSeconds);
       if (data.userId) {
         await client.sadd(`sessions:user:${data.userId}`, sessionId);
-        await client.expire(`sessions:user:${data.userId}`, ttlSeconds);
+        await client.expire(`sessions:user:${data.userId}`, ttlSeconds, 'GT');
+        await client.expire(`sessions:user:${data.userId}`, ttlSeconds, 'NX');
       }
     },
     async getSession(sessionId) {
@@ -166,14 +181,37 @@ function makeRedisStore(client) {
       }
       return result;
     },
+    // Older deployments indexed refresh tokens by hash alone. Sweep the
+    // existing keyspace once during password changes to remove those keys too.
+    async purgeUserTokens(userId, passwordVersion) {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await client.scan(cursor, 'MATCH', 'refresh:token:*', 'COUNT', 200);
+        cursor = nextCursor;
+        if (!keys.length) continue;
+        const values = await client.mget(...keys);
+        const staleKeys = keys.filter((key, index) => {
+          if (!values[index]) return false;
+          try {
+            const meta = JSON.parse(values[index]);
+            return meta.userId === userId && (meta.passwordVersion ?? 0) < passwordVersion;
+          } catch {
+            return false;
+          }
+        });
+        if (staleKeys.length) await client.del(...staleKeys);
+      } while (cursor !== '0');
+    },
     // Revoke all session families for a given userId. Used by admin endpoints
     // and by handleChangePassword.
     async revokeUserSessions(userId, ttlSeconds) {
+      const RefreshTokenFamily = require('../models/refreshTokenFamilyModel');
+      const families = await RefreshTokenFamily.find({
+        userId, revokedAt: null, expiresAt: { $gt: new Date() },
+      }).select('familyId').lean();
       const sessions = await this.listUserSessions(userId);
-      await Promise.all(sessions.map(async ({ sessionId, familyId }) => {
-        if (familyId) await this.revokeFamily(familyId, ttlSeconds).catch(() => {});
-        await this.delSession(sessionId).catch(() => {});
-      }));
+      await Promise.all(families.map(({ familyId }) => this.revokeFamily(familyId, ttlSeconds)));
+      await Promise.all(sessions.map(({ sessionId }) => this.delSession(sessionId)));
       return sessions.length;
     },
   };
@@ -232,6 +270,9 @@ function makeMemoryStore() {
     async revokeFamily(familyId, ttlSeconds) {
       revoked.set(familyId, Date.now() + ttlSeconds * 1000);
       families.delete(familyId);
+      for (const [tokenHash, entry] of tokens) {
+        if (entry.meta.familyId === familyId) tokens.delete(tokenHash);
+      }
     },
     async isFamilyRevoked(familyId) {
       const exp = revoked.get(familyId);
@@ -269,8 +310,8 @@ function makeMemoryStore() {
     async revokeUserSessions(userId, ttlSeconds) {
       const sessions = await this.listUserSessions(userId);
       await Promise.all(sessions.map(async ({ sessionId, familyId }) => {
-        if (familyId) await this.revokeFamily(familyId, ttlSeconds).catch(() => {});
-        await this.delSession(sessionId).catch(() => {});
+        if (familyId) await this.revokeFamily(familyId, ttlSeconds);
+        await this.delSession(sessionId);
       }));
       return sessions.length;
     },
@@ -400,9 +441,8 @@ async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
   const sessionId = crypto.randomBytes(16).toString('hex');
   const refreshToken = crypto.randomBytes(40).toString('hex');
   const familyExpiresAt = new Date(Date.now() + refreshTTL * 1000);
+  Object.assign(jwtPayload, { familyId, sessionId });
   const tokenMeta = {
-    familyId,
-    sessionId,
     ...jwtPayload,
     familyExpiresAt: familyExpiresAt.toISOString(),
   };
@@ -412,7 +452,7 @@ async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
 
   await store.setTokenFamily(familyId, 1, refreshTTL, familyExpiresAt, jwtPayload.userId || null);
 
-  store.setSession(sessionId, {
+  await store.setSession(sessionId, {
     userId:     jwtPayload.userId   || null,
     role:       jwtPayload.role     || null,
     roles:      jwtPayload.roles    || [],
@@ -477,7 +517,6 @@ async function handleLogin(req, res) {
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
     const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
-    const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
     const store = getStore();
     let refreshToken;
@@ -489,7 +528,7 @@ async function handleLogin(req, res) {
     }
 
     // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
-    res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+    res.cookie(ACCESS_COOKIE, jwt.sign(jwtPayload, secret, { expiresIn: accessTTL }), accessCookieOptions(accessTTL));
     res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
     return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
@@ -586,12 +625,12 @@ async function handleLogin(req, res) {
 
   const jwtPayload = {
     role:     'user',
+    passwordVersion: user.passwordChangedAt?.getTime() ?? 0,
     userId:   user._id.toString(),
     schoolId: user.schoolId,
     roles:    user.roles,
     ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
   };
-  const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
   const store = getStore();
   let refreshToken;
@@ -603,7 +642,7 @@ async function handleLogin(req, res) {
   }
 
   // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
-  res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+  res.cookie(ACCESS_COOKIE, jwt.sign(jwtPayload, secret, { expiresIn: accessTTL }), accessCookieOptions(accessTTL));
   res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
   return res.json({ expiresIn: accessTTL, refreshExpiresIn: refreshTTL, mfaSetupRequired: mfaSetupPending });
@@ -661,7 +700,7 @@ async function handleRefresh(req, res) {
   }
 
   // Reject if the whole token family has been revoked
-  if (!meta.familyId || await store.isFamilyRevoked(meta.familyId)) {
+  if (!meta.familyId || await store.isFamilyRevoked(meta.familyId) || !await isPasswordSessionCurrent(meta)) {
     res.clearCookie(REFRESH_COOKIE, refreshCookieOptions(0));
     return res.status(401).json({ error: 'Session has been revoked.', code: 'SESSION_REVOKED' });
   }
@@ -715,7 +754,7 @@ async function handleRefresh(req, res) {
     return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
   }
 
-  if (await store.isFamilyRevoked(meta.familyId)) {
+  if (await store.isFamilyRevoked(meta.familyId) || !await isPasswordSessionCurrent(meta)) {
     await store.delToken(newRefreshToken).catch(() => {});
     res.clearCookie(REFRESH_COOKIE, refreshCookieOptions(0));
     return res.status(401).json({ error: 'Token reuse detected. Session revoked.', code: 'TOKEN_REUSE_DETECTED' });
@@ -729,7 +768,8 @@ async function handleRefresh(req, res) {
   }
 
   // Reconstruct JWT payload from stored metadata
-  const jwtPayload = {};
+  const jwtPayload = { familyId: meta.familyId, sessionId: meta.sessionId };
+  if (meta.userId && meta.userId !== 'super_admin') jwtPayload.passwordVersion = meta.passwordVersion ?? 0;
   if (meta.role)     jwtPayload.role     = meta.role;
   if (meta.userId)   jwtPayload.userId   = meta.userId;
   if (meta.roles)    jwtPayload.roles    = meta.roles;
@@ -764,8 +804,10 @@ async function handleLogout(req, res) {
   }
 
   const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
-  res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
-  res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
+  if (!isReset || userId === req.admin?.userId) {
+    res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
+    res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
+  }
   return res.json({ message: 'Logged out.' });
 }
 
@@ -805,8 +847,13 @@ async function handleMe(req, res) {
 async function handleListSessions(req, res) {
   const userId = req.admin?.userId || 'super_admin';
   try {
-    const sessions = await getStore().listUserSessions(userId);
-    return res.json({ sessions });
+    const store = getStore();
+    const sessions = await store.listUserSessions(userId);
+    const active = await Promise.all(sessions.map(async ({ sessionId, familyId, deviceInfo, lastUsed }) => {
+      if (await store.isFamilyRevoked(familyId)) return null;
+      return { sessionId, deviceInfo, lastUsed, current: familyId === req.admin?.familyId };
+    }));
+    return res.json({ sessions: active.filter(Boolean) });
   } catch (err) {
     logger.error('[AuthController] Failed to list sessions', { error: err.message });
     return res.status(500).json({ error: 'Failed to list sessions.', code: 'SESSION_LIST_ERROR' });
@@ -817,14 +864,14 @@ async function handleRevokeSession(req, res) {
   const { sessionId } = req.params;
   const store = getStore();
   const sess = await store.getSession(sessionId).catch(() => null);
-  if (!sess) {
+  if (!sess || sess.userId !== (req.admin?.userId || 'super_admin')) {
     return res.status(404).json({ error: 'Session not found.', code: 'SESSION_NOT_FOUND' });
   }
   if (sess.familyId) {
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
-    await store.revokeFamily(sess.familyId, refreshTTL).catch(() => logger.debug('[AuthController] revokeFamily in handleRevokeSession missed'));
+    await store.revokeFamily(sess.familyId, refreshTTL);
   }
-  await store.delSession(sessionId).catch(() => logger.debug('[AuthController] delSession in handleRevokeSession missed'));
+  await store.delSession(sessionId);
 
   // Audit: session revocation is a privileged security mutation
   try {
@@ -839,7 +886,7 @@ async function handleRevokeSession(req, res) {
       details:     { revokedUserId: sess.userId || null },
       result:      'success',
       ipAddress:   req.ip || null,
-      userAgent:   req.get('user-agent') || null,
+      userAgent:   req.get?.('user-agent') || null,
       severity:    'high',
     });
   } catch (auditErr) {
@@ -898,12 +945,14 @@ async function handleRevokeOwnSessions(req, res) {
 // when their password changes so that a stolen refresh token cannot be used
 // to continue obtaining access tokens after a password reset.
 
-async function handleChangePassword(req, res) {
+async function changePassword(req, res, resetUserId) {
   const { currentPassword, newPassword } = req.body || {};
+  const isReset = Boolean(resetUserId);
 
-  if (!currentPassword || !newPassword) {
+  if (typeof newPassword !== 'string' || !newPassword ||
+      (!isReset && (typeof currentPassword !== 'string' || !currentPassword))) {
     return res.status(400).json({
-      error: 'currentPassword and newPassword are required.',
+      error: isReset ? 'newPassword is required.' : 'currentPassword and newPassword are required.',
       code: 'VALIDATION_ERROR',
     });
   }
@@ -915,7 +964,7 @@ async function handleChangePassword(req, res) {
     });
   }
 
-  const userId = req.admin?.userId;
+  const userId = resetUserId || req.admin?.userId;
 
   // Super-admin (env-based) path
   if (!userId || userId === 'super_admin') {
@@ -938,7 +987,7 @@ async function handleChangePassword(req, res) {
     return res.status(404).json({ error: 'User not found.', code: 'NOT_FOUND' });
   }
 
-  const currentValid = Boolean(currentPassword) && await bcrypt.compare(currentPassword, user.passwordHash);
+  const currentValid = isReset || await bcrypt.compare(currentPassword, user.passwordHash);
   if (!currentValid) {
     // Audit failed attempt without exposing the submitted password
     try {
@@ -953,7 +1002,7 @@ async function handleChangePassword(req, res) {
         result:      'failure',
         errorMessage: 'Invalid current password',
         ipAddress:   req.ip || null,
-        userAgent:   req.get('user-agent') || null,
+        userAgent:   req.get?.('user-agent') || null,
         severity:    'high',
       });
     } catch (auditErr) {
@@ -963,10 +1012,15 @@ async function handleChangePassword(req, res) {
   }
 
   const newHash = await bcrypt.hash(newPassword, 12);
+  const passwordChangedAt = new Date();
 
   try {
     const User = require('../models/userModel');
-    await User.findByIdAndUpdate(userId, { $set: { passwordHash: newHash } });
+    const updated = await User.findOneAndUpdate(
+      { _id: userId, passwordHash: user.passwordHash },
+      { $set: { passwordHash: newHash, passwordChangedAt } },
+    );
+    if (!updated) return res.status(409).json({ error: 'Password already changed.', code: 'PASSWORD_CHANGED' });
   } catch (err) {
     logger.error('[AuthController] Failed to update password hash', { error: err.message });
     return res.status(500).json({ error: 'Failed to update password.', code: 'DB_ERROR' });
@@ -977,7 +1031,13 @@ async function handleChangePassword(req, res) {
   const store = getStore();
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
   try {
-    const count = await store.revokeUserSessions(userId, refreshTTL);
+    const [revocations, purge] = await Promise.allSettled([
+      store.revokeUserSessions(userId, refreshTTL),
+      store.purgeUserTokens?.(userId, passwordChangedAt.getTime()),
+    ]);
+    if (revocations.status === 'rejected') throw revocations.reason;
+    if (purge.status === 'rejected') throw purge.reason;
+    const count = revocations.value;
     logger.info('[AuthController] All sessions revoked after password change', { userId, count });
   } catch (err) {
     // Non-fatal: password is already updated; log and continue.
@@ -986,8 +1046,10 @@ async function handleChangePassword(req, res) {
 
   // Clear the caller's own cookies — they must log in again with the new password.
   const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
-  res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
-  res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
+  if (!isReset || userId === req.admin?.userId) {
+    res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
+    res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
+  }
 
   // Audit: password change is a high-severity privileged mutation
   try {
@@ -995,14 +1057,14 @@ async function handleChangePassword(req, res) {
     await logAudit({
       schoolId:    req.admin?.schoolId || 'system',
       action:      'password_change',
-      performedBy: userId,
+      performedBy: req.admin?.userId || 'super_admin',
       targetId:    userId,
       targetType:  'user',
       // Never log old or new password hash values
       details:     { sessionsRevoked: true },
       result:      'success',
       ipAddress:   req.ip || null,
-      userAgent:   req.get('user-agent') || null,
+      userAgent:   req.get?.('user-agent') || null,
       severity:    'high',
     });
   } catch (auditErr) {
@@ -1021,7 +1083,19 @@ module.exports = {
   handleRevokeSession,
   handleRevokeUserSessions,
   handleRevokeOwnSessions,
-  handleChangePassword,
+  handleChangePassword: (req, res) => changePassword(req, res),
+  handleResetPassword: (req, res) => changePassword(req, res, req.params.userId),
+  isSessionRevoked: familyId => getStore().isFamilyRevoked(familyId),
+  async touchSession(sessionId) {
+    if (!sessionId) return;
+    const store = getStore();
+    const session = await store.getSession(sessionId);
+    if (!session || Date.now() - Date.parse(session.lastUsed) < 60_000) return;
+    const remainingTTL = Math.ceil((Date.parse(session.familyExpiresAt) - Date.now()) / 1000);
+    if (remainingTTL > 0) {
+      await store.setSession(sessionId, { ...session, lastUsed: new Date().toISOString() }, remainingTTL);
+    }
+  },
   _resetStore,
   // Exported for tests only — allows verifying hash storage without touching Redis
   _hashToken: hashToken,

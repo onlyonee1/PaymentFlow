@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
-const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleRevokeUserSessions, handleRevokeOwnSessions, handleChangePassword } = require('../controllers/authController');
+const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleRevokeUserSessions, handleRevokeOwnSessions, handleChangePassword, handleResetPassword } = require('../controllers/authController');
 const {
   setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
@@ -26,17 +26,18 @@ const loginLimiter = rl(
 router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
-router.get('/me', requireAdminAuth, handleMe);
+router.get('/me', requireSchoolAuth(), handleMe);
 
 // ── Password management ───────────────────────────────────────────────────────
 // #1360 — Changing the password immediately invalidates all existing sessions
 // so stolen refresh tokens cannot outlive a password reset.
 router.post('/change-password', requireSchoolAuth(), handleChangePassword);
+router.post('/users/:userId/reset-password', requireAdminAuth, handleResetPassword);
 
 // ── Session management ────────────────────────────────────────────────────────
-router.get('/sessions', requireAdminAuth, handleListSessions);
+router.get('/sessions', requireSchoolAuth(), handleListSessions);
 router.delete('/sessions', requireSchoolAuth(), handleRevokeOwnSessions);
-router.delete('/sessions/:sessionId', requireAdminAuth, handleRevokeSession);
+router.delete('/sessions/:sessionId', requireSchoolAuth(), handleRevokeSession);
 // Admin revocation by userId — revokes ALL active sessions for the given user.
 // Requires admin auth. Used for account-takeover response and forced password
 // reset scenarios where all refresh tokens must be invalidated immediately.
