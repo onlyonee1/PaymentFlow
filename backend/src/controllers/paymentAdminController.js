@@ -12,7 +12,7 @@ const { createReceipt, verifyReceiptSignature } = require('../services/receiptSe
 const { finalizeConfirmedPayments } = require('../services/stellarService');
 const { logAudit } = require('../services/auditService');
 const { syncDurationSeconds } = require('../metrics');
-const { syncPaymentsForSchool } = require('../services/stellarService');
+const { getProvider } = require('../services/providers/registry');
 const { initiateRefund, approveRefund, getRefundsByPayment, getRefundsBySchool } = require('../services/refundService');
 const { generateReconciliationReport } = require('../services/reconciliationService');
 const lock = require('../services/distributedLock');
@@ -50,7 +50,7 @@ async function syncAllPayments(req, res, next) {
 
   const stopSyncTimer = syncDurationSeconds.startTimer();
   try {
-    const summary = await syncPaymentsForSchool(req.school);
+    const summary = await getProvider(undefined, req.school).reconcile(req.school);
 
     if (req.auditContext) {
       await logAudit({

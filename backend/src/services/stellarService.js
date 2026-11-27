@@ -522,10 +522,10 @@ async function detectAbnormalPatterns(
  *   UNSUPPORTED_ASSET (400)   — asset not accepted
  *   AMOUNT_TOO_LOW/HIGH (400) — outside configured limits
  */
-async function verifyTransaction(txHash, walletAddress, schoolId = null) {
+async function verifyTransaction(txHash, walletAddress, schoolId = null, retryOptions = {}) {
   const tx = await withStellarRetry(
     () => server.transactions().transaction(txHash).call(),
-    { label: "verifyTransaction", context: `Transaction ${txHash}` },
+    { ...retryOptions, label: "verifyTransaction", context: `Transaction ${txHash}` },
   );
 
   // 1. Validate transaction success
@@ -542,6 +542,7 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
 
   // 2. Find matching payment operation first (destination + asset checks before memo)
   const ops = await withStellarRetry(() => innerTx.operations(), {
+    ...retryOptions,
     label: "verifyTransaction.operations",
     context: `Transaction ${txHash} operations`,
   });

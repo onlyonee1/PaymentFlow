@@ -227,7 +227,8 @@ async function withBreaker(providerName, fn, opts = {}) {
     _updateFailuresGauge(providerName, cb);
     return result;
   } catch (err) {
-    cb.recordFailure();
+    if (!opts.countsAsFailure || opts.countsAsFailure(err)) cb.recordFailure();
+    else if (cb.getState() === CB_STATE.HALF_OPEN) cb.recordSuccess();
     _updateFailuresGauge(providerName, cb);
     throw err;
   }

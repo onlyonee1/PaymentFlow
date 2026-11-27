@@ -55,6 +55,7 @@ const schoolSchema = new mongoose.Schema(
         message: 'previousStellarAddress must be a valid Stellar public key (Ed25519)',
       },
     },
+    enabledPaymentProviders: { type: [String], default: undefined },
     isActive:       { type: Boolean, default: true, index: true },
     /**
      * Horizon paging cursor for the transaction poller (#839).

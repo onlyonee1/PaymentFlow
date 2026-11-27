@@ -304,6 +304,8 @@ connectDatabase().then(async () => {
     throw err;
   }
 
+  await require('./services/providers/registry').initializePaymentProviders();
+
   // Start heap monitoring to detect memory leaks early
   startHeapMonitoring();
 
