@@ -1,6 +1,6 @@
 version: "3.8"
 
-# Local development monitoring stack — Prometheus + Grafana + Loki.
+# Local development monitoring stack for metrics and traces.
 #
 # Usage:
 #   1. Set METRICS_TOKEN in backend/.env (generate with: openssl rand -hex 32)
@@ -11,12 +11,8 @@ version: "3.8"
 #
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3001  (admin / <GRAFANA_PASSWORD>)
-# Loki:       http://localhost:3100  (log aggregation; query via Grafana)
-#
-# Log retention:
-#   Hot (Loki): 30 days  — controlled by LOKI_RETENTION_PERIOD below
-#   Cold (S3-compatible): configure loki-config.yml with an object-storage
-#     ruler when deploying to AWS/GCS for 1-year cold archival.
+# Jaeger:     http://localhost:16686
+# OTLP/HTTP:  http://localhost:4318
 #
 # NOTE: GRAFANA_PASSWORD is a required environment variable. Docker Compose will
 # refuse to start the monitoring stack if it is not set.
@@ -46,8 +42,11 @@ services:
   grafana:
     image: grafana/grafana:10.4.3
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Error: GRAFANA_PASSWORD environment variable must be set. Generate one with: openssl rand -hex 24}
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD before starting the monitoring stack}"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: "yesoreyeram-infinity-datasource 2.4.0"
+      PAYMENT_METRICS_ORIGIN: ${PAYMENT_METRICS_ORIGIN:-http://host.docker.internal:5000}
+      PAYMENT_METRICS_TOKEN: ${METRICS_BEARER_TOKEN:-${METRICS_TOKEN:-}}
       GF_SERVER_ROOT_URL: "http://localhost:3001"
     volumes:
       - grafana_data:/var/lib/grafana
@@ -55,45 +54,44 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3001:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
       - loki
     networks:
       - monitoring
 
-  # ── Log aggregation ───────────────────────────────────────────────────────
-
-  # Loki: receives structured JSON logs shipped by the backend (via stdout/
-  # Promtail or direct push) and makes them queryable in Grafana.
-  # Retention: 30 days hot storage.  For 1-year cold archival configure an
-  # S3-compatible object-storage backend in monitoring/loki-config.yml.
-  loki:
-    image: grafana/loki:2.9.8
-    command: -config.file=/etc/loki/loki-config.yml
-    volumes:
-      - ./monitoring/loki-config.yml:/etc/loki/loki-config.yml:ro
-      - loki_data:/loki
+  jaeger:
+    image: jaegertracing/all-in-one:1.67.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "3100:3100"
+      - "127.0.0.1:16686:16686"
     networks:
       - monitoring
-    restart: unless-stopped
 
-  # Promtail: tails Docker container stdout/stderr and forwards JSON log
-  # lines to Loki.  Automatically labels each stream with container_name,
-  # service, and environment so logs are filterable in Grafana.
-  promtail:
-    image: grafana/promtail:2.9.8
-    command: -config.file=/etc/promtail/promtail-config.yml
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo.yml"]
     volumes:
-      - ./monitoring/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      - /var/log:/var/log:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-    depends_on:
-      - loki
+      - ./monitoring/tempo.yml:/etc/tempo.yml:ro
+      - tempo_data:/var/tempo
     networks:
       - monitoring
-    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.119.0
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./monitoring/otel-collector.yml:/etc/otel-collector.yml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+    depends_on:
+      - jaeger
+      - tempo
+    networks:
+      - monitoring
 
   # ── Infrastructure exporters ──────────────────────────────────────────────
 
@@ -155,4 +153,4 @@ networks:
 volumes:
   prometheus_data:
   grafana_data:
-  loki_data:
+  tempo_data:

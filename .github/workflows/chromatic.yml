@@ -1,0 +1,50 @@
+name: Publish to Chromatic
+
+on:
+  workflow_run:
+    workflows: [Build Storybook]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  chromatic:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'pull_request' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Keep the workspace and Chromatic configuration on the trusted base branch.
+      # The fork build is downloaded only as static data and is never executed here.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch Storybook commit metadata
+        env:
+          SOURCE_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: git fetch --no-tags "https://github.com/${SOURCE_REPO}.git" "$SOURCE_SHA"
+      - uses: actions/download-artifact@v4
+        with:
+          name: storybook-static
+          path: ${{ runner.temp }}/storybook-static
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Run Chromatic
+        uses: chromaui/action@c93e0bc3a63aa176e14a75b61a31847cbfdd341c
+        with:
+          projectToken: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+          storybookBuildDir: ${{ runner.temp }}/storybook-static
+          autoAcceptChanges: ${{ github.event.workflow_run.event == 'push' }}
+          exitZeroOnChanges: true
+        env:
+          CHROMATIC_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CHROMATIC_SHA: ${{ github.event.workflow_run.head_sha }}
+          CHROMATIC_SLUG: ${{ github.event.workflow_run.head_repository.full_name }}
