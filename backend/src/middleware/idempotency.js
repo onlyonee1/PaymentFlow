@@ -89,26 +89,16 @@ function idempotency(opts = {}) {
   const criticalPaymentEndpoints = opts.criticalPaymentEndpoints ?? false;
 
   return function idempotencyMiddleware(req, res, next) {
-    const rawKey = req.headers['idempotency-key'];
+    const rawKey = req.headers['x-idempotency-key'] || req.headers['idempotency-key'];
 
     if (!rawKey || typeof rawKey !== 'string' || !rawKey.trim()) {
       return res.status(400).json({
-        error: 'Idempotency-Key header is required for this request',
+        error: 'X-Idempotency-Key header is required for this request',
         code: 'MISSING_IDEMPOTENCY_KEY',
       });
     }
 
-    // Idempotency-Key must be a UUID v4 to prevent accidental key collisions
-    // from non-random client-generated values.
-    const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (!UUID_V4_RE.test(rawKey.trim())) {
-      return res.status(400).json({
-        error: 'Idempotency-Key must be a valid UUID v4',
-        code: 'INVALID_IDEMPOTENCY_KEY_FORMAT',
-      });
-    }
-
-    const scope = req.path;
+    const scope = opts.schoolScoped ? `${req.schoolId}:${req.path}` : req.path;
     const canonicalKey = deriveIdempotencyKey(rawKey, scope);
     const fingerprint = fingerprintRequest(req.body);
 
