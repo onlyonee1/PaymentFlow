@@ -353,7 +353,7 @@ describe('docs/slo-definitions.md', () => {
   );
 
   test('defines API Availability SLO with target', () => {
-    expect(content).toContain('99.5');
+    expect(content).toContain('99.9');
   });
 
   test('defines Payment Confirmation Latency SLO', () => {
