@@ -108,6 +108,19 @@ const app = express();
 // (see config/index.js) instead of silently becoming NaN here.
 app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
+// Correlation ID must be resolved before requestLogger so the logger uses the
+// same ID that will be reflected in the response header.
+app.use(correlationIdMiddleware);
+app.use((req, res, next) => {
+  const json = res.json;
+  res.json = function sendJson(body) {
+    if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+      return json.call(this, { ...body, requestId: req.requestId });
+    }
+    return json.call(this, body);
+  };
+  next();
+});
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use((req, res, next) => {
   res.vary('Origin');
@@ -144,9 +157,6 @@ app.use(express.json({
     req.rawBody = buf.toString('utf8');
   },
 }));
-// Correlation ID must be resolved before requestLogger so the logger uses the
-// same ID that will be reflected in the response header.
-app.use(correlationIdMiddleware);
 const API_VERSION = process.env.API_VERSION || '1.0.0';
 app.use((req, res, next) => {
   res.setHeader('X-API-Version', API_VERSION);
