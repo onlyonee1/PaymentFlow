@@ -9,7 +9,7 @@
     "build": "next build",
     "analyze": "ANALYZE=true next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "node ../scripts/check-i18n-keys.js && next lint",
     "test": "jest",
     "coverage": "jest --coverage",
     "format": "prettier --write .",

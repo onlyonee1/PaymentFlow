@@ -99,6 +99,18 @@ export default function MyApp({ Component, pageProps }) {
     localStorage.setItem("theme", dark ? "dark" : "light");
   }, [dark]);
 
+  useEffect(() => {
+    const savedLocale = localStorage.getItem("locale");
+    if (savedLocale && SUPPORTED_LOCALES.includes(savedLocale) && i18n.language !== savedLocale) {
+      i18n.changeLanguage(savedLocale);
+    }
+    const currentLang = i18n.resolvedLanguage || i18n.language || "en";
+    if (document.documentElement) {
+      document.documentElement.lang = currentLang;
+      document.documentElement.dir = ["ar", "he", "fa", "ur"].includes(currentLang) ? "rtl" : "ltr";
+    }
+  }, []);
+
   const useAppLayout = APP_LAYOUT_ROUTES.includes(pathname);
   const sectionName = ROUTE_SECTION_NAMES[pathname] || "Application";
 

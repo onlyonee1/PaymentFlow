@@ -1,4 +1,3 @@
-import { useState, useEffect, useRef } from "react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -509,14 +508,11 @@ export default function Navbar() {
               <NavLink
                 key={href}
                 href={href}
-                role="listitem"
-                className={`nav-link${pathname === href ? " active" : ""}`}
-                aria-current={pathname === href ? "page" : undefined}
-                onMouseEnter={href === "/dashboard" ? prefetchDashboardData : undefined}
-                onFocus={href === "/dashboard" ? prefetchDashboardData : undefined}
-              >
-                {t(i18nKey)}
-              </Link>
+                label={t(i18nKey)}
+                active={pathname === href}
+                locked={locked}
+                lockedTooltip={lockedTooltip}
+              />
             ))}
           </div>
 
@@ -524,12 +520,18 @@ export default function Navbar() {
             <PriceTicker />
             <select
               className="nav-lang"
-              value={i18n.resolvedLanguage || "en"}
-              onChange={(e) => i18n.changeLanguage(e.target.value)}
-              aria-label={t("nav.language")}
+              value={i18n.resolvedLanguage || i18n.language || "en"}
+              onChange={(e) => {
+                const lng = e.target.value;
+                i18n.changeLanguage(lng);
+                try {
+                  localStorage.setItem("locale", lng);
+                } catch {}
+              }}
+              aria-label={t("nav.language", "Language")}
             >
               {SUPPORTED_LOCALES.map((lng) => (
-                <option key={lng} value={lng}>{LOCALE_NAMES[lng]}</option>
+                <option key={lng} value={lng}>{LOCALE_NAMES[lng] || lng}</option>
               ))}
             </select>
             <button
