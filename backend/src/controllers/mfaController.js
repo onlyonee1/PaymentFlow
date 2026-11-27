@@ -257,6 +257,18 @@ async function disableMfa(req, res) {
     });
 
     if (!valid) {
+      // Audit failed disable attempt — wrong TOTP code (no secret values logged)
+      await logAudit({
+        schoolId: school.schoolId || slug,
+        action:   'MFA_DISABLE_FAILED',
+        performedBy: req.admin?.username || req.user?.userId || 'admin',
+        targetId:  school._id?.toString() || slug,
+        targetType: 'school',
+        details:   { slug, reason: 'invalid_totp_code' },
+        result:    'failure',
+        errorMessage: 'Invalid TOTP code provided for MFA disable',
+        severity:  'high',
+      }).catch(() => {}); // non-fatal
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
     }
 
@@ -399,9 +411,9 @@ async function verifyAndEnableUserMfa(req, res) {
     // forcing the admin to log in again.
     if (req.user?.mfaSetupPending) {
       const jwt = require('jsonwebtoken');
-      const { role, userId: uid, schoolId, roles } = req.user;
+      const { role, userId: uid, schoolId, roles, familyId, sessionId, passwordVersion, iat } = req.user;
       const accessTTL = parseInt(process.env.JWT_ACCESS_TOKEN_TTL, 10) || 8 * 3600;
-      const newToken = jwt.sign({ role, userId: uid, schoolId, roles }, process.env.JWT_SECRET, { expiresIn: accessTTL });
+      const newToken = jwt.sign({ role, userId: uid, schoolId, roles, familyId, sessionId, passwordVersion, iat }, process.env.JWT_SECRET, { expiresIn: accessTTL });
       res.cookie('admin_token', newToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',

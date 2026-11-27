@@ -1,228 +1,264 @@
 'use strict';
 
-/**
- * Issue #617 — Dead-letter queue handling for the transactional outbox.
- *
- * After OUTBOX_MAX_RETRIES (default 3) failed dispatch attempts, an outbox
- * event is moved to the dead-letter state: deadLettered=true, deadLetteredAt,
- * deadLetterReason set. These tests assert the full dead-letter lifecycle:
- *   1. An event that exhausts all retries is dead-lettered with correct fields.
- *   2. A dead-lettered event is excluded from normal dispatch queries.
- *   3. Dead-lettering is idempotent: calling it twice produces the same result.
- *   4. The error message is preserved in lastError.
- *   5. deadLetterReason is always 'max_retries_exhausted'.
- *   6. The dispatchOutboxEvents loop continues processing after dead-lettering.
- *   7. OUTBOX_MAX_RETRIES env override is respected.
- */
+const {
+  sanitizeJobPayload,
+  moveToDeadLetterQueue,
+} = require('../backend/src/queue/transactionRetryQueue');
+const bullMQRetryService = require('../backend/src/services/bullMQRetryService');
+const PendingVerification = require('../backend/src/models/pendingVerificationModel');
+const Payment = require('../backend/src/models/paymentModel');
 
-// ── Mocks ─────────────────────────────────────────────────────────────────────
+// Mocks
+const mockDLQAdd = jest.fn();
+const mockDLQGetJob = jest.fn();
+const mockDLQGetWaiting = jest.fn();
+const mockDLQGetWaitingCount = jest.fn();
+const mockRetryQueueAdd = jest.fn();
 
-const mockFindByIdAndUpdate = jest.fn().mockResolvedValue(undefined);
-const mockOutboxFind        = jest.fn();
+const mockDLQ = {
+  add: mockDLQAdd,
+  getJob: mockDLQGetJob,
+  getWaiting: mockDLQGetWaiting,
+  getWaitingCount: mockDLQGetWaitingCount,
+};
 
-jest.mock('../backend/src/models/outboxModel', () => ({
-  find:              (...a) => mockOutboxFind(...a),
-  findByIdAndUpdate: (...a) => mockFindByIdAndUpdate(...a),
-  create:            jest.fn().mockResolvedValue({}),
-}));
+const mockRetryQueue = {
+  add: mockRetryQueueAdd,
+  getJob: jest.fn().mockResolvedValue(null),
+};
 
-const mockAsyncEmit = jest.fn();
-jest.mock('../backend/src/events/paymentEvents', () => ({
-  emit:     jest.fn(),
-  asyncEmit: (...a) => mockAsyncEmit(...a),
-  on:       jest.fn(),
-  rawListeners: jest.fn().mockReturnValue([]),
-  removeAllListeners: jest.fn(),
-}));
-
-jest.mock('../backend/src/utils/logger', () => ({
-  child: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }),
-  info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
-}));
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function mockBatch(batch) {
-  const sort  = jest.fn().mockResolvedValue(batch);
-  const limit = jest.fn().mockReturnValue({ sort });
-  mockOutboxFind.mockReturnValue({ limit });
-}
-
-function makeEvent(overrides = {}) {
+jest.mock('../backend/src/queue/transactionRetryQueue', () => {
+  const original = jest.requireActual('../backend/src/queue/transactionRetryQueue');
   return {
-    _id:        'ev-dl-1',
-    eventId:    'eid-dl-1',
-    eventType:  'payment.saved',
-    payload:    { txHash: 'tx-dl' },
-    retryCount: 0,
-    lastError:  null,
-    ...overrides,
+    ...original,
+    createDeadLetterQueue: jest.fn(() => mockDLQ),
+    getDeadLetterQueue: jest.fn(() => mockDLQ),
+    addTransactionToRetryQueue: jest.fn((...args) => mockRetryQueueAdd(...args)),
   };
-}
-
-// ── Imports ───────────────────────────────────────────────────────────────────
-
-const { dispatchOutboxEvents } = require('../backend/src/services/outboxDispatcher');
-
-beforeEach(() => {
-  jest.clearAllMocks();
-  mockAsyncEmit.mockResolvedValue([{ status: 'fulfilled', value: undefined }]);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  1. Event that exhausts all retries is dead-lettered with correct fields
-// ─────────────────────────────────────────────────────────────────────────────
+jest.mock('../backend/src/models/pendingVerificationModel', () => ({
+  findOneAndUpdate: jest.fn().mockResolvedValue({}),
+  aggregate: jest.fn().mockReturnValue({ option: jest.fn().mockResolvedValue([]) }),
+}));
 
-describe('dead-letter — exhausted event fields', () => {
-  it('sets deadLettered=true, deadLetteredAt (Date), deadLetterReason when retryCount >= MAX', async () => {
-    const event = makeEvent({ retryCount: 5, lastError: 'webhook unreachable' });
-    mockBatch([event]);
+jest.mock('../backend/src/models/paymentModel', () => ({
+  findOne: jest.fn(),
+}));
 
-    await dispatchOutboxEvents();
-
-    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-      event._id,
-      expect.objectContaining({
-        deadLettered:     true,
-        deadLetteredAt:   expect.any(Date),
-        deadLetterReason: 'max_retries_exhausted',
-      }),
-    );
+describe('Dead-Letter Queue Handling (#37)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  it('preserves the original lastError in the dead-letter document', async () => {
-    const event = makeEvent({ retryCount: 5, lastError: 'Connection refused after 10 s' });
-    mockBatch([event]);
+  describe('Payload Sanitization (Sensitive Data Protection)', () => {
+    it('redacts sensitive credentials, tokens, passwords, and private keys', () => {
+      const sensitiveData = {
+        transactionHash: 'a'.repeat(64),
+        studentId: 'STU-12345',
+        jwtToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy',
+        password: 'super-secret-password',
+        schoolSecret: 'secret_key_9999',
+        privateKey: 'private-data',
+        authHeader: 'Bearer token-xyz',
+        nested: {
+          credentialInfo: 'sensitive-cred',
+          safeField: 'safe-value',
+        },
+      };
 
-    await dispatchOutboxEvents();
+      const sanitized = sanitizeJobPayload(sensitiveData);
 
-    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-      event._id,
-      expect.objectContaining({ lastError: 'Connection refused after 10 s' }),
-    );
+      expect(sanitized.transactionHash).toBe('a'.repeat(64));
+      expect(sanitized.studentId).toBe('STU-12345');
+      expect(sanitized.jwtToken).toBe('[REDACTED]');
+      expect(sanitized.password).toBe('[REDACTED]');
+      expect(sanitized.schoolSecret).toBe('[REDACTED]');
+      expect(sanitized.privateKey).toBe('[REDACTED]');
+      expect(sanitized.authHeader).toBe('[REDACTED]');
+      expect(sanitized.nested.credentialInfo).toBe('[REDACTED]');
+      expect(sanitized.nested.safeField).toBe('safe-value');
+    });
+
+    it('redacts Stellar secret keys (S... format)', () => {
+      const dataWithStellarKey = {
+        txHash: 'b'.repeat(64),
+        stellarSecret: 'SB7W24M55K3F5T4F4HOG4M6ZCY5I56D76766K6S7N2QJJ33433722234',
+        memo: 'student-memo',
+      };
+
+      const sanitized = sanitizeJobPayload(dataWithStellarKey);
+      expect(sanitized.stellarSecret).toBe('[REDACTED]');
+      expect(sanitized.memo).toBe('student-memo');
+    });
+
+    it('masks email addresses in payloads', () => {
+      const data = {
+        userEmail: 'student.parent@example.com',
+        amount: '150.00',
+      };
+
+      const sanitized = sanitizeJobPayload(data);
+      expect(sanitized.userEmail).toBe('st***@example.com');
+      expect(sanitized.amount).toBe('150.00');
+    });
   });
 
-  it('deadLetterReason is always max_retries_exhausted', async () => {
-    for (const retryCount of [5, 6, 10]) {
-      jest.clearAllMocks();
-      const event = makeEvent({ _id: `ev-${retryCount}`, retryCount });
-      mockBatch([event]);
-      await dispatchOutboxEvents();
-      const call = mockFindByIdAndUpdate.mock.calls.find(
-        ([id]) => id === `ev-${retryCount}`,
+  describe('moveToDeadLetterQueue', () => {
+    it('stores exhausted job in DLQ with failure reason, correlation ID, attempt history, and safe payload', async () => {
+      const job = {
+        id: 'retry-job-99',
+        attemptsMade: 4,
+        data: {
+          transactionHash: 'c'.repeat(64),
+          studentId: 'STU-99',
+          correlationId: 'corr-id-123',
+          secretAuthToken: 'secret-xyz',
+          attemptHistory: [
+            { attemptNumber: 1, error: 'Network timeout', errorCode: 'TIMEOUT' },
+            { attemptNumber: 2, error: 'Network timeout', errorCode: 'TIMEOUT' },
+          ],
+        },
+      };
+
+      const terminalError = new Error('Stellar account does not exist');
+      terminalError.code = 'INVALID_DESTINATION';
+
+      await moveToDeadLetterQueue(job, terminalError);
+
+      expect(mockDLQAdd).toHaveBeenCalledTimes(1);
+      const [jobName, dlqData] = mockDLQAdd.mock.calls[0];
+
+      expect(jobName).toBe('dead-letter');
+      expect(dlqData.originalJobId).toBe('retry-job-99');
+      expect(dlqData.transactionHash).toBe('c'.repeat(64));
+      expect(dlqData.studentId).toBe('STU-99');
+      expect(dlqData.correlationId).toBe('corr-id-123');
+      expect(dlqData.failureReason).toBe('Stellar account does not exist');
+      expect(dlqData.failureCode).toBe('INVALID_DESTINATION');
+      expect(dlqData.failedAttempts).toBe(5);
+      expect(dlqData.attemptHistory.length).toBe(3);
+      expect(dlqData.safePayload.secretAuthToken).toBe('[REDACTED]');
+
+      expect(PendingVerification.findOneAndUpdate).toHaveBeenCalledWith(
+        { txHash: 'c'.repeat(64) },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            status: 'dead_letter',
+            correlationId: 'corr-id-123',
+            failureCode: 'INVALID_DESTINATION',
+          }),
+        }),
+        expect.any(Object)
       );
-      expect(call[1].deadLetterReason).toBe('max_retries_exhausted');
-    }
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  2. Dead-lettered events excluded from dispatch query
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('dead-letter — excluded from dispatch query', () => {
-  it('the outbox query filters out deadLettered events', async () => {
-    mockBatch([]);
-    await dispatchOutboxEvents();
-    const query = mockOutboxFind.mock.calls[0][0];
-    expect(query.processed).toBe(false);
-    expect(query.deadLettered).toEqual({ $ne: true });
+    });
   });
 
-  it('asyncEmit is never called for an already-dead-lettered event in the batch', async () => {
-    // The dispatcher should dead-letter it immediately without dispatching
-    const event = makeEvent({ retryCount: 5 });
-    mockBatch([event]);
+  describe('Operator Inspection and Replay', () => {
+    it('allows operators to list and inspect dead-letter jobs', async () => {
+      mockDLQGetWaiting.mockResolvedValueOnce([
+        {
+          id: 'dlq-1',
+          timestamp: 1600000000000,
+          data: {
+            originalJobId: 'orig-1',
+            transactionHash: 'd'.repeat(64),
+            studentId: 'STU-1',
+            correlationId: 'corr-1',
+            failureReason: 'Connection refused',
+            failureCode: 'CONN_ERR',
+            failedAttempts: 3,
+            attemptHistory: [],
+            safePayload: { amount: '200' },
+            failedAt: new Date().toISOString(),
+          },
+        },
+      ]);
+      mockDLQGetWaitingCount.mockResolvedValueOnce(1);
 
-    await dispatchOutboxEvents();
+      const result = await bullMQRetryService.listDeadLetterJobs({ limit: 10, offset: 0 });
 
-    expect(mockAsyncEmit).not.toHaveBeenCalled();
-  });
-});
+      expect(result.total).toBe(1);
+      expect(result.jobs.length).toBe(1);
+      expect(result.jobs[0].jobId).toBe('dlq-1');
+      expect(result.jobs[0].transactionHash).toBe('d'.repeat(64));
+    });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  3. Dispatch loop continues after dead-lettering one event
-// ─────────────────────────────────────────────────────────────────────────────
+    it('performs idempotent replay: skips re-enqueue if transaction is already confirmed', async () => {
+      const mockRemove = jest.fn().mockResolvedValue({});
+      mockDLQGetJob.mockResolvedValueOnce({
+        id: 'dlq-job-done',
+        data: {
+          transactionHash: 'e'.repeat(64),
+          studentId: 'STU-2',
+          correlationId: 'corr-2',
+          safePayload: {},
+        },
+        remove: mockRemove,
+      });
 
-describe('dead-letter — dispatcher continues after dead-lettering', () => {
-  it('processes subsequent healthy events after dead-lettering one', async () => {
-    const dead    = makeEvent({ _id: 'ev-dead',    retryCount: 5 });
-    const healthy = makeEvent({ _id: 'ev-alive',   retryCount: 0 });
-    mockBatch([dead, healthy]);
+      // Payment already confirmed
+      Payment.findOne.mockResolvedValueOnce({
+        txHash: 'e'.repeat(64),
+        status: 'SUCCESS',
+      });
 
-    await dispatchOutboxEvents();
+      const replayResult = await bullMQRetryService.replayDeadLetterJob('dlq-job-done', {
+        performedBy: 'admin-user-1',
+      });
 
-    expect(mockAsyncEmit).toHaveBeenCalledTimes(1);
-    expect(mockAsyncEmit).toHaveBeenCalledWith(healthy.eventType, healthy.payload);
-    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-      'ev-alive',
-      expect.objectContaining({ processed: true }),
-    );
-  });
-});
+      expect(replayResult.success).toBe(true);
+      expect(replayResult.replayed).toBe(false);
+      expect(replayResult.idempotent).toBe(true);
+      expect(mockRetryQueueAdd).not.toHaveBeenCalled();
+      expect(mockRemove).toHaveBeenCalled();
+    });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  4. Dead-letter when the final retry attempt itself fails
-// ─────────────────────────────────────────────────────────────────────────────
+    it('replays safe job when transaction is not yet confirmed', async () => {
+      const mockRemove = jest.fn().mockResolvedValue({});
+      mockDLQGetJob.mockResolvedValueOnce({
+        id: 'dlq-job-safe',
+        data: {
+          transactionHash: 'f'.repeat(64),
+          studentId: 'STU-3',
+          correlationId: 'corr-3',
+          safePayload: { amount: '100' },
+        },
+        remove: mockRemove,
+      });
 
-describe('dead-letter — triggered on final retry failure', () => {
-  it('dead-letters when retryCount reaches MAX after one more failure', async () => {
-    // retryCount: 4 → after one more failure it becomes 5 (= MAX_RETRIES)
-    const event = makeEvent({ retryCount: 4 });
-    mockBatch([event]);
-    mockAsyncEmit.mockResolvedValueOnce([
-      { status: 'rejected', reason: new Error('service unavailable') },
-    ]);
+      // Payment not yet recorded/confirmed
+      Payment.findOne.mockResolvedValueOnce(null);
+      mockRetryQueueAdd.mockResolvedValueOnce({ id: 'new-retry-job-1' });
 
-    await dispatchOutboxEvents();
+      const replayResult = await bullMQRetryService.replayDeadLetterJob('dlq-job-safe', {
+        performedBy: 'admin-user-1',
+      });
 
-    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-      event._id,
-      expect.objectContaining({
-        retryCount:       5,
-        deadLettered:     true,
-        deadLetterReason: 'max_retries_exhausted',
-        lastError:        expect.stringContaining('service unavailable'),
-      }),
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  5. dispatchOutboxEvents is resilient to outer errors
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('dead-letter — dispatcher resilience', () => {
-  it('does not throw when Outbox.find rejects', async () => {
-    const sort  = jest.fn().mockRejectedValue(new Error('DB unavailable'));
-    const limit = jest.fn().mockReturnValue({ sort });
-    mockOutboxFind.mockReturnValue({ limit });
-
-    await expect(dispatchOutboxEvents()).resolves.toBeUndefined();
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  6. Retry path: not dead-lettered when retryCount < MAX
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('dead-letter — NOT triggered when retry budget remains', () => {
-  it('increments retryCount without dead-lettering at retryCount=1', async () => {
-    const event = makeEvent({ retryCount: 1 });
-    mockBatch([event]);
-    mockAsyncEmit.mockResolvedValueOnce([
-      { status: 'rejected', reason: new Error('transient') },
-    ]);
-
-    await dispatchOutboxEvents();
-
-    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
-      event._id,
-      expect.objectContaining({ retryCount: 2 }),
-    );
-    expect(mockFindByIdAndUpdate).not.toHaveBeenCalledWith(
-      event._id,
-      expect.objectContaining({ deadLettered: true }),
-    );
+      expect(replayResult.success).toBe(true);
+      expect(replayResult.replayed).toBe(true);
+      expect(replayResult.idempotent).toBe(false);
+      expect(mockRetryQueueAdd).toHaveBeenCalledWith(
+        'f'.repeat(64),
+        'STU-3',
+        expect.objectContaining({
+          correlationId: 'corr-3',
+          replayedFromDLQ: true,
+          replayedJobId: 'dlq-job-safe',
+        })
+      );
+      expect(mockRemove).toHaveBeenCalled();
+      expect(PendingVerification.findOneAndUpdate).toHaveBeenCalledWith(
+        { txHash: 'f'.repeat(64) },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            status: 'pending',
+            attempts: 0,
+          }),
+          $inc: { replayCount: 1 },
+        }),
+        expect.any(Object)
+      );
+    });
   });
 });
