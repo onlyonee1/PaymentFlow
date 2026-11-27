@@ -1,84 +1,370 @@
 groups:
-  - name: paymentflow_slo_alerts
+  - name: slo_api_availability
     interval: 60s
     rules:
-      - alert: ApiAvailabilitySLOBurn
-        expr: |
-          (
-            1 - sum(rate(http_request_duration_seconds_count{status=~"5.."}[5m]))
-              / clamp_min(sum(rate(http_request_duration_seconds_count[5m])), 0.001)
-          ) < 0.999
-        for: 10m
+      - record: slo:api_error_ratio:rate5m
+        expr: (sum(rate(http_request_duration_seconds_count{status=~"5.."}[5m])) or (0 * sum(rate(http_request_duration_seconds_count[5m])))) / sum(rate(http_request_duration_seconds_count[5m]))
+      - record: slo:api_availability:ratio_rate5m
+        expr: 1 - slo:api_error_ratio:rate5m
+      - record: slo:api_error_ratio:rate30m
+        expr: (sum(rate(http_request_duration_seconds_count{status=~"5.."}[30m])) or (0 * sum(rate(http_request_duration_seconds_count[30m])))) / sum(rate(http_request_duration_seconds_count[30m]))
+      - record: slo:api_availability:ratio_rate30m
+        expr: 1 - slo:api_error_ratio:rate30m
+      - record: slo:api_error_ratio:rate1h
+        expr: (sum(rate(http_request_duration_seconds_count{status=~"5.."}[1h])) or (0 * sum(rate(http_request_duration_seconds_count[1h])))) / sum(rate(http_request_duration_seconds_count[1h]))
+      - record: slo:api_error_ratio:rate6h
+        expr: (sum(rate(http_request_duration_seconds_count{status=~"5.."}[6h])) or (0 * sum(rate(http_request_duration_seconds_count[6h])))) / sum(rate(http_request_duration_seconds_count[6h]))
+      - record: slo:api_error_ratio:rate30d
+        expr: (sum(rate(http_request_duration_seconds_count{status=~"5.."}[30d])) or (0 * sum(rate(http_request_duration_seconds_count[30d])))) / sum(rate(http_request_duration_seconds_count[30d]))
+      - record: slo:api_availability:ratio_rate30d
+        expr: 1 - slo:api_error_ratio:rate30d
+      - record: slo:api_error_budget:remaining
+        expr: 1 - slo:api_error_ratio:rate30d / 0.001
+      - alert: SLOApiAvailabilityFastBurn
+        expr: slo:api_error_ratio:rate1h > 0.0144 and slo:api_error_ratio:rate5m > 0.0144
         labels:
           severity: critical
-          slo: api-availability
-          owner: api
+          slo: api_availability
+          category: slo
         annotations:
-          summary: "API availability is below the 99.9% SLO"
-          runbook: "docs/runbooks/slo-burn-rate.md#api-availability"
-          description: "The API is consuming its 30-day availability error budget."
-
-      - alert: ApiLatencySLOBurn
-        expr: |
-          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[10m])) by (le)) > 1
-        for: 10m
+          summary: "API error budget is burning at more than 14.4×"
+          description: "Check the availability and error budget panels for recent API failures."
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-api-availability.md"
+      - alert: SLOApiAvailabilitySlowBurn
+        expr: slo:api_error_ratio:rate6h > 0.006 and slo:api_error_ratio:rate30m > 0.006
         labels:
           severity: warning
-          slo: api-latency
-          owner: api
+          slo: api_availability
+          category: slo
         annotations:
-          summary: "API p95 latency is above the 1 second SLO"
-          runbook: "docs/runbooks/slo-burn-rate.md#api-latency"
-          description: "API p95 latency has exceeded the target for 10 minutes."
-
-      - alert: TransactionQueueAgeSLOBurn
-        expr: transaction_queue_oldest_age_seconds > 60
-        for: 10m
+          summary: "API error budget is burning at more than 6×"
+          description: "Check the availability and error budget panels for recent API failures."
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-api-availability.md"
+      - alert: SLOApiFiveMinuteErrorRate
+        expr: slo:api_error_ratio:rate5m >= 0.001
         labels:
           severity: warning
-          slo: queue-age
-          owner: payments
+          slo: api_availability
+          category: slo
         annotations:
-          summary: "Transaction queue age is above the 60 second SLO"
-          runbook: "docs/runbooks/slo-burn-rate.md#queue-age"
-          description: "The oldest queued transaction has exceeded the queue-age target."
+          summary: "API error rate reached 0.1% over five minutes"
+          description: "Check the availability and error budget panels for recent API failures."
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-api-availability.md"
 
-      - alert: WebhookSuccessSLOBurn
-        expr: |
-          sum(rate(webhook_delivery_total{status=~"success|delivered"}[15m]))
-            / clamp_min(sum(rate(webhook_delivery_total[15m])), 0.001) < 0.995
-        for: 15m
+  # SLO-2 — Payment Confirmation Latency  (target: p95 ≤ 60 s for ≥ 95 %)
+  #
+  # "95 % of payments confirmed within 60 seconds of blockchain detection."
+  # Measured via payment_processing_duration_seconds (latency histogram).
+  # Alert logic:
+  #   • Fast burn: p95 > 30 s for 5 m  — half the SLO budget burned quickly.
+  #   • Slow burn: p95 > 10 s for 30 m — warning of gradual degradation.
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: slo_payment_latency
+    interval: 60s
+    rules:
+      - record: slo:payment_intent_p95:rate5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{method="POST",route=~"/api/payments/intent"}[5m])))
+      - alert: SLOPaymentIntentP95
+        expr: slo:payment_intent_p95:rate5m >= 0.5
+        for: 5m
         labels:
           severity: warning
-          slo: webhook-success
-          owner: integrations
+          slo: payment_latency
+          category: slo
         annotations:
-          summary: "Webhook delivery success is below the 99.5% SLO"
-          runbook: "docs/runbooks/slo-burn-rate.md#webhook-success"
-          description: "Webhook delivery failures are consuming the integration error budget."
-
-      - alert: ReconciliationLagSLOBurn
-        expr: reconciliation_lag_seconds > 900
-        for: 15m
+          summary: "Payment intent P95 exceeded its latency target"
+          description: "Review endpoint latency and dependencies."
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-payment-latency.md"
+      - record: slo:payment_list_p95:rate5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{method="GET",route=~"/api/payments/?"}[5m])))
+      - alert: SLOPaymentListP95
+        expr: slo:payment_list_p95:rate5m >= 0.3
+        for: 5m
         labels:
           severity: warning
-          slo: reconciliation-lag
-          owner: finance
+          slo: payment_latency
+          category: slo
         annotations:
-          summary: "Reconciliation lag is above the 15 minute SLO"
-          runbook: "docs/runbooks/slo-burn-rate.md#reconciliation-lag"
-          description: "Reconciliation has not caught up within the target window."
+          summary: "Payment list P95 exceeded its latency target"
+          description: "Review endpoint latency and dependencies."
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-payment-latency.md"
+      # ── Recording rules ───────────────────────────────────────────────────
+      - record: slo:payment_processing_p95:rate5m
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le))
 
-      - alert: PaymentErrorBudgetFastBurn
-        expr: |
-          sum(rate(http_request_duration_seconds_count{status=~"5..",route=~".*/payments.*"}[5m]))
-            / clamp_min(sum(rate(http_request_duration_seconds_count{route=~".*/payments.*"}[5m])), 0.001) > 0.05
+      - record: slo:payment_processing_p95:rate30m
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(payment_processing_duration_seconds_bucket[30m])) by (le))
+
+      # SLI: fraction of payments completed within the 60 s SLO bucket.
+      - record: slo:payment_within_slo:ratio_rate5m
+        expr: >
+          sum(rate(payment_processing_duration_seconds_bucket{le="60"}[5m]))
+            /
+          clamp_min(sum(rate(payment_processing_duration_seconds_count[5m])), 0.001)
+
+      # ── Fast burn: p95 > 30 s for 5 minutes ───────────────────────────────
+      # 30 s is half the SLO threshold; sustained for 5 min means the system
+      # is already well into its latency budget.
+      - alert: SLOPaymentLatencyFastBurn
+        expr: slo:payment_processing_p95:rate5m > 30
         for: 5m
         labels:
           severity: critical
-          slo: payment-availability
-          owner: payments
+          slo: payment_latency
+          category: slo
         annotations:
-          summary: "Payment error budget is burning rapidly"
-          runbook: "docs/runbooks/slo-burn-rate.md#payment-availability"
-          description: "Payment endpoints have exceeded the fast-burn error threshold."
+          summary: "SLO-2 fast burn: Payment confirmation p95 latency > 30 s"
+          description: >
+            The 95th-percentile payment confirmation latency has exceeded 30
+            seconds for 5 minutes (current: {{ $value | printf "%.1f" }}s,
+            SLO target: p95 ≤ 60 s). Parents are waiting longer than
+            acceptable for payment confirmation. Check horizon_poll_max_deferral_cycles,
+            queue_depth{queue="transaction-retry"}, and
+            payment_processor_queue_depth for the bottleneck.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-payment-latency.md"
+
+      # ── Slow burn: p95 > 10 s for 30 minutes ──────────────────────────────
+      # 10 s is the existing operational warning threshold; sustained for
+      # 30 min is a steady degradation that will breach the 60 s SLO if
+      # not addressed.
+      - alert: SLOPaymentLatencySlowBurn
+        expr: slo:payment_processing_p95:rate30m > 10
+        for: 30m
+        labels:
+          severity: warning
+          slo: payment_latency
+          category: slo
+        annotations:
+          summary: "SLO-2 slow burn: Payment confirmation p95 latency > 10 s"
+          description: >
+            The 95th-percentile payment confirmation latency has been above
+            10 seconds for 30 minutes (current: {{ $value | printf "%.1f" }}s).
+            This is within bounds now but is trending toward the SLO breach
+            threshold of 60 s. Investigate Horizon polling throughput and
+            retry queue depth before this escalates.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-payment-latency.md"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # SLO-3 — Webhook Delivery Success  (target: ≥ 99 %)
+  #
+  # "99 % of webhook delivery attempts succeed."
+  # Measured via webhook_delivery_total{outcome="success|failure|retry"}.
+  # Alert logic:
+  #   • Fast burn: > 14× error rate (1 %) for 5 m → critical.
+  #   • Slow burn: >  3× error rate for 1 h    → warning.
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: slo_webhook_delivery
+    interval: 60s
+    rules:
+      # ── Recording rules ───────────────────────────────────────────────────
+      - record: slo:webhook_success:ratio_rate5m
+        expr: >
+          sum(rate(webhook_delivery_total{outcome="success"}[5m]))
+            /
+          clamp_min(sum(rate(webhook_delivery_total[5m])), 0.001)
+
+      - record: slo:webhook_success:ratio_rate1h
+        expr: >
+          sum(rate(webhook_delivery_total{outcome="success"}[1h]))
+            /
+          clamp_min(sum(rate(webhook_delivery_total[1h])), 0.001)
+
+      - record: slo:webhook_error_ratio:rate5m
+        expr: 1 - slo:webhook_success:ratio_rate5m
+
+      - record: slo:webhook_error_ratio:rate1h
+        expr: 1 - slo:webhook_success:ratio_rate1h
+
+      # ── Fast burn: 14× for 5 minutes ──────────────────────────────────────
+      # 14 × 0.01 = 0.14 → alert fires when 14 % of webhooks are failing.
+      - alert: SLOWebhookSuccessFastBurn
+        expr: slo:webhook_error_ratio:rate5m > (14 * 0.01)
+        for: 2m
+        labels:
+          severity: critical
+          slo: webhook_delivery
+          category: slo
+        annotations:
+          summary: "SLO-3 fast burn: Webhook delivery failure rate critically high"
+          description: >
+            {{ $value | printf "%.1f%%" }} of webhook deliveries are failing
+            over the last 5 minutes. At this burn rate the monthly error
+            budget (1 %) would be exhausted in ~2 hours. Check webhook
+            endpoint health (webhook_dead_letter_total per school), network
+            connectivity, and the dead-letter queue.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-webhook-delivery.md"
+
+      # ── Slow burn: 3× for 1 hour ───────────────────────────────────────────
+      # 3 × 0.01 = 0.03 → fires when 3 % of webhooks are failing for an hour.
+      - alert: SLOWebhookSuccessSlowBurn
+        expr: slo:webhook_error_ratio:rate1h > (3 * 0.01)
+        for: 30m
+        labels:
+          severity: warning
+          slo: webhook_delivery
+          category: slo
+        annotations:
+          summary: "SLO-3 slow burn: Webhook delivery failure rate elevated"
+          description: >
+            {{ $value | printf "%.1f%%" }} of webhook deliveries have been
+            failing over the last hour. This is a gradual drain on the monthly
+            error budget. Investigate endpoint health for schools showing
+            dead-letter accumulation (webhook_dead_letter_total).
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-webhook-delivery.md"
+
+      # ── Error budget remaining (informational) ─────────────────────────────
+      # This recording rule lets the Grafana dashboard show a running
+      # error-budget burn across a 30-day window without a live Prometheus
+      # recording rule needing multi-day lookback (which is expensive). The
+      # dashboard panel uses this together with the SLO target to render a
+      # "budget remaining" stat.
+      - record: slo:webhook_error_budget_remaining:ratio_rate30d
+        expr: >
+          1 - (
+            (1 - slo:webhook_success:ratio_rate1h)
+            /
+            0.01
+          )
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # SLO-4 — Blockchain Reconciliation Lag
+  # (target: 95 % of schools reconciled within 5 minutes at all times)
+  #
+  # Proxy metric: horizon_poll_max_deferral_cycles.
+  # With a 30 s poll interval, 10 cycles ≈ 5 min of lag.
+  # "95 % of schools" corresponds to the worst-case single school since
+  # horizon_poll_max_deferral_cycles exposes the tail.
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: slo_reconciliation_lag
+    interval: 60s
+    rules:
+      # ── Recording rules ───────────────────────────────────────────────────
+      - record: slo:reconciliation_max_lag_cycles:current
+        expr: horizon_poll_max_deferral_cycles
+
+      # Approximate lag in minutes: cycles × (POLL_INTERVAL_MS / 60000).
+      # Default poll interval is 30 s → 0.5 min per cycle.
+      - record: slo:reconciliation_max_lag_minutes:approx
+        expr: horizon_poll_max_deferral_cycles * 0.5
+
+      # ── Warning: worst-case school exceeding ~1.5 min lag ─────────────────
+      # 3 cycles × 30 s = 90 s — already above the "instant confirmation"
+      # user expectation but still well within the 5-minute SLO.
+      - alert: SLOReconciliationLagWarning
+        expr: slo:reconciliation_max_lag_cycles:current > 3
+        for: 10m
+        labels:
+          severity: warning
+          slo: reconciliation_lag
+          category: slo
+        annotations:
+          summary: "SLO-4 warning: Blockchain reconciliation lag growing"
+          description: >
+            The maximum deferral cycles across all schools has been
+            {{ $value }} for 10 minutes (≈ {{ $value | printf "%.0f" }} ×
+            30 s ≈ {{ $value | printf "%.0f" }} × 0.5 min). The affected
+            school(s) are not receiving timely payment confirmations. Check
+            horizon_poll_budget_remaining and horizon_poll_deferred_schools
+            to identify which schools are affected. See
+            docs/horizon-rate-limits.md for capacity guidance.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-reconciliation-lag.md"
+
+      # ── Critical: worst-case school exceeding ~5 min lag (SLO breach) ─────
+      # 10 cycles × 30 s = 300 s = 5 min → at or past the SLO boundary.
+      - alert: SLOReconciliationLagCritical
+        expr: slo:reconciliation_max_lag_cycles:current > 9
+        for: 5m
+        labels:
+          severity: critical
+          slo: reconciliation_lag
+          category: slo
+        annotations:
+          summary: "SLO-4 breach: Blockchain reconciliation lag exceeds 5-minute SLO"
+          description: >
+            The worst-case school reconciliation lag is
+            {{ $value }} poll cycles (≈ {{ $value | printf "%.0f" }} × 0.5 min
+            = {{ $value | printf "%.1f" }} minutes). The 5-minute SLO is being
+            breached. Parents may see payment confirmations delayed beyond the
+            documented limit. Page on-call and review the Horizon poll budget
+            capacity — consider raising HORIZON_RATE_LIMIT_PER_HOUR or
+            enabling a secondary Horizon endpoint.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-reconciliation-lag.md"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # SLO-5 — Retry Queue Age / Error Budget
+  # (target: pending_verification_backlog{status="pending"} < 100)
+  #
+  # A growing pending-verification backlog means payments are stuck waiting
+  # for retry and users will not see confirmations until the queue drains.
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: slo_retry_queue
+    interval: 60s
+    rules:
+      # ── Recording rules ───────────────────────────────────────────────────
+      - record: slo:retry_queue_pending:current
+        expr: pending_verification_backlog{status="pending"}
+
+      - record: slo:retry_queue_dead_letter:current
+        expr: pending_verification_backlog{status="dead_letter"}
+
+      # ── Warning: backlog growing beyond 50 ────────────────────────────────
+      - alert: SLORetryQueueDepthWarning
+        expr: slo:retry_queue_pending:current > 50
+        for: 5m
+        labels:
+          severity: warning
+          slo: retry_queue
+          category: slo
+        annotations:
+          summary: "SLO-5 warning: Retry queue backlog growing (> 50 pending)"
+          description: >
+            The pending-verification backlog has been at {{ $value }} for
+            5 minutes. The SLO target is < 100. At the current rate the
+            target would be breached soon. Check retryService health
+            (/health workers), MongoDB latency, and Horizon availability.
+            Payments in this queue will be delayed until the backlog clears.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-retry-queue.md"
+
+      # ── Critical: backlog exceeds SLO target (> 200 is acute) ────────────
+      - alert: SLORetryQueueDepthCritical
+        expr: slo:retry_queue_pending:current > 200
+        for: 5m
+        labels:
+          severity: critical
+          slo: retry_queue
+          category: slo
+        annotations:
+          summary: "SLO-5 breach: Retry queue backlog critically high (> 200 pending)"
+          description: >
+            The pending-verification backlog has been at {{ $value }} for
+            5 minutes — well above the 100-item SLO target. Payment
+            confirmations for many students are stuck. Page on-call, check
+            /api/admin/retry-queue depth, and investigate whether the retry
+            worker is alive (health check) and whether MongoDB/Horizon is
+            the bottleneck.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-retry-queue.md"
+
+      # ── Critical: dead-letter accumulation ───────────────────────────────
+      # Any dead-lettered verification means a payment has exhausted all
+      # retries and requires manual intervention.
+      - alert: SLODeadLetterGrowing
+        expr: slo:retry_queue_dead_letter:current > 0
+        for: 10m
+        labels:
+          severity: critical
+          slo: retry_queue
+          category: slo
+        annotations:
+          summary: "SLO-5: Verification dead-letter queue has entries — manual action required"
+          description: >
+            {{ $value }} payment verifications have been in the dead-letter
+            state for 10 minutes. These payments have exhausted all automatic
+            retries and will never confirm without manual operator action.
+            Use GET /api/admin/retry-queue to list them and investigate
+            each transaction on-chain before marking failed or manually
+            re-queuing.
+          runbook_url: "https://github.com/onlyonee1/PaymentFlow/blob/main/docs/runbooks/slo-retry-queue.md"

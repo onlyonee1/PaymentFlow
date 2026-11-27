@@ -9,6 +9,7 @@
  */
 
 const Joi = require('joi');
+const { decimalAmountJoi } = require('../../utils/decimalPrecision');
 
 // ── Pagination ────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ const auditQuerySchema = Joi.object({
     .messages({ 'string.isoDate': '"startDate" must be a valid ISO 8601 date' }),
   endDate:     Joi.string().isoDate().optional()
     .messages({ 'string.isoDate': '"endDate" must be a valid ISO 8601 date' }),
-  cursor:      Joi.string().max(2048).optional()
+  cursor:      Joi.string().min(1).max(2048).optional()
     .messages({ 'string.max': '"cursor" must not exceed 2048 characters' }),
   page:        Joi.number().integer().min(1).max(10000).default(1),
   limit:       Joi.number().integer().min(1).max(200).default(50),
@@ -67,6 +68,9 @@ const auditQuerySchema = Joi.object({
 // ── Student body ──────────────────────────────────────────────────────────────
 
 const updateStudentSchema = Joi.object({
+  reminderOptOut: Joi.boolean().strict().optional(),
+  paymentConfirmationOptOut: Joi.boolean().strict().optional(),
+  disputeUpdateOptOut: Joi.boolean().strict().optional(),
   name:         Joi.string().trim().min(1).max(200).optional()
     .messages({
       'string.max':   '"name" must not exceed 200 characters',
@@ -74,8 +78,9 @@ const updateStudentSchema = Joi.object({
     }),
   class:        Joi.string().trim().min(1).max(100).optional()
     .messages({ 'string.max': '"class" must not exceed 100 characters' }),
-  feeAmount:    Joi.number().positive().optional()
-    .messages({ 'number.positive': '"feeAmount" must be a positive number' }),
+  feeAmount:    decimalAmountJoi({ minValue: 0.01 }).optional()
+    .messages({ 'any.invalid': '"feeAmount" must be a positive amount with at most 2 decimal places' }),
+  graduatedAt:  Joi.date().iso().optional().allow(null),
   parentEmail:  Joi.string().email().max(254).optional().allow(null, '')
     .messages({ 'string.max': '"parentEmail" must not exceed 254 characters' }),
   parentPhone:  Joi.string().max(30).optional().allow(null, '')
@@ -91,6 +96,15 @@ const updateStudentSchema = Joi.object({
 }).unknown(false)
   .messages({ 'object.unknown': '"{{#label}}" is not an allowed field' });
 
+const registerStudentSchema = Joi.object({
+  studentId:    Joi.string().trim().max(28).optional(),
+  name:         Joi.string().trim().min(1).max(200).required(),
+  class:        Joi.string().trim().min(1).max(100).required(),
+  feeAmount:    decimalAmountJoi({ minValue: 0.01 }).optional(),
+  parentEmail:  Joi.string().email().max(254).optional().allow('', null),
+  parentPhone:  Joi.string().max(30).optional().allow('', null),
+}).unknown(false);
+
 // ── Dispute body ──────────────────────────────────────────────────────────────
 
 const createDisputeSchema = Joi.object({
@@ -104,18 +118,26 @@ const createDisputeSchema = Joi.object({
       'any.required':          '"txHash" is required',
       'string.pattern.base':   '"txHash" must be a valid 64-character hex string',
     }),
+  raisedBy:    Joi.string().trim().min(1).max(200).required()
+    .messages({
+      'any.required': '"raisedBy" is required',
+      'string.max':   '"raisedBy" must not exceed 200 characters',
+      'string.empty': '"raisedBy" must not be empty',
+    }),
   reason:      Joi.string().trim().min(1).max(2000).required()
     .messages({
       'any.required': '"reason" is required',
       'string.max':   '"reason" must not exceed 2000 characters',
       'string.empty': '"reason" must not be empty',
     }),
+  notes:       Joi.string().trim().max(500).allow('', null).optional(),
+  txReference: Joi.string().trim().max(100).optional(),
   evidence:    Joi.array().max(20).items(
     Joi.object({
       type:        Joi.string().max(100).required(),
-      description: Joi.string().max(1000).required(),
+      description: Joi.string().max(1000).optional(),
       url:         Joi.string().uri().max(2048).optional(),
-    })
+    }).unknown(true)
   ).optional()
     .messages({ 'array.max': '"evidence" must not contain more than 20 items' }),
 }).unknown(false);
@@ -199,6 +221,7 @@ module.exports = {
   paginationSchema,
   exportPaginationSchema,
   auditQuerySchema,
+  registerStudentSchema,
   updateStudentSchema,
   createDisputeSchema,
   createFeeAdjustmentSchema,

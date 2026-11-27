@@ -1,10 +1,10 @@
 # Runbook: SLO-1 — API Availability
 
-**Alert names:** `SLOApiAvailabilityFastBurn` · `SLOApiAvailabilitySlowBurn`  
-**SLO target:** ≥ 99.5 % of HTTP requests return a non-5xx response (30-day rolling)  
-**Error budget:** ~3.6 hours/month of fully-down equivalent  
-**Severity:** critical (fast burn) / warning (slow burn)  
-**Component:** Express.js API backend  
+**Alert names:** `SLOApiAvailabilityFastBurn` · `SLOApiAvailabilitySlowBurn`
+**SLO target:** ≥ 99.9 % of HTTP requests return a non-5xx response (30-day rolling)
+**Error budget:** 43.2 minutes per 30 days of fully-down equivalent
+**Severity:** critical (fast burn) / warning (slow burn)
+**Component:** Express.js API backend
 
 ---
 
@@ -13,7 +13,7 @@
 This SLO measures the fraction of all HTTP requests that return a non-5xx response code. A 5xx response indicates the server failed to process a request, which directly impacts parents submitting payments and school admins managing records.
 
 Alert thresholds use multi-window burn rates:
-- **Fast burn (critical):** 14× the monthly error rate sustained for 2 minutes — the monthly budget would be exhausted in ~2 hours.
+- **Fast burn (critical):** 14.4× in both the 5-minute and 1-hour windows — the monthly budget would be exhausted in ~50 hours.
 - **Slow burn (warning):** 6× the monthly error rate sustained for 15 minutes — the budget would be exhausted in ~5 hours.
 
 ---
@@ -22,8 +22,8 @@ Alert thresholds use multi-window burn rates:
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
-| `SLOApiAvailabilityFastBurn` | `slo:api_error_ratio:rate5m > 7 %` for 2 m | critical |
-| `SLOApiAvailabilitySlowBurn` | `slo:api_error_ratio:rate30m > 3 %` for 15 m | warning |
+| `SLOApiAvailabilityFastBurn` | 5 m and 1 h error rates > 1.44% | critical |
+| `SLOApiAvailabilitySlowBurn` | 30 m and 6 h error rates > 0.6% | warning |
 
 ---
 
@@ -137,7 +137,7 @@ Expected: `{ "status": "ok" }`.
 |-----------|--------------------------|--------------------|
 | 1× (baseline) | ~0.07 % | 30 days |
 | 6× (slow burn alert) | ~0.42 % | ~5 hours |
-| 14× (fast burn alert) | ~0.97 % | ~2 hours |
+| 14× (fast burn alert) | ~0.97 % | ~50 hours |
 | 100× (complete outage) | ~6.9 % | ~14 min |
 
 ---
