@@ -10,21 +10,17 @@ const MAX_RANGE_DAYS = parseInt(process.env.REPORT_MAX_RANGE_DAYS || '366', 10);
  * schema_version: only meaningful for accounting_csv; defaults to 1 (current).
  */
 const reportQuerySchema = Joi.object({
-  startDate:      Joi.string().isoDate().optional(),
-  endDate:        Joi.string().isoDate().optional(),
+  startDate:      Joi.string().isoDate().raw().optional(),
+  endDate:        Joi.string().isoDate().raw().optional(),
   format:         Joi.string().valid('json', 'csv', 'accounting_csv').default('json'),
   schema_version: Joi.number().integer().min(1).max(1).default(1),
-  timezone:       Joi.string().pattern(/^[A-Za-z][A-Za-z0-9_+\/-]*$/).custom((value, helpers) => {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: value });
-      return value;
-    } catch {
-      return helpers.error('any.invalid', { message: 'timezone must be a valid IANA timezone' });
-    }
-  }),
+  groupBy:       Joi.string().valid('confirmedAt', 'createdAt').optional(),
   async:          Joi.boolean().optional(),
 }).custom((value, helpers) => {
   const { startDate, endDate } = value;
+  if (value.groupBy && value.format === 'accounting_csv') {
+    return helpers.error('any.invalid', { message: 'groupBy is available for summary reports only' });
+  }
   if (startDate && endDate) {
     const start = new Date(startDate);
     const end   = new Date(endDate);

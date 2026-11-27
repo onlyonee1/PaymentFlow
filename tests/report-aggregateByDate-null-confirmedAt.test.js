@@ -265,3 +265,24 @@ describe('Report Service aggregateByDate (#674)', () => {
     });
   });
 });
+
+describe('Explicit confirmation-date grouping', () => {
+  it('advances unconfirmed payments to a labeled bucket without collecting their amounts', async () => {
+    mockPaymentAggregate.mockResolvedValue([{ date: '__unconfirmed', totalAmount: 50, paymentCount: 1 }]);
+    mockPaymentDistinct.mockResolvedValue([]);
+    mockStudentCountDocuments.mockResolvedValue(0);
+    mockStudentAggregate.mockResolvedValue([]);
+
+    const report = await reportService.generateReport({
+      schoolId: 'SCH001', groupBy: 'confirmedAt', startDate: '2026-03-24', endDate: '2026-03-24',
+    });
+
+    const [matchStage, groupStage] = mockPaymentAggregate.mock.calls.at(-1)[0];
+    expect(matchStage.$match.$or[1]).toMatchObject({ confirmedAt: null, createdAt: expect.any(Object) });
+    expect(groupStage.$group._id.$dateToString).toMatchObject({
+      date: '$confirmedAt', onNull: '__unconfirmed',
+    });
+    expect(report.byDate[0]).toMatchObject({ date: 'Pending Confirmation', bucket: '__unconfirmed' });
+    expect(report.summary).toMatchObject({ paymentCount: 0, totalAmount: 0 });
+  });
+});

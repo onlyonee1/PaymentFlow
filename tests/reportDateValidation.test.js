@@ -17,7 +17,7 @@ jest.mock('../backend/src/cache', () => ({
 
 // Mock report queue for async job handling
 jest.mock('../backend/src/queue/reportQueue', () => ({
-  enqueueReportJob: jest.fn(),
+  enqueueReportJob: jest.fn().mockResolvedValue({ jobId: 'report-job' }),
   getJobStatus: jest.fn(),
   setJobProcessing: jest.fn(),
   setJobCompleted: jest.fn(),
@@ -69,7 +69,7 @@ function makeReq(query = {}) {
 }
 
 function makeRes() {
-  const res = { json: jest.fn(), send: jest.fn(), setHeader: jest.fn() };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), send: jest.fn(), setHeader: jest.fn() };
   return res;
 }
 
@@ -124,7 +124,7 @@ describe('GET /api/reports — date validation (#389)', () => {
 
 describe('GET /api/reports — Content-Disposition filename (#469)', () => {
   async function getCsvHeaders(query) {
-    const req = makeReq(query);
+    const req = makeReq({ ...query, async: false });
     const res = makeRes();
     await getReport(req, res, () => {});
     // Collect all setHeader calls into a map

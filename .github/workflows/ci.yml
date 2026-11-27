@@ -70,6 +70,20 @@ jobs:
       - name: Scan tracked files for Stellar secret key material
         run: node scripts/scan-repo-secrets.js
 
+  secret-scan-gitleaks:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+
   migrations:
     name: Validate migration numbering
     runs-on: ubuntu-latest
@@ -331,8 +345,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build backend image
-        run: docker build -t stellaredupay/backend:ci ./backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          tags: stellaredupay/backend:ci
+          load: true
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Scan backend image for critical CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: stellaredupay/backend:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
 
       - name: Smoke-test backend container
         run: |
@@ -358,7 +390,22 @@ jobs:
           exit 1
 
       - name: Build frontend image
-        run: docker build -t stellaredupay/frontend:ci ./frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          tags: stellaredupay/frontend:ci
+          load: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Scan frontend image for critical CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: stellaredupay/frontend:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
 
       - name: Set immutable image tag
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -621,6 +668,7 @@ jobs:
       - audit
       - secret-scan
       - secret-scan-repo
+      - secret-scan-gitleaks
       - migrations
       - orphan-dirs
       - error-response-shape
@@ -637,3 +685,54 @@ jobs:
       - contract-simulation
     steps:
       - run: echo "All required checks passed."
+
+  # ── #653: Cross-browser smoke matrix ────────────────────────────────────────
+  # Runs login, pay-fee, view-receipt, and download-CSV smoke flows on
+  # Chrome, Firefox, Safari (WebKit), and Edge in parallel shards.
+  # Target: all 4 browsers complete within 10 minutes.
+  # Flaky quarantine: tests that fail in a single browser but pass within
+  # 3 retries are quarantined and reported separately (not a hard failure).
+  cross-browser-smoke:
+    name: Cross-browser smoke (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit, msedge]
+        include:
+          - browser: chromium
+            shard: 1/4
+          - browser: firefox
+            shard: 2/4
+          - browser: webkit
+            shard: 3/4
+          - browser: msedge
+            shard: 4/4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run cross-browser smoke tests
+        run: |
+          npx playwright test \
+            --config=playwright.cross-browser.config.js \
+            --project=${{ matrix.browser }} \
+            --shard=${{ matrix.shard }}
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        continue-on-error: false
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: playwright-report/cross-browser/
+          retention-days: 7

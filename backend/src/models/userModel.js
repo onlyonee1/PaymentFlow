@@ -12,15 +12,17 @@ const userSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    passwordChangedAt: { type: Date },
     passwordHash: { type: String, required: true },
     // null schoolId = super-admin (break-glass only; prefer env super-admin)
     schoolId: { type: String, default: null, index: true },
     roles: [
       {
         type: String,
-        enum: ['super_admin', 'owner', 'staff', 'read_only'],
+        enum: ['super_admin', 'owner', 'staff', 'read_only', 'finance', 'finance_officer', 'viewer'],
       },
     ],
+    permissions: [{ type: String, enum: ['pii_export'] }],
     isActive: { type: Boolean, default: true, index: true },
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String, default: null },
