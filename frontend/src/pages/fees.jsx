@@ -22,6 +22,9 @@ const EMPTY_FORM = {
   feeAmount: "",
   academicYear: new Date().getUTCFullYear().toString(),
   description: "",
+  activeFrom: "",
+  activeTo: "",
+  isActive: true,
 };
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -46,12 +49,12 @@ export default function FeesPage() {
   const [fees, setFees]             = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
 
   // Create-form state
-  const [form, setForm]               = useState(EMPTY_FORM);
-  const [creating, setCreating]       = useState(false);
+  const [form, setForm]             = useState(EMPTY_FORM);
+  const [creating, setCreating]     = useState(false);
   const [createError, setCreateError] = useState(null);
   const [createSuccess, setCreateSuccess] = useState(false);
 
@@ -69,24 +72,24 @@ export default function FeesPage() {
     loadSchoolClassOptions(getSchool, setClassOptions);
   }, []);
 
+  // Auto-focus success message for screen readers
   useEffect(() => {
     if (createSuccess) {
       successRef.current?.focus();
-      const timer = setTimeout(() => setCreateSuccess(false), 4000);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => setCreateSuccess(false), 4000);
+      return () => clearTimeout(t);
     }
   }, [createSuccess]);
 
-  function loadFees(page = 1) {
+  function loadFees(page = 1, activeAt = previewDate) {
     setLoading(true);
     setError(null);
-    getFeeStructures({ signal, page, limit: pagination.limit })
+    getFeeStructures({ signal, page, limit: pagination.limit, manage: true, activeAt: activeAt || undefined })
       .then(({ data }) => {
-        const all = Array.isArray(data.data || data) ? (data.data || data) : [];
-        // Split into active and archived based on deletedAt presence
-        setFees(all.filter((f) => !f.deletedAt));
-        setArchivedFees(all.filter((f) => !!f.deletedAt));
-        if (data.pagination) setPagination(data.pagination);
+        setFees(data.data || data);
+        if (data.pagination) {
+          setPagination(data.pagination);
+        }
       })
       .catch((err) => {
         // Silently ignore requests cancelled on unmount or navigation.
@@ -96,11 +99,11 @@ export default function FeesPage() {
       .finally(() => setLoading(false));
   }
 
-  // ── Create handlers ───────────────────────────────────────────────────────
+  // ── Create form handlers ──────────────────────────────────────────────────
 
   function handleFormChange(e) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    const { name, value, checked, type } = e.target;
+    setForm((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
     setCreateError(null);
   }
 
@@ -111,25 +114,28 @@ export default function FeesPage() {
 
     const feeAmount = parseFloat(form.feeAmount);
     if (!form.className) {
-      setCreateError(t("fees.classRequired") || "Class is required.");
+      setCreateError(t("fees.classRequired"));
       return;
     }
     if (!form.feeAmount || isNaN(feeAmount) || feeAmount <= 0) {
-      setCreateError(t("fees.amountPositive") || "Fee amount must be a positive number.");
+      setCreateError(t("fees.amountPositive"));
       return;
     }
 
     setCreating(true);
     try {
       const payload = {
-        className: form.className,
+        className: editing || form.className,
         feeAmount,
+        isActive: form.isActive,
+        activeFrom: form.activeFrom || null,
+        activeTo: form.activeTo || null,
         ...(form.academicYear && { academicYear: form.academicYear }),
         ...(form.description.trim() && { description: form.description.trim() }),
       };
-      const { data: newFee } = await createFeeStructure(payload);
-      // Optimistic: add to active list immediately
-      setFees((prev) => [...prev, newFee]);
+      if (editing) await updateFeeStructure(editing, payload);
+      else await createFeeStructure(payload);
+      setEditing(null);
       setForm(EMPTY_FORM);
       setCreateSuccess(true);
       loadFees(1);
@@ -137,7 +143,7 @@ export default function FeesPage() {
       setCreateError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
           err.response?.data?.errors?.[0] ||
-          t("fees.failedToCreate") || "Failed to create fee structure."
+          t("fees.failedToCreate")
       );
     } finally {
       setCreating(false);
@@ -153,74 +159,14 @@ export default function FeesPage() {
 
   async function handleConfirmDelete() {
     const { fee } = pendingDelete;
-    // Optimistic: move to archived list immediately
-    const prevFees     = fees;
-    const prevArchived = archivedFees;
-    setFees((prev) => prev.filter((f) => f.className !== fee.className));
-    setArchivedFees((prev) => [
-      ...prev,
-      { ...fee, deletedAt: new Date().toISOString() },
-    ]);
     setPendingDelete(null);
     try {
       await deleteFeeStructure(fee.className);
       loadFees(pagination.page);
     } catch (err) {
-      // Revert on failure
-      setFees(prevFees);
-      setArchivedFees(prevArchived);
       setDeleteError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
-          t("fees.failedToDelete") || "Failed to delete fee structure."
-      );
-    }
-  }
-
-  // ── Edit handlers ─────────────────────────────────────────────────────────
-
-  async function handleEditSave(originalClassName, payload) {
-    setEditError(null);
-    // Optimistic: update active list immediately
-    const prevFees = fees;
-    setFees((prev) =>
-      prev.map((f) =>
-        f.className === originalClassName ? { ...f, ...payload } : f
-      )
-    );
-    setEditingFee(null);
-    try {
-      await updateFeeStructure(originalClassName, payload);
-      loadFees(pagination.page);
-    } catch (err) {
-      // Revert on failure
-      setFees(prevFees);
-      setEditingFee(null);
-      setEditError(
-        err.response?.data?.error || t("fees.failedToCreate") || "Failed to save changes."
-      );
-      throw err; // let modal surface inline error
-    }
-  }
-
-  // ── Restore handlers ──────────────────────────────────────────────────────
-
-  async function handleRestore(fee) {
-    setRestoreError(null);
-    // Optimistic: move from archived to active immediately
-    const prevFees     = fees;
-    const prevArchived = archivedFees;
-    const restored = { ...fee, deletedAt: null };
-    setArchivedFees((prev) => prev.filter((f) => f.className !== fee.className));
-    setFees((prev) => [...prev, restored]);
-    try {
-      await restoreFeeStructure(fee.className);
-      loadFees(pagination.page);
-    } catch (err) {
-      // Revert on failure
-      setFees(prevFees);
-      setArchivedFees(prevArchived);
-      setRestoreError(
-        err.response?.data?.error || "Failed to restore fee structure."
+          t("fees.failedToDelete")
       );
     }
   }
@@ -261,7 +207,7 @@ export default function FeesPage() {
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
             >
               <IconDollarSign size={16} />
-              {t("fees.createTitle")}
+              {editing ? "Edit fee" : t("fees.createTitle")}
             </div>
           </div>
           <div className="card-body">
@@ -275,11 +221,15 @@ export default function FeesPage() {
                 style={{ marginBottom: "1rem" }}
               >
                 <IconCheck size={15} />
-                <span>{t("fees.createSuccess") || "Fee structure created successfully."}</span>
+                <span>{t("fees.createSuccess")}</span>
               </div>
             )}
             {createError && (
-              <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
+              <div
+                role="alert"
+                className="alert alert-danger"
+                style={{ marginBottom: "1rem" }}
+              >
                 <IconAlertTriangle size={15} />
                 <span>{createError}</span>
               </div>
@@ -295,10 +245,10 @@ export default function FeesPage() {
                 alignItems: "end",
               }}
             >
+              {/* Class */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-className">
-                  {t("fees.classLabel")}{" "}
-                  <span aria-hidden="true" style={{ color: "var(--danger)" }}>*</span>
+                  {t("fees.classLabel")} <span aria-hidden="true" style={{ color: "var(--danger)" }}>*</span>
                 </label>
                 <select
                   id="fee-className"
@@ -312,11 +262,14 @@ export default function FeesPage() {
                 >
                   <option value="">{t("fees.selectClass")}</option>
                   {classOptions.map((c) => (
-                    <option key={c} value={c}>{c}</option>
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
                   ))}
                 </select>
               </div>
 
+              {/* Fee Amount */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-feeAmount">
                   {t("fees.feeAmountLabel")}{" "}
@@ -338,6 +291,7 @@ export default function FeesPage() {
                 />
               </div>
 
+              {/* Academic Year */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-academicYear">
                   {t("fees.academicYearLabel")}
@@ -354,6 +308,7 @@ export default function FeesPage() {
                 />
               </div>
 
+              {/* Description */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-description">
                   {t("fees.descriptionLabel")}
@@ -370,6 +325,24 @@ export default function FeesPage() {
                 />
               </div>
 
+              <label>
+                Active from (UTC)
+                <input className="form-input" type="date" name="activeFrom" value={form.activeFrom} onChange={handleFormChange} />
+              </label>
+              <label>
+                Active until (UTC)
+                <input className="form-input" type="date" name="activeTo" value={form.activeTo} onChange={handleFormChange} />
+              </label>
+              <label>
+                <input type="checkbox" name="isActive" checked={form.isActive} onChange={handleFormChange} /> Enabled
+              </label>
+              {editing && (
+                <button className="btn btn-ghost" type="button" onClick={() => { setEditing(null); setForm(EMPTY_FORM); }}>
+                  Cancel edit
+                </button>
+              )}
+
+              {/* Submit */}
               <div style={{ display: "flex", alignItems: "flex-end" }}>
                 <button
                   type="submit"
@@ -378,14 +351,14 @@ export default function FeesPage() {
                   style={{ width: "100%" }}
                   aria-busy={creating}
                 >
-                  {creating ? t("fees.creating") : t("fees.create")}
+                  {creating ? t("fees.creating") : editing ? "Save changes" : t("fees.create")}
                 </button>
               </div>
             </form>
           </div>
         </div>
 
-        {/* ── Alerts ── */}
+        {/* ── Alerts ───────────────────────────────────────────────────────── */}
         {error && (
           <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
             <IconAlertTriangle size={15} />
@@ -398,38 +371,25 @@ export default function FeesPage() {
             <span>{deleteError}</span>
           </div>
         )}
-        {editError && (
-          <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
-            <IconAlertTriangle size={15} />
-            <span>{editError}</span>
-          </div>
-        )}
-        {restoreError && (
-          <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
-            <IconAlertTriangle size={15} />
-            <span>{restoreError}</span>
-          </div>
-        )}
 
-        {/* ── Fee table with Active / Archived tabs ── */}
+        <label>
+          Preview active fees on (UTC)
+          <input className="form-input" type="date" value={previewDate} onChange={(event) => {
+            const date = event.target.value;
+            setPreviewDate(date);
+            loadFees(1, date);
+          }} />
+        </label>
+
+        {/* ── Fee table ────────────────────────────────────────────────────── */}
         <div className="card">
           <div className="card-header">
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                className={`btn btn-sm ${activeTab === "active" ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setActiveTab("active")}
-                aria-pressed={activeTab === "active"}
-              >
-                Active {!loading && `(${fees.length})`}
-              </button>
-              <button
-                className={`btn btn-sm ${activeTab === "archived" ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setActiveTab("archived")}
-                aria-pressed={activeTab === "archived"}
-              >
-                Archived {!loading && `(${archivedFees.length})`}
-              </button>
-            </div>
+            <div className="card-title">{t("fees.existingTitle")}</div>
+            {!loading && (
+              <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
+                {t("fees.count", { count: pagination.total })}
+              </span>
+            )}
           </div>
 
           {loading ? (
@@ -535,15 +495,6 @@ export default function FeesPage() {
           requireTyping={pendingDelete.fee.className}
           onConfirm={handleConfirmDelete}
           onCancel={() => setPendingDelete(null)}
-        />
-      )}
-
-      {editingFee && (
-        <EditFeeModal
-          fee={editingFee}
-          classOptions={classOptions}
-          onSave={handleEditSave}
-          onCancel={() => setEditingFee(null)}
         />
       )}
     </>

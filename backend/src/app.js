@@ -62,6 +62,7 @@ const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./ser
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
+const { startFeeActivationScheduler, stopFeeActivationScheduler } = require('./queue/feeActivationScheduler');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
 const { startWorker: startStudentImportWorker } = require('./services/studentImportQueueService');
 const { close: closeReportCacheInvalidator } = require('./services/reportCacheInvalidator');
@@ -387,6 +388,7 @@ connectDatabase().then(async () => {
     stopReconciliationReportScheduler();
     stopMetricsRollupScheduler();
     stopJobRecoveryScheduler();
+    stopFeeActivationScheduler();
   };
 
   leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);

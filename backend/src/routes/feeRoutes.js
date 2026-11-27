@@ -1,8 +1,6 @@
 'use strict';
 
 const express = require('express');
-const { validateQuery } = require('../middleware/validateQuery');
-const queries = require('../middleware/schemas/routeQuerySchemas');
 const router = express.Router();
 const { requireVersion } = require('../middleware/optimisticLock');
 const { createFeeStructure, getAllFeeStructures, getFeeByClass, deleteFeeStructure, updateFeeStructure } = require('../controllers/feeController');
@@ -142,14 +140,14 @@ router.use(resolveSchool);
  */
 
 const requireIncludeDeletedAccess = (req, res, next) => {
-  if (req.query.includeDeleted) {
+  if (String(req.query.includeDeleted).toLowerCase() === 'true' || req.query.manage === 'true' || req.query.activeAt !== undefined) {
     return requireAdminAuth(req, res, next);
   }
   return next();
 };
 
 router.post('/',              requireAdminAuth, auditContext, contractPaused, validateFeeStructure, createFeeStructure);
-router.get('/',               validateQuery(queries.feeList), requireIncludeDeletedAccess, getAllFeeStructures);
+router.get('/',               requireIncludeDeletedAccess, getAllFeeStructures);
 router.get('/:className',     requireSchoolAuth(), getFeeByClass);
 router.put('/:className',     requireAdminAuth, auditContext, requireVersion, contractPaused, validateFeeStructure, updateFeeStructure);
 router.patch('/:className',     requireAdminAuth, auditContext, requireVersion, contractPaused, validateFeeStructure, updateFeeStructure);

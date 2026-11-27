@@ -12,6 +12,9 @@ const feeStructureSchema = new mongoose.Schema(
     description:  { type: String, default: '' },
     academicYear: { type: String, default: () => new Date().getUTCFullYear().toString() },
     isActive:        { type: Boolean, default: true, index: true },
+    activeFrom: { type: Date, default: null },
+    activeTo: { type: Date, default: null },
+    isCurrentlyActive: { type: Boolean },
     paymentDeadline: { type: Date, default: null },
   },
   { timestamps: true }

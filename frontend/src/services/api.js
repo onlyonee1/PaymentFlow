@@ -152,7 +152,8 @@ export const verifyPayment = (txHash, idempotencyKey, schoolSlug) =>
   );
 export const syncPayments = () => api.post("/payments/sync");
 export const getSyncStatus = ({ signal } = {}) => api.get("/payments/sync/status", { signal });
-export const getFeeStructures = ({ signal } = {}) => api.get("/fees", { signal });
+export const getFeeStructures = ({ signal, ...params } = {}) => api.get("/fees", { signal, params });
+export const updateFeeStructure = (className, data) => api.put(`/fees/${encodeURIComponent(className)}`, { ...data, className });
 export const createFeeStructure = (data) => api.post("/fees", data);
 export const getFeeByClass = (className) => api.get(`/fees/${className}`);
 export const deleteFeeStructure = (className) => api.delete(`/fees/${encodeURIComponent(className)}`);
