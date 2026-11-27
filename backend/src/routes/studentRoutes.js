@@ -30,11 +30,31 @@ const { bulkImportLimiter } = require('../middleware/rateLimiter');
 const streamingCsvUpload = require('../middleware/streamingCsvUpload');
 const { contractPaused } = require('../middleware/contractPaused');
 
+const School = require('../models/schoolModel');
+const { withStudentQuotaLock } = require('../services/studentQuotaService');
+
+function quotaWrite(handler) {
+  return async (req, res, next) => {
+    try {
+      await withStudentQuotaLock(req.schoolId, async () => {
+        const school = await School.findOne({ schoolId: req.schoolId }).lean();
+        if (!school?.isActive) {
+          return res.status(403).json({ error: 'School is deactivated.', code: 'SCHOOL_INACTIVE' });
+        }
+        req.school = school;
+        return handler(req, res, next);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 router.use(resolveSchool);
 
 // Admin-only routes
-router.post('/', requireAdminAuth, auditContext, validateRegisterStudent, registerStudent);
-router.post('/bulk', requireAdminAuth, auditContext, bulkImportLimiter, express.json({ limit: '1mb' }), streamingCsvUpload({ requiredHeaders: ['studentId', 'name', 'class'] }), bulkImportStudents);
+router.post('/', requireAdminAuth, auditContext, validateRegisterStudent, quotaWrite(registerStudent));
+router.post('/bulk', requireAdminAuth, auditContext, bulkImportLimiter, express.json({ limit: '1mb' }), streamingCsvUpload({ requiredHeaders: ['studentId', 'name', 'class'] }), quotaWrite(bulkImportStudents));
 router.get('/', requireAdminAuth, validatePagination, getAllStudents);
 router.get('/export', requireAdminAuth, exportStudents);
 
@@ -51,7 +71,7 @@ router.get('/public/:studentId', validateStudentIdParam, getPublicStudentInfo);
 router.get('/:studentId', requireAdminAuth, validateStudentIdParam, getStudent);
 router.put('/:studentId', requireAdminAuth, auditContext, validateStudentIdParam, validateUpdateStudent, updateStudent);
 router.delete('/:studentId', requireAdminAuth, auditContext, validateStudentIdParam, deleteStudent);
-router.post('/:studentId/restore', requireAdminAuth, auditContext, validateStudentIdParam, restoreStudent);
+router.post('/:studentId/restore', requireAdminAuth, auditContext, validateStudentIdParam, quotaWrite(restoreStudent));
 router.get('/:studentId/payments/audit', requireAdminAuth, validateStudentIdParam, getDeletedStudentPayments);
 router.post('/:studentId/reset-payment', requireAdminAuth, auditContext, validateStudentIdParam, resetPayment);
 router.post('/:studentId/reconcile', requireAdminAuth, auditContext, validateStudentIdParam, reconcileStudent);

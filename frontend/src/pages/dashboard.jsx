@@ -6,18 +6,15 @@ import StudentForm from "../components/StudentForm";
 import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
 import RequireAdmin from "../components/RequireAdmin";
-import EmptyState from "../components/EmptyState";
 import EmptyState, { StandaloneEmptyState } from "../components/EmptyState";
 import BlockchainStatusBadge from "../components/BlockchainStatusBadge";
 import { TableDensityControl, useTableDensity } from "../components/TableDensityControl";
 import AccessiblePagination from "../components/AccessiblePagination";
 import { SkeletonStatCard, SkeletonTableRow } from "../components/Skeleton";
-import FilterChips from "../components/FilterChips"; // Issue #107
 import Pagination from "../components/Pagination";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useRouteChangeAbort } from "../hooks/useRouteChangeAbort";
-import { getStudent, getSchool } from "../services/api";
 import useGridCellNavigation from "../hooks/useGridCellNavigation";
 import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
@@ -463,6 +460,16 @@ function Dashboard() {
             <IconAlertTriangle size={16} />
             <span>{error}</span>
           </div>
+        )}
+
+        {summary?.studentQuota && (
+          <section className="card" aria-label="Student quota" style={{ marginBottom: "1rem" }}>
+            <strong>Student quota</strong>
+            <p>{summary.studentQuota.used} students {summary.studentQuota.limit === null ? "· Unlimited" : `of ${summary.studentQuota.limit}`} · {summary.studentQuota.tier}</p>
+            {summary.studentQuota.limit !== null && summary.studentQuota.used >= summary.studentQuota.limit && (
+              <a href={summary.studentQuota.upgrade_url}>Upgrade student capacity</a>
+            )}
+          </section>
         )}
 
         {/* ── Stat Cards ────────────────────────────── */}

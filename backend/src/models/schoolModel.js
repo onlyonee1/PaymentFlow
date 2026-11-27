@@ -202,17 +202,19 @@ const schoolSchema = new mongoose.Schema(
       min: [1.1, 'maxPaymentMultiplier must be at least 1.1'],
       max: [100, 'maxPaymentMultiplier must not exceed 100'],
     },
-    /**
-     * Maximum number of students this school can register.
-     * Enforces per-school student quotas for subscription tiers.
-     * Default: 10000 (effectively unlimited for most schools).
-     * Set to a lower value to enforce tier-based limits.
-     */
-    maxStudents: {
-      type: Number,
-      default: 10000,
-      min: [1, 'maxStudents must be at least 1'],
+    subscriptionTier: {
+      type: String,
+      enum: ['free', 'standard', 'enterprise'],
+      default: 'free',
     },
+    studentQuota: {
+      type: Number,
+      default: null,
+      min: 1,
+      validate: { validator: Number.isSafeInteger, message: 'studentQuota must be a whole number' },
+    },
+    // Retain legacy per-school overrides while new writes use studentQuota.
+    maxStudents: { type: Number, min: 1 },
     /**
      * Per-school email branding and localization fields.
      *

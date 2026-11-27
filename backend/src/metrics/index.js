@@ -6,6 +6,31 @@ const registry = new client.Registry();
 
 client.collectDefaultMetrics({ register: registry });
 
+new client.Gauge({
+  name: 'school_student_quota_used',
+  help: 'Number of active student records per school',
+  labelNames: ['schoolId'],
+  registers: [registry],
+  async collect() {
+    try {
+      const School = require('../models/schoolModel');
+      const Student = require('../models/studentModel');
+      const [schools, counts] = await Promise.all([
+        School.find().select('schoolId').lean(),
+        Student.aggregate([
+          { $match: { deletedAt: null } },
+          { $group: { _id: '$schoolId', count: { $sum: 1 } } },
+        ]).option({ _bypassTenantScope: true }),
+      ]);
+      const bySchool = new Map(counts.map(({ _id, count }) => [_id, count]));
+      this.reset();
+      for (const { schoolId } of schools) this.set({ schoolId }, bySchool.get(schoolId) || 0);
+    } catch {
+      // MongoDB can be unavailable during startup.
+    }
+  },
+});
+
 // payments_total{status} — queried live from MongoDB on each scrape so the
 // count is accurate even after a process restart (counters would reset to 0).
 new client.Gauge({
