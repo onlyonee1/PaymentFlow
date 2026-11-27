@@ -1,5 +1,6 @@
 'use strict';
 
+const { withSpan } = require('../tracing/spans');
 const logger = require('./logger').child('StellarRetry');
 
 const MAX_ATTEMPTS = parseInt(process.env.STELLAR_CALL_RETRY_ATTEMPTS, 10) || 3;
@@ -53,7 +54,9 @@ async function withStellarRetry(fn, opts = {}) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await fn();
+      return await withSpan('horizon.request', fn, {
+        attributes: { 'horizon.operation': label, 'horizon.attempt': attempt },
+      });
     } catch (err) {
       if (!isTransient(err) || attempt === maxAttempts) throw classifyHorizonError(err, context);
       const delay = Math.min(baseDelay * 2 ** (attempt - 1), MAX_DELAY);

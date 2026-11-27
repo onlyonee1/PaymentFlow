@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { shutdownTracing } = require('./tracing/bootstrap');
 const config = require('./config');
 const express = require('express');
 const cors = require('cors');
@@ -111,7 +112,7 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key', 'X-Correlation-ID', 'traceparent', 'tracestate'],
   exposedHeaders: ['X-Correlation-ID'],
   credentials: true,
 }));
@@ -462,6 +463,7 @@ async function shutdown(signal) {
         mongoDurationMs,
         totalShutdownDurationMs,
       });
+      await runStep('shutdownTracing', shutdownTracing);
       clearTimeout(forceExitTimer);
       process.exit(0);
     } catch (err) {

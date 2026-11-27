@@ -1,5 +1,7 @@
 'use strict';
 
+const { setTraceAttributes } = require('../tracing/spans');
+
 /**
  * paymentController — core payment flow: instructions, intent, submit, verify.
  * req.school and req.schoolId are injected by resolveSchool middleware.
@@ -242,6 +244,7 @@ async function submitTransaction(req, res, next) {
     }
 
     const transitionActor = req.user?.username || req.user?.id || 'payment-controller';
+    setTraceAttributes({ schoolId: req.schoolId, paymentId: paymentRecord._id });
     paymentRecord = (await transitionPayment(paymentRecord, 'SUBMITTED', {
       performedBy: transitionActor,
       schoolId: req.schoolId,
@@ -340,6 +343,7 @@ async function verifyPayment(req, res, next) {
     // Idempotency — return cached result if already recorded
     const existing = await Payment.findOne({ schoolId, txHash: normalizedHash });
     if (existing) {
+      setTraceAttributes({ schoolId, paymentId: existing._id });
       await audit.success({ txHash: normalizedHash, cached: true, studentId: existing.studentId, amount: existing.amount });
 
       const targetCurrency = req.school.localCurrency || 'USD';

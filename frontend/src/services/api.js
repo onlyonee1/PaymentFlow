@@ -5,11 +5,29 @@ import { isRetryable } from '../utils/retryClassification';
 
 const TIMEOUT_MS = parseInt(getEnvVar('NEXT_PUBLIC_REQUEST_TIMEOUT_MS', '15000'), 10);
 
+const API_BASE_URL = getEnvVar('NEXT_PUBLIC_API_URL', 'http://localhost:5000/api');
+
 const api = axios.create({
-  baseURL: getEnvVar('NEXT_PUBLIC_API_URL', 'http://localhost:5000/api'),
+  baseURL: API_BASE_URL,
   timeout: TIMEOUT_MS,
   withCredentials: true,
 });
+
+// Start a W3C trace at the API boundary when the caller has no parent.
+function attachTraceContext(config) {
+  if (typeof window === 'undefined' || !window.crypto?.getRandomValues) return;
+  const backend = new URL(API_BASE_URL, window.location.href);
+  const base = new URL(config.baseURL || API_BASE_URL, window.location.href);
+  const target = new URL(config.url || '', base);
+  if (target.origin !== backend.origin) return;
+  if (Object.keys(config.headers || {}).some((name) => name.toLowerCase() === 'traceparent')) return;
+
+  const randomHex = (length) => {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(length));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  };
+  config.headers = { ...config.headers, traceparent: `00-${randomHex(16)}-${randomHex(8)}-00` };
+}
 
 // Attach the school context header to every request unless one is already set.
 // Derives school ID from authenticated user session (stored in localStorage after login).
@@ -25,6 +43,7 @@ api.interceptors.request.use((config) => {
       config.headers = { ...config.headers, "X-School-ID": schoolId };
     }
   }
+  attachTraceContext(config);
   return config;
 });
 
