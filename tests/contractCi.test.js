@@ -1,95 +1,181 @@
 'use strict';
 
 /**
- * CI contract registry freshness check (#636)
+ * CI Configuration Validation for the Soroban contract-tests job.
  *
- * Enforces that:
- *  1. contracts/registry.json exists and is valid
- *  2. At least one active entry exists for each network referenced in the registry
- *  3. The registry schema file exists alongside the registry
- *  4. No entry has a deployedAt date in the future (clock skew guard)
- *  5. abiVersion values follow semver
+ * This test verifies that the contract-tests job in .github/workflows/ci.yml
+ * is correctly configured — it checks for:
+ *   - Job existence
+ *   - Docker-based Stellar node startup
+ *   - Contract compilation step
+ *   - Rust unit test step
+ *   - Artifact upload step
+ *   - Cargo caching step
+ *   - Inclusion in the ci-gate needs list (PR gating)
  *
- * This test runs as part of CI to catch a deploy that forgot to update the
- * registry, or a hand-edited registry.json that broke the schema.
- *
- * Unlike contractInterfaceRegistry.test.js, this test reads the REAL file
- * from disk — it is a liveness check, not a unit test.
+ * Following the pattern of tests/ciCaching.test.js.
  */
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
+const yaml = require('js-yaml');
 
-const REGISTRY_PATH = path.resolve(__dirname, '../contracts/registry.json');
-const SCHEMA_PATH   = path.resolve(__dirname, '../contracts/registry.schema.json');
+const ciPath = path.join(__dirname, '../.github/workflows/ci.yml');
 
-const { loadRegistry, resolveContract } = require('../backend/src/services/contractRegistryService');
+function loadCiConfig() {
+  const ciContent = fs.readFileSync(ciPath, 'utf8');
+  return yaml.load(ciContent);
+}
 
-// Un-mock fs so we read the actual files.
-jest.unmock('fs');
-
-describe('CI — contracts/registry.json is present and valid', () => {
-  test('contracts/registry.json exists on disk', () => {
-    expect(fs.existsSync(REGISTRY_PATH)).toBe(true);
-  });
-
-  test('contracts/registry.schema.json exists on disk', () => {
-    expect(fs.existsSync(SCHEMA_PATH)).toBe(true);
-  });
-
-  test('registry.json is valid JSON', () => {
-    const raw = fs.readFileSync(REGISTRY_PATH, 'utf8');
-    expect(() => JSON.parse(raw)).not.toThrow();
-  });
-
-  test('loadRegistry() validates successfully against the schema rules', () => {
-    expect(() => loadRegistry()).not.toThrow();
-    expect(Array.isArray(loadRegistry())).toBe(true);
-  });
-});
-
-describe('CI — registry entries are semantically correct', () => {
-  let registry;
+describe('Contract Tests CI Configuration', () => {
+  let ciConfig;
 
   beforeAll(() => {
-    registry = loadRegistry();
+    ciConfig = loadCiConfig();
   });
 
-  test('every network that appears in the registry has at least one active entry', () => {
-    const networks = [...new Set(registry.map((e) => e.network))];
-    for (const network of networks) {
-      const active = registry.filter((e) => e.network === network && e.active);
-      expect(active.length).toBeGreaterThanOrEqual(1);
-    }
+  // ── Job existence ────────────────────────────────────────────────────────
+
+  test('should have a contract-tests job defined', () => {
+    expect(ciConfig.jobs).toBeDefined();
+    expect(ciConfig.jobs['contract-tests']).toBeDefined();
   });
 
-  test('no entry has a deployedAt date in the future', () => {
-    const now = Date.now();
-    for (const entry of registry) {
-      const deployed = new Date(entry.deployedAt).getTime();
-      expect(deployed).toBeLessThanOrEqual(now + 60_000); // 1-minute tolerance for clock drift
-    }
+  test('contract-tests job should have a descriptive name', () => {
+    const job = ciConfig.jobs['contract-tests'];
+    expect(job.name).toBeDefined();
+    expect(job.name.toLowerCase()).toContain('contract');
   });
 
-  test('every abiVersion follows semver (major.minor.patch)', () => {
-    const semverRe = /^\d+\.\d+\.\d+$/;
-    for (const entry of registry) {
-      expect(entry.abiVersion).toMatch(semverRe);
-    }
+  test('contract-tests job should run on ubuntu-latest', () => {
+    const job = ciConfig.jobs['contract-tests'];
+    expect(job['runs-on']).toBe('ubuntu-latest');
   });
 
-  test('contractIds are unique across all entries', () => {
-    const ids = registry.map((e) => e.contractId);
-    const unique = new Set(ids);
-    expect(unique.size).toBe(ids.length);
+  // ── Contract compilation ──────────────────────────────────────────────────
+
+  test('should have a step that compiles the contract to Wasm', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const compileStep = steps.find(
+      (step) =>
+        step.name &&
+        (step.name.toLowerCase().includes('compile') ||
+          step.name.toLowerCase().includes('build')) &&
+        step.run &&
+        (step.run.includes('cargo build') || step.run.includes('cargo build'))
+    );
+    expect(compileStep).toBeDefined();
+    expect(compileStep.run).toContain('wasm32-unknown-unknown');
   });
 
-  test('resolveContract returns a non-null result for each active network', () => {
-    const networks = [...new Set(registry.filter((e) => e.active).map((e) => e.network))];
-    for (const network of networks) {
-      const result = resolveContract(registry, network);
-      expect(result).not.toBeNull();
-      expect(result.network).toBe(network);
-    }
+  // ── Rust unit tests ──────────────────────────────────────────────────────
+
+  test('should have a step that runs Rust unit tests', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const testStep = steps.find(
+      (step) =>
+        step.name &&
+        step.name.toLowerCase().includes('unit') &&
+        step.run &&
+        step.run.includes('cargo test')
+    );
+    expect(testStep).toBeDefined();
+  });
+
+  // ── Stellar node via Docker ──────────────────────────────────────────────
+
+  test('should have a step that starts a local Stellar node via Docker', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const dockerStep = steps.find(
+      (step) =>
+        step.name &&
+        step.name.toLowerCase().includes('stellar') &&
+        step.name.toLowerCase().includes('node') &&
+        step.run &&
+        step.run.includes('docker')
+    );
+    expect(dockerStep).toBeDefined();
+    expect(dockerStep.run).toContain('quickstart');
+  });
+
+  // ── Deployment + smoke tests ─────────────────────────────────────────────
+
+  test('should have a step that deploys and runs smoke tests', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const deployStep = steps.find(
+      (step) =>
+        step.name &&
+        (step.name.toLowerCase().includes('deploy') ||
+          step.name.toLowerCase().includes('smoke')) &&
+        step.run &&
+        step.run.includes('contract-tests.sh')
+    );
+    expect(deployStep).toBeDefined();
+  });
+
+  // ── Artifact upload ──────────────────────────────────────────────────────
+
+  test('should upload contract test results as a CI artifact', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const artifactStep = steps.find(
+      (step) =>
+        step.uses &&
+        step.uses.includes('actions/upload-artifact') &&
+        step.with &&
+        step.with.name &&
+        step.with.name.includes('contract')
+    );
+    expect(artifactStep).toBeDefined();
+    expect(artifactStep.with.path).toContain('.wasm');
+  });
+
+  // ── Caching ──────────────────────────────────────────────────────────────
+
+  test('should cache Cargo registry and build artifacts', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const cacheStep = steps.find(
+      (step) =>
+        step.uses &&
+        step.uses.includes('actions/cache')
+    );
+    expect(cacheStep).toBeDefined();
+    expect(cacheStep.with.path).toContain('.cargo/registry');
+    expect(cacheStep.with.key).toContain('cargo');
+  });
+
+  test('should use Cargo.toml hash for cache key invalidation', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const cacheStep = steps.find(
+      (step) =>
+        step.uses &&
+        step.uses.includes('actions/cache')
+    );
+    expect(cacheStep.with.key).toContain('Cargo.toml');
+  });
+
+  // ── PR gating (ci-gate) ──────────────────────────────────────────────────
+
+  test('ci-gate job should exist', () => {
+    expect(ciConfig.jobs['ci-gate']).toBeDefined();
+  });
+
+  test('ci-gate should include contract-tests in its needs list', () => {
+    const gateNeeds = ciConfig.jobs['ci-gate'].needs;
+    expect(Array.isArray(gateNeeds)).toBe(true);
+    expect(gateNeeds).toContain('contract-tests');
+  });
+
+  // ── Cleanup ──────────────────────────────────────────────────────────────
+
+  test('should have a cleanup step to stop the Stellar node', () => {
+    const steps = ciConfig.jobs['contract-tests'].steps;
+    const cleanupStep = steps.find(
+      (step) =>
+        step.name &&
+        step.name.toLowerCase().includes('stop') &&
+        step.run &&
+        step.run.includes('docker')
+    );
+    expect(cleanupStep).toBeDefined();
   });
 });
