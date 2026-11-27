@@ -27,6 +27,7 @@ validateEnv();
 import { createContext, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
+import "../styles/tokens.css";
 import "../styles/globals.css";
 import "../styles/redesign.css";
 import Navbar from "../components/Navbar";
@@ -89,11 +90,22 @@ export default function MyApp({ Component, pageProps }) {
     } else if (saved === "light") {
       setDark(false);
     } else {
-      setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      setDark(mediaQuery.matches);
+      const listener = (e) => {
+        if (!localStorage.getItem("theme")) {
+          setDark(e.matches);
+        }
+      };
+      if (mediaQuery.addEventListener) {
+        mediaQuery.addEventListener("change", listener);
+        return () => mediaQuery.removeEventListener("change", listener);
+      }
     }
   }, []);
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     document.documentElement.classList.toggle("dark", dark);
     document.documentElement.classList.toggle("light", !dark);
     localStorage.setItem("theme", dark ? "dark" : "light");
