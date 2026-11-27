@@ -1,5 +1,3 @@
-  req.legacyOffsetPagination = req.query.page !== undefined;
-  req.legacyOffsetPagination = req.query.page !== undefined;
 'use strict';
 
 const Joi = require('joi');

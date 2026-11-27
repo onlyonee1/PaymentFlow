@@ -10,6 +10,7 @@ const { checkSchoolConsistency, fetchChainTransactions } = require('./consistenc
 const cache = require('../cache');
 const logger = require('../utils/logger').child('ReconciliationService');
 
+const BATCH_SIZE = parseInt(process.env.RECONCILIATION_BATCH_SIZE, 10) || 200;
 const INTERVAL_MS = parseInt(process.env.RECONCILIATION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
 const CHAIN_TOTAL_TTL_SEC = parseInt(process.env.RECONCILIATION_CHAIN_TOTAL_TTL_SEC, 10) || 300;
 const chainTotalCacheKey = (schoolId) => `reconciliation:chain_total:${schoolId}`;
@@ -46,13 +47,13 @@ async function reconcileAll(schoolId) {
   }
 
   try {
-    let lastId = cursor.lastProcessedStudentId ? { _id: { $gt: mongoose.Types.ObjectId(cursor.lastProcessedStudentId) } } : {};
+    const lastId = cursor.lastProcessedStudentId ? { _id: { $gt: new mongoose.Types.ObjectId(cursor.lastProcessedStudentId) } } : {};
     const baseQuery = { ...query, ...lastId };
     let batchChecked = 0;
 
     while (true) {
       // Fetch next batch of students
-      const students = await Student.find(baseQuery)
+      const students = await Student.find(baseQuery, null, schoolId ? {} : { _bypassTenantScope: true })
         .sort({ _id: 1 })
         .limit(BATCH_SIZE)
         .lean();
@@ -116,7 +117,7 @@ async function reconcileAll(schoolId) {
       if (students.length < BATCH_SIZE) break;
 
       // Move query to next batch
-      baseQuery._id = { $gt: mongoose.Types.ObjectId(students[students.length - 1]._id) };
+      baseQuery._id = { $gt: new mongoose.Types.ObjectId(students[students.length - 1]._id) };
     }
 
     // Mark cursor as completed

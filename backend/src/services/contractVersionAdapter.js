@@ -1,5 +1,7 @@
 'use strict';
 
+const { withSpan } = require('../tracing/spans');
+
 /**
  * Contract Version Adapter (Issue #302).
  *
@@ -376,11 +378,13 @@ async function getContractVersion(contractId, networkPassphrase, rpcServer = nul
       .setTimeout(30)
       .build();
 
-    const result = await server.simulateTransaction(tx);
-
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
+    const result = await withSpan('soroban.invoke', async () => {
+      const response = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(response)) {
+        throw new Error(`Simulation error: ${response.error}`);
+      }
+      return response;
+    }, { attributes: { 'soroban.method': 'version' } });
 
     // Decode the return value (should be a Soroban String)
     const returnVal = result.result?.retval;

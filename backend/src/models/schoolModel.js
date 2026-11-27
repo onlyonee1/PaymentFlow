@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { normalizeSchoolSlug, isValidSchoolSlug } = require('../utils/schoolSlug');
 const StellarSdk = require('@stellar/stellar-sdk');
 const { encryptWebhookSecret, decryptWebhookSecret } = require('../services/webhookSecretEncryption');
 
@@ -19,7 +20,16 @@ const schoolSchema = new mongoose.Schema(
   {
     schoolId:       { type: String, required: true, unique: true, index: true },
     name:           { type: String, required: true, trim: true },
-    slug:           { type: String, required: true, unique: true, index: true, lowercase: true, trim: true },
+    slug: {
+      type: String,
+      required: true,
+      unique: true,
+      set(value) {
+        // Query filters must still be able to address a stored legacy slug.
+        return this instanceof mongoose.Query ? value : normalizeSchoolSlug(value);
+      },
+      validate: [isValidSchoolSlug, 'slug must contain 2–60 URL-safe characters'],
+    },
     stellarAddress: {
       type: String,
       required: true,
@@ -45,6 +55,7 @@ const schoolSchema = new mongoose.Schema(
         message: 'previousStellarAddress must be a valid Stellar public key (Ed25519)',
       },
     },
+    enabledPaymentProviders: { type: [String], default: undefined },
     isActive:       { type: Boolean, default: true, index: true },
     /**
      * Horizon paging cursor for the transaction poller (#839).
@@ -57,6 +68,8 @@ const schoolSchema = new mongoose.Schema(
     syncCursor:     { type: String, default: null },
     adminEmail:     { type: String, default: null },
     address:        { type: String, default: null },
+    financeEmail: { type: String, default: null, trim: true, select: false, match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    settlementInitialBalanceXlm: { type: String, default: '0', select: false, match: /^[0-9]{1,12}(?:\.[0-9]{1,7})?$/ },
     /**
      * Contact email for the school. Used for reminder emails, receipts, and admin notifications.
      * Must be a valid email format.
@@ -192,17 +205,19 @@ const schoolSchema = new mongoose.Schema(
       min: [1.1, 'maxPaymentMultiplier must be at least 1.1'],
       max: [100, 'maxPaymentMultiplier must not exceed 100'],
     },
-    /**
-     * Maximum number of students this school can register.
-     * Enforces per-school student quotas for subscription tiers.
-     * Default: 10000 (effectively unlimited for most schools).
-     * Set to a lower value to enforce tier-based limits.
-     */
-    maxStudents: {
-      type: Number,
-      default: 10000,
-      min: [1, 'maxStudents must be at least 1'],
+    subscriptionTier: {
+      type: String,
+      enum: ['free', 'standard', 'enterprise'],
+      default: 'free',
     },
+    studentQuota: {
+      type: Number,
+      default: null,
+      min: 1,
+      validate: { validator: Number.isSafeInteger, message: 'studentQuota must be a whole number' },
+    },
+    // Retain legacy per-school overrides while new writes use studentQuota.
+    maxStudents: { type: Number, min: 1 },
     /**
      * Per-school email branding and localization fields.
      *

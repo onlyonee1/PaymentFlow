@@ -22,6 +22,7 @@ const outboxSchema = new mongoose.Schema(
 
     retryCount:     { type: Number, default: 0 },
     lastError:      { type: String, default: null },
+    nextRetryAt:    { type: Date, default: null, index: true },
 
     deadLettered:       { type: Boolean, default: false, index: true },
     deadLetteredAt:     { type: Date, default: null },

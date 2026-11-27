@@ -70,6 +70,20 @@ jobs:
       - name: Scan tracked files for Stellar secret key material
         run: node scripts/scan-repo-secrets.js
 
+  secret-scan-gitleaks:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+
   migrations:
     name: Validate migration numbering
     runs-on: ubuntu-latest
@@ -90,6 +104,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: node scripts/check-error-response-shape.js
+
+  changelog-format:
+    name: Validate CHANGELOG.md format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Validate Keep a Changelog format
+        run: node scripts/validate-changelog.js
 
   k8s-ingress-tls:
     name: Verify Kubernetes ingress has TLS configuration
@@ -173,6 +198,43 @@ jobs:
           name: bundle-manifest
           path: frontend/.next/build-manifest.json
           retention-days: 14
+
+  # ── #677: Bundle size budget enforcement ────────────────────────────────
+  # Validates the bundle budget config exists and is well-formed, then checks
+  # actual gzipped entrypoint sizes against the budgets defined in
+  # frontend/bundle-budget.json (main: 300 KB, per-route chunk: 100 KB).
+  # The HTML treemap is uploaded as an artifact for 30-day retention.
+  bundle-budget:
+    name: Frontend bundle size budget
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-node-
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+      - name: Build frontend with bundle analysis
+        run: cd frontend && ANALYZE=true npm run build
+      - name: Enforce bundle size budgets
+        run: node scripts/check-bundle-budget.js
+      - name: Upload bundle report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-report
+          path: |
+            frontend/.next/analyze/
+            frontend/bundle-budget.json
+          retention-days: 30
 
   test:
     runs-on: ubuntu-latest
@@ -333,8 +395,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build backend image
-        run: docker build -t stellaredupay/backend:ci ./backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          tags: stellaredupay/backend:ci
+          load: true
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Scan backend image for critical CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: stellaredupay/backend:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
 
       - name: Smoke-test backend container
         run: |
@@ -360,7 +440,22 @@ jobs:
           exit 1
 
       - name: Build frontend image
-        run: docker build -t stellaredupay/frontend:ci ./frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          tags: stellaredupay/frontend:ci
+          load: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Scan frontend image for critical CVEs
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: stellaredupay/frontend:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
 
       - name: Set immutable image tag
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -615,6 +710,49 @@ jobs:
   # a Jest coverage-threshold breach blocks the PR just like a test failure
   # does. Add any other must-pass jobs to the `needs` list here rather than
   # registering many individual required checks.
+  # ── #656: API schema regression check ───────────────────────────────────────
+  # Compares the live OpenAPI spec against the pinned golden snapshot at
+  # tests/api-schema/golden.yaml. Breaking changes (removed endpoints, removed
+  # required fields, changed types) fail CI. Non-breaking additions pass.
+  # To land an intentional breaking change, add ALLOW_BREAKING_API_CHANGE=true
+  # to the step env and commit a migration guide entry.
+  api-schema-regression:
+    name: API schema regression check
+    runs-on: ubuntu-latest
+    env:
+      MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
+      JWT_SECRET: ci-test-jwt-secret-not-used-in-production
+      SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --replSet rs0
+          --health-cmd "mongosh --quiet --eval 'try { if (rs.status().ok !== 1) { throw new Error(\"rs not initiated\"); } } catch (e) { try { rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"localhost:27017\" }] }); } catch (e2) {} process.exit(1); } if (!db.hello().isWritablePrimary) { process.exit(1); }'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+          --health-start-period 20s
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/node_modules
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - run: npm ci
+      - run: cd backend && npm ci && cd ..
+      - name: Run API schema regression tests
+        run: npx jest tests/api-schema-regression.test.js tests/apiContractTests.test.js tests/responseEnvelopeCompatibility.test.js --forceExit
+
   ci-gate:
     name: CI gate
     runs-on: ubuntu-latest
@@ -623,13 +761,16 @@ jobs:
       - audit
       - secret-scan
       - secret-scan-repo
+      - secret-scan-gitleaks
       - migrations
       - orphan-dirs
       - error-response-shape
+      - changelog-format
       - k8s-ingress-tls
       - lint-backend
       - lint-frontend
       - build-frontend
+      - bundle-budget
       - test
       - coverage
       - migration-compat
@@ -639,3 +780,54 @@ jobs:
       - contract-simulation
     steps:
       - run: echo "All required checks passed."
+
+  # ── #653: Cross-browser smoke matrix ────────────────────────────────────────
+  # Runs login, pay-fee, view-receipt, and download-CSV smoke flows on
+  # Chrome, Firefox, Safari (WebKit), and Edge in parallel shards.
+  # Target: all 4 browsers complete within 10 minutes.
+  # Flaky quarantine: tests that fail in a single browser but pass within
+  # 3 retries are quarantined and reported separately (not a hard failure).
+  cross-browser-smoke:
+    name: Cross-browser smoke (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit, msedge]
+        include:
+          - browser: chromium
+            shard: 1/4
+          - browser: firefox
+            shard: 2/4
+          - browser: webkit
+            shard: 3/4
+          - browser: msedge
+            shard: 4/4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run cross-browser smoke tests
+        run: |
+          npx playwright test \
+            --config=playwright.cross-browser.config.js \
+            --project=${{ matrix.browser }} \
+            --shard=${{ matrix.shard }}
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        continue-on-error: false
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: playwright-report/cross-browser/
+          retention-days: 7

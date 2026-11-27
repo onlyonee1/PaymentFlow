@@ -165,14 +165,6 @@ async function countAffectedStudents(schoolId, rule) {
 // DELETE /api/fee-adjustments/:id  — soft delete (deactivate)
 async function deleteRule(req, res, next) {
   try {
-    const reasonTrimmed = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
-    if (!reasonTrimmed) {
-      const err = new Error('A reason is required to deactivate a fee adjustment rule');
-      err.code = 'VALIDATION_ERROR';
-      err.status = 400;
-      return next(err);
-    }
-
     const rule = await FeeAdjustmentRule.findOneAndUpdate(
       { _id: req.params.id, schoolId: req.schoolId },
       { isActive: false },
@@ -187,9 +179,12 @@ async function deleteRule(req, res, next) {
     }
 
     const affectedCount = await countAffectedStudents(req.schoolId, rule);
+    const reasonTrimmed = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
 
     await audit(req, 'fee_adjustment_rule_delete', String(rule._id), {
-      name: rule.name, type: rule.type, value: rule.value, reason: reasonTrimmed, affectedCount,
+      name: rule.name, type: rule.type, value: rule.value,
+      ...(reasonTrimmed ? { reason: reasonTrimmed } : {}),
+      affectedCount,
     });
     res.json({ message: `Rule "${rule.name}" deactivated`, affectedCount });
   } catch (err) {

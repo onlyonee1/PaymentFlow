@@ -10,7 +10,7 @@
  *  - Duplicate scalar query params are collapsed to the last value.
  */
 
-const { jsonDepthGuard, deduplicateQueryParams } = require('../backend/src/middleware/sanitizeRequest');
+const { jsonDepthGuard, sanitizeBody, deduplicateQueryParams } = require('../backend/src/middleware/sanitizeRequest');
 
 // ── Helpers to call middleware directly ───────────────────────────────────────
 
@@ -93,5 +93,35 @@ describe('Issue #826 — deduplicateQueryParams', () => {
     const next = jest.fn();
     deduplicateQueryParams(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+});
+
+describe('sanitizeBody', () => {
+  test('strips formatting tags from nested strings and preserves UTF-8 text', () => {
+    const req = { body: { students: [{ name: '<strong>Zoë Álvarez</strong>' }], note: 'A & B' } };
+    const res = { status: jest.fn() };
+    const next = jest.fn();
+
+    sanitizeBody(req, res, next);
+
+    expect(req.body).toEqual({ students: [{ name: 'Zoë Álvarez' }], note: 'A & B' });
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '<script>unsafe()</script>safe',
+    '<b onclick="unsafe()">safe</b>',
+  ])('rejects disallowed markup in a nested field with HTTP 400', (value) => {
+    const req = { body: { rows: [{ label: value }] } };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+
+    sanitizeBody(req, res, next);
+
+    expect(req.body.rows[0].label).toBe('safe');
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_BODY_MARKUP' }));
+    expect(next).not.toHaveBeenCalled();
   });
 });

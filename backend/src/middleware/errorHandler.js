@@ -59,7 +59,17 @@ function successResponse(data, message = null, meta = {}) {
  * @returns {*} Result produced by globalErrorHandler.
  */
 function globalErrorHandler(err, req, res, next) {
-  const { statusCode, body, diagnosticContext } = mapErrorToResponse(err, process.env.NODE_ENV === 'production');
+  if (res.headersSent) return next(err);
+
+  const development = process.env.NODE_ENV === 'development';
+  const { statusCode, body, diagnosticContext } = mapErrorToResponse(err, !development);
+  if (!development && statusCode >= 500) {
+    const code = body.error.code;
+    body.error.code = Object.hasOwn(TAXONOMY, code) ? code : 'INTERNAL_ERROR';
+    body.error.message = TAXONOMY.INTERNAL_ERROR.safeMessage;
+    delete body.error.details;
+  }
+  body.requestId = req.requestId;
   const logCtx = {
     ...diagnosticContext,
     path: req.path,
@@ -73,13 +83,14 @@ function globalErrorHandler(err, req, res, next) {
       contentLength: req.headers['content-length'],
     });
     return res.status(413).json({
-      errors: [{ field: 'body', message: 'Request body must not exceed 50KB' }],
+      errors: [{ field: 'body', message: 'Request body exceeds the configured size limit' }],
       code: 'PAYLOAD_TOO_LARGE',
+      requestId: req.requestId,
     });
   }
   statusCode >= 500 ? logger.error('Server error', logCtx) : logger.warn('Client error', logCtx);
 
-  if (process.env.NODE_ENV === 'development' && err.stack) {
+  if (development && err?.stack) {
     body.error.stack = err.stack;
   }
   res.status(statusCode).json(body);

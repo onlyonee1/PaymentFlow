@@ -5,7 +5,7 @@ const paymentEvents = require('../events/paymentEvents');
 const logger = require('../utils/logger').child('OutboxDispatcher');
 
 const BATCH_SIZE = 100;
-const MAX_RETRIES = parseInt(process.env.OUTBOX_MAX_RETRIES, 10) || 3;
+const MAX_RETRIES = parseInt(process.env.OUTBOX_MAX_RETRIES, 10) || 5;
 const DISPATCH_INTERVAL_MS = parseInt(process.env.OUTBOX_DISPATCH_INTERVAL_MS, 10) || 5000;
 /**
  * How long (ms) a dispatcher worker holds the dispatch lock on an event.
@@ -16,6 +16,15 @@ const DISPATCH_INTERVAL_MS = parseInt(process.env.OUTBOX_DISPATCH_INTERVAL_MS, 1
 const LOCK_TTL_MS = parseInt(process.env.OUTBOX_LOCK_TTL_MS, 10) || 30000;
 
 let _dispatchTimer = null;
+
+// Exponential back-off delays in milliseconds: 1s, 2s, 4s, 8s, then 8s for
+// all subsequent attempts (capped). Index is (attemptNumber - 1).
+const BACKOFF_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+
+function getOutboxBackoffMs(attemptNumber) {
+  const idx = Math.max(0, attemptNumber - 1);
+  return BACKOFF_DELAYS_MS[Math.min(idx, BACKOFF_DELAYS_MS.length - 1)];
+}
 
 async function deadLetterOutboxEvent(event, retryCount, errorMessage) {
   logger.error('Outbox event exceeded max retries', {

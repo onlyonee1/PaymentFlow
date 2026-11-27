@@ -105,12 +105,16 @@ class StellarTransactionManager {
    * @param {number} [opts.timeoutSeconds]   Override default tx timeout.
    * @param {number} [opts.feeMultiplier]    Override default fee multiplier.
    */
-  constructor({ signingKeypair, feeSourceKeypair, timeoutSeconds, feeMultiplier } = {}) {
-    if (!signingKeypair) {
+  constructor({ signingKeypair, feeSourceKeypair, timeoutSeconds, feeMultiplier, sourceAccount } = {}) {
+    const configuredAccount = process.env.STELLAR_MANAGED_SIGNER_ACCOUNT;
+    this.managed = Boolean(configuredAccount &&
+      configuredAccount === (sourceAccount || signingKeypair?.publicKey()));
+    if (!this.managed && !signingKeypair) {
       throw new Error('[StellarTxManager] signingKeypair is required');
     }
-    this.signingKeypair = signingKeypair;
-    this.feeSourceKeypair = feeSourceKeypair || signingKeypair;
+    this.sourceAccount = this.managed ? configuredAccount : signingKeypair.publicKey();
+    this.signingKeypair = this.managed ? null : signingKeypair;
+    this.feeSourceKeypair = feeSourceKeypair || this.signingKeypair;
     this.timeoutSeconds = timeoutSeconds || DEFAULT_TX_TIMEOUT_SECONDS;
     this.feeMultiplier = feeMultiplier || DEFAULT_FEE_MULTIPLIER;
   }
@@ -146,10 +150,18 @@ class StellarTransactionManager {
       getRecommendedFee(opts.feeMultiplier || this.feeMultiplier),
     ]);
 
+    const timeoutSeconds = opts.timeoutSeconds || this.timeoutSeconds;
+    if (this.managed) {
+      const { rotationWindowSeconds } = require('./stellarSignerRotation');
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 ||
+          timeoutSeconds > rotationWindowSeconds() - 30) {
+        throw new Error('Managed Stellar transaction timeout exceeds the rotation overlap');
+      }
+    }
     return new TransactionBuilder(account, {
       fee: String(fee),
       networkPassphrase,
-    }).setTimeout(opts.timeoutSeconds || this.timeoutSeconds);
+    }).setTimeout(timeoutSeconds);
   }
 
   /**
@@ -169,13 +181,13 @@ class StellarTransactionManager {
    * @returns {Promise<{ hash: string, ledger: number, envelope: string }>}
    */
   async buildAndSubmit(addOperations, opts = {}) {
-    const sourcePublicKey = this.signingKeypair.publicKey();
+    const sourcePublicKey = this.sourceAccount;
     const attempt = async () => {
       const builder = await this.buildTransactionBuilder(sourcePublicKey, opts);
       addOperations(builder);
       if (opts.memo) builder.addMemo({ value: opts.memo, type: 'text' });
       const tx = builder.build();
-      tx.sign(this.signingKeypair);
+      tx.sign(await this.getSigningKeypair());
       return server.submitTransaction(tx);
     };
 
@@ -218,6 +230,12 @@ class StellarTransactionManager {
     };
   }
 
+  async getSigningKeypair() {
+    if (!this.managed) return this.signingKeypair;
+    const { getActiveSigner } = require('./stellarSignerRotation');
+    return getActiveSigner(this.sourceAccount);
+  }
+
   /**
    * Wrap an existing inner-transaction XDR envelope in a fee-bump transaction
    * and resubmit. Use this when the original transaction has insufficient fee
@@ -235,7 +253,7 @@ class StellarTransactionManager {
    * @returns {Promise<{ hash: string, ledger: number }>}
    */
   async submitFeeBump(innerEnvelopeXdr, opts = {}) {
-    const { FeeBumpTransaction, Transaction, TransactionBuilder: TB } = require('@stellar/stellar-sdk');
+    const { Transaction } = require('@stellar/stellar-sdk');
 
     const multiplier = Math.min(
       opts.feeMultiplier || 5,
@@ -244,21 +262,18 @@ class StellarTransactionManager {
     const feeStoops = await getRecommendedFee(multiplier);
 
     const innerTx = new Transaction(innerEnvelopeXdr, networkPassphrase);
-
-    const feeBumpTx = TB.buildFeeBump({
-      feeSource: this.feeSourceKeypair,
-      baseFee: String(feeStoops),
-      innerTransaction: innerTx,
-      networkPassphrase,
-    });
-
-    feeBumpTx.sign(this.feeSourceKeypair);
+    const feeSigner = this.feeSourceKeypair || await this.getSigningKeypair();
+    const feeSource = this.feeSourceKeypair ? this.feeSourceKeypair.publicKey() : this.sourceAccount;
+    const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
+      feeSource, String(feeStoops), innerTx, networkPassphrase,
+    );
+    feeBumpTx.sign(feeSigner);
 
     logger.info('[StellarTxManager] Submitting fee-bump transaction', {
       innerHash: innerTx.hash().toString('hex'),
       feeStoops,
       multiplier,
-      feeSource: this.feeSourceKeypair.publicKey(),
+      feeSource,
     });
 
     const result = await withStellarRetry(
@@ -301,11 +316,14 @@ class StellarTransactionManager {
  */
 function createTransactionManager(signingSecret, feeSourceSecret) {
   const { Keypair } = require('@stellar/stellar-sdk');
-  const signingKeypair = Keypair.fromSecret(signingSecret);
+  const signingKeypair = signingSecret ? Keypair.fromSecret(signingSecret) : undefined;
   const feeSourceKeypair = feeSourceSecret
     ? Keypair.fromSecret(feeSourceSecret)
     : undefined;
-  return new StellarTransactionManager({ signingKeypair, feeSourceKeypair });
+  return new StellarTransactionManager({
+    signingKeypair, feeSourceKeypair,
+    sourceAccount: signingKeypair ? undefined : process.env.STELLAR_MANAGED_SIGNER_ACCOUNT,
+  });
 }
 
 module.exports = {

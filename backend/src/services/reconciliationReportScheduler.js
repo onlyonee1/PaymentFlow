@@ -1,41 +1,49 @@
 'use strict';
 
-const { generateAllReconciliationReports } = require('./reconciliationService');
+const { parseExpression } = require('cron-parser');
+const { runDailySettlementReconciliation } = require('./settlementReconciliationService');
 const logger = require('../utils/logger').child('ReconciliationReportScheduler');
 
-const INTERVAL_MS = parseInt(process.env.RECONCILIATION_REPORT_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-let _timer = null;
+const expression = process.env.RECONCILIATION_CRON || '55 23 * * *';
+const MAX_TIMEOUT_MS = 2147483647;
+let timer;
+let leader = false;
+let generation = 0;
 
-/**
- * Manages reconciliation report scheduler for reconciliationReportScheduler.
- * @returns {void} Completes without a return value.
- */
-function startReconciliationReportScheduler() {
-  if (_timer) return;
-  _timer = setInterval(async () => {
+function schedule(currentGeneration) {
+  const next = parseExpression(expression, { tz: 'UTC' }).next().getTime();
+  const delay = Math.max(0, next - Date.now());
+  timer = setTimeout(async () => {
+    if (currentGeneration !== generation) return;
     try {
-      await generateAllReconciliationReports();
+      if (delay <= MAX_TIMEOUT_MS) {
+        await runDailySettlementReconciliation({ day: new Date(next).toISOString().slice(0, 10) });
+      }
     } catch (err) {
-      logger.error('Reconciliation report scheduler error', { error: err.message });
+      logger.error('Settlement reconciliation scheduler failed', { error: err.message });
+    } finally {
+      if (leader && currentGeneration === generation) schedule(currentGeneration);
     }
-  }, INTERVAL_MS);
-  if (_timer.unref) _timer.unref();
-  logger.info('Reconciliation report scheduler started');
+  }, Math.min(delay, MAX_TIMEOUT_MS));
+  timer.unref?.();
 }
 
-/**
- * Manages reconciliation report scheduler for reconciliationReportScheduler.
- * @returns {void} Completes without a return value.
- */
-function stopReconciliationReportScheduler() {
-  if (_timer) {
-    clearInterval(_timer);
-    _timer = null;
-    logger.info('Reconciliation report scheduler stopped');
+function startReconciliationReportScheduler() {
+  if (leader) return;
+  try {
+    schedule(++generation);
+    leader = true;
+    logger.info('Settlement reconciliation scheduled', { expression, timezone: 'UTC' });
+  } catch (err) {
+    logger.error('Invalid RECONCILIATION_CRON expression', { expression, error: err.message });
   }
 }
 
-module.exports = {
-  startReconciliationReportScheduler,
-  stopReconciliationReportScheduler,
-};
+function stopReconciliationReportScheduler() {
+  leader = false;
+  generation++;
+  clearTimeout(timer);
+  timer = undefined;
+}
+
+module.exports = { startReconciliationReportScheduler, stopReconciliationReportScheduler };

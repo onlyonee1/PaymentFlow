@@ -23,7 +23,7 @@
  *   auditLogs          – archive-only; never hard-deleted
  *
  * Environment variables (all optional, with defaults):
- *   WEBHOOK_DELIVERY_RETENTION_DAYS  (default 90)
+ *   WEBHOOK_DELIVERY_RETENTION_DAYS  (default 7)
  *   WEBHOOK_RETRY_RETENTION_DAYS     (default 30)
  *   EMAIL_DELIVERY_RETENTION_DAYS    (default 90)
  *   REPORT_JOB_RETENTION_DAYS        (default 7)
@@ -41,7 +41,7 @@ const { archiveAuditLogs } = require('./auditService');
 const DEFAULTS = {
   studentPii:        2555,
   paymentMemos:      1825,
-  webhookDeliveries: 30,
+  webhookDeliveries: 7,
   webhookRetries:    30,
   emailDeliveries:   90,
   reportJobs:        7,

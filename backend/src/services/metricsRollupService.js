@@ -10,8 +10,9 @@
 //     data; run on a schedule to self-heal any drift (e.g. after a dispute).
 
 const Payment = require('../models/paymentModel');
-const { DailyMetrics, MonthlyMetrics } = require('../models/metricsModel');
+const { HourlyMetrics, DailyMetrics, MonthlyMetrics } = require('../models/metricsModel');
 const logger = require('../utils/logger');
+const { archiveCutoff, startMetricsArchive, stopMetricsArchive } = require('../queue/dailyMetricsArchive');
 
 /** Format a Date as 'YYYY-MM-DD' (UTC). */
 function _dayKey(date) {
@@ -51,10 +52,19 @@ async function incrementPaymentMetrics(payment) {
   // Unique-student count cannot be incremented blindly; leave for reconciliation.
   // All other fields are safe to $inc.
   const opts = { upsert: true, new: false };
+  const hour = new Date(confirmedAt).toISOString().slice(0, 13);
+  const hourlyWrite = day >= archiveCutoff()
+    ? HourlyMetrics.findOneAndUpdate(
+      { schoolId: payment.schoolId, period: hour },
+      { $inc: inc, $setOnInsert: { ...setOnInsert, createdAt: new Date(`${hour}:00:00.000Z`) } },
+      opts,
+    )
+    : null;
   await Promise.all([
+    hourlyWrite,
     DailyMetrics.findOneAndUpdate(
       { schoolId: payment.schoolId, period: day },
-      { $inc: inc, $setOnInsert: setOnInsert },
+      { $inc: inc, $setOnInsert: { ...setOnInsert, createdAt: new Date(day) } },
       opts,
     ),
     MonthlyMetrics.findOneAndUpdate(
@@ -101,6 +111,7 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
     updateOne: {
       filter: { schoolId, period: r._id },
       update: {
+        $setOnInsert: { createdAt: new Date(r._id) },
         $set: {
           schoolId,
           period:          r._id,
@@ -194,6 +205,7 @@ function startMetricsRollupScheduler() {
   if (_timer) return;
   _timer = setInterval(_runScheduledReconciliation, RECONCILE_INTERVAL_MS);
   _timer.unref();
+  startMetricsArchive();
 }
 
 /**
@@ -201,6 +213,7 @@ function startMetricsRollupScheduler() {
  * @returns {void} Completes without a return value.
  */
 function stopMetricsRollupScheduler() {
+  stopMetricsArchive();
   if (_timer) { clearInterval(_timer); _timer = null; }
 }
 
